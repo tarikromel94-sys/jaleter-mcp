@@ -27,16 +27,6 @@ app.get("/mcp", (req, res) => {
 app.get("/", (req, res) => {
   res.send("Jaleter MCP Server Running");
 });
-app.get("/tools", (req, res) => {
-  res.json({
-    tools: [
-      {
-        name: "budget-summary",
-        description: "Summarizes income, expenses, and remaining budget"
-      }
-    ]
-  });
-});
 
 app.post("/invoke", (req, res) => {
   const { tool, input } = req.body;
@@ -56,7 +46,9 @@ app.post("/invoke", (req, res) => {
 
   res.status(400).json({ error: "Tool not found" });
 });
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-
+  console.log(`Server running on port ${PORT}`);
+});
