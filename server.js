@@ -1,5 +1,8 @@
+const express = require("express");
+const app = express();
 
 app.use(express.json());
+
 app.get("/mcp", (req, res) => {
   res.json({
     name: "jaleter-mcp",
@@ -20,15 +23,10 @@ app.get("/mcp", (req, res) => {
     ]
   });
 });
-const express = require("express");
-const app = express();
-
-app.use(express.json());
 
 app.get("/", (req, res) => {
   res.send("Jaleter MCP Server Running");
 });
-
 app.get("/tools", (req, res) => {
   res.json({
     tools: [
