@@ -1,3 +1,25 @@
+
+app.use(express.json());
+app.get("/mcp", (req, res) => {
+  res.json({
+    name: "jaleter-mcp",
+    description: "Budgeting MCP server",
+    tools: [
+      {
+        name: "budget-summary",
+        description: "Summarizes income, expenses, and remaining budget",
+        input_schema: {
+          type: "object",
+          properties: {
+            income: { type: "number" },
+            expenses: { type: "number" }
+          },
+          required: ["income", "expenses"]
+        }
+      }
+    ]
+  });
+});
 const express = require("express");
 const app = express();
 
@@ -36,10 +58,7 @@ app.post("/invoke", (req, res) => {
 
   res.status(400).json({ error: "Tool not found" });
 });
-
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`Jaleter server running on port ${PORT}`);
-});
 
