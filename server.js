@@ -1,54 +1,57 @@
-const express = require("express");
-const app = express();
+import http from "node:http";
+import { McpServer } from "@modelcontextprotocol/server";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { z } from "zod";
 
-app.use(express.json());
-
-app.get("/mcp", (req, res) => {
-  res.json({
-    name: "jaleter-mcp",
-    description: "Budgeting MCP server",
-    tools: [
-      {
-        name: "budget-summary",
-        description: "Summarizes income, expenses, and remaining budget",
-        input_schema: {
-          type: "object",
-          properties: {
-            income: { type: "number" },
-            expenses: { type: "number" }
-          },
-          required: ["income", "expenses"]
-        }
-      }
-    ]
-  });
+const server = new McpServer({
+  name: "jaleter-mcp",
+  version: "1.0.0"
 });
 
-app.get("/", (req, res) => {
-  res.send("Jaleter MCP Server Running");
-});
-
-app.post("/invoke", (req, res) => {
-  const { tool, input } = req.body;
-
-  if (tool === "budget-summary") {
-    const income = Number(input?.income || 0);
-    const expenses = Number(input?.expenses || 0);
+server.registerTool(
+  "budget-summary",
+  {
+    title: "Budget Summary",
+    description: "Summarizes income, expenses, and remaining budget",
+    inputSchema: {
+      income: z.number(),
+      expenses: z.number()
+    }
+  },
+  async ({ income, expenses }) => {
     const remaining = income - expenses;
 
-    return res.json({
-      income,
-      expenses,
-      remaining,
-      message: `You have $${remaining} left in your budget.`
-    });
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Income: $${income}, expenses: $${expenses}, remaining: $${remaining}.`
+        }
+      ]
+    };
+  }
+);
+
+const httpServer = http.createServer(async (req, res) => {
+  if (!req.url || !req.url.startsWith("/mcp")) {
+    res.writeHead(404);
+    res.end("Not found");
+    return;
   }
 
-  res.status(400).json({ error: "Tool not found" });
+  const transport = new NodeStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined
+  });
+
+  res.on("close", () => {
+    transport.close();
+  });
+
+  await server.connect(transport);
+  await transport.handleRequest(req, res);
 });
 
 const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+httpServer.listen(PORT, () => {
+  console.log(`Jaleter MCP server listening on ${PORT}`);
 });
