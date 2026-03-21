@@ -34,7 +34,7 @@ server.registerTool(
 
 const httpServer = http.createServer(async (req, res) => {
   if (!req.url || !req.url.startsWith("/mcp")) {
-    res.writeHead(404);
+    res.writeHead(404, { "Content-Type": "text/plain" });
     res.end("Not found");
     return;
   }
