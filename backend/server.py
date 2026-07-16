@@ -34,6 +34,14 @@ from simplefin_service import (
 )
 from providers import ProviderError, build_registry, catalog as provider_catalog
 from fastapi import File, UploadFile, Form
+from payments_service import (
+    PRODUCTS,
+    create_checkout_session as pay_create_session,
+    fetch_and_sync_status as pay_fetch_status,
+    create_pending_booking as pay_create_booking,
+    list_user_bookings as pay_list_bookings,
+    get_membership_status as pay_membership_status,
+)
 
 MONGO_URL = os.environ['MONGO_URL']
 DB_NAME = os.environ['DB_NAME']
@@ -200,6 +208,10 @@ async def _startup():
     await db.bank_transactions.create_index([('user_id', 1), ('provider', 1), ('external_id', 1)])
     await db.bank_transactions.create_index([('user_id', 1), ('date', -1)])
     await db.support_requests.create_index([('user_id', 1), ('created_at', -1)])
+    await db.payment_transactions.create_index('session_id', unique=True)
+    await db.payment_transactions.create_index([('user_id', 1), ('created_at', -1)])
+    await db.coaching_bookings.create_index('booking_id', unique=True)
+    await db.coaching_bookings.create_index([('user_id', 1), ('scheduled_at', -1)])
 
 
 @app.on_event('shutdown')
@@ -662,6 +674,78 @@ async def list_support_requests(current_user: dict = Depends(get_current_user)):
     # Users see only their own requests. Admin dashboard would filter differently.
     cursor = db.support_requests.find({'user_id': current_user['user_id']}, {'_id': 0, 'user_id': 0}).sort('created_at', -1)
     return {'requests': [{**r, 'created_at': r['created_at'].isoformat() if isinstance(r.get('created_at'), datetime) else r.get('created_at')} async for r in cursor]}
+
+
+# ------- Payments & Coaching (Stripe hosted checkout) -------
+class CheckoutRequest(BaseModel):
+    product: str  # 'coaching_session' | 'jaleter_premium'
+    platform: str = 'mobile'  # 'mobile' | 'web'
+    scheduled_at: Optional[str] = None  # ISO-8601, required when product == coaching_session
+
+
+@api_router.get('/payments/products')
+async def list_products():
+    return {'products': [
+        {'key': k, 'name': v['name'], 'amount': v['amount'], 'currency': v['currency'], 'kind': v['kind']}
+        for k, v in PRODUCTS.items()
+    ]}
+
+
+@api_router.post('/payments/checkout')
+async def payments_checkout(payload: CheckoutRequest, request: Request, current_user: dict = Depends(get_current_user)):
+    if payload.product not in PRODUCTS:
+        raise HTTPException(status_code=400, detail='Unknown product')
+    platform = payload.platform if payload.platform in ('mobile', 'web') else 'mobile'
+
+    # Determine origin for web return URLs (respect proxy headers set by the ingress)
+    forwarded_proto = request.headers.get('x-forwarded-proto') or request.url.scheme
+    forwarded_host = request.headers.get('x-forwarded-host') or request.headers.get('host') or ''
+    origin = f'{forwarded_proto}://{forwarded_host}' if forwarded_host else ''
+
+    booking = None
+    if payload.product == 'coaching_session':
+        if not payload.scheduled_at:
+            raise HTTPException(status_code=400, detail='scheduled_at is required for coaching sessions.')
+        try:
+            booking = await pay_create_booking(db, current_user, payload.scheduled_at)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        result = await pay_create_session(
+            db, current_user, payload.product, platform, origin, booking=booking,
+        )
+    except Exception as e:
+        logger.exception('Stripe checkout creation failed')
+        raise HTTPException(status_code=502, detail=f'Payment provider error: {e}')
+
+    return {**result, 'booking_id': booking['booking_id'] if booking else None}
+
+
+@api_router.get('/payments/status/{session_id}')
+async def payments_status(session_id: str, current_user: dict = Depends(get_current_user)):
+    txn = await db.payment_transactions.find_one(
+        {'session_id': session_id, 'user_id': current_user['user_id']},
+        {'_id': 0},
+    )
+    if not txn:
+        raise HTTPException(status_code=404, detail='Checkout session not found.')
+    try:
+        return await pay_fetch_status(db, session_id)
+    except Exception as e:
+        logger.exception('Stripe status lookup failed')
+        raise HTTPException(status_code=502, detail=f'Payment provider error: {e}')
+
+
+@api_router.get('/coaching/bookings')
+async def coaching_bookings(current_user: dict = Depends(get_current_user)):
+    rows = await pay_list_bookings(db, current_user['user_id'])
+    return {'bookings': rows}
+
+
+@api_router.get('/user/membership')
+async def user_membership(current_user: dict = Depends(get_current_user)):
+    return await pay_membership_status(db, current_user)
 
 
 app.include_router(api_router)

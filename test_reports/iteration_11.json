@@ -1,0 +1,62 @@
+{
+  "summary": "Iteration 11 — Stripe Checkout + Coaching booking + Membership + mock-data-removal all verified end-to-end. Backend: 26/26 tests pass in test_iteration11_payments.py — products catalog returns coaching_session($50) + jaleter_premium($75); POST /api/payments/checkout returns real Stripe URLs containing 'checkout.stripe.com', proper txn_id, and non-null booking_id for coaching / null for premium; past scheduled_at rejected with 400; missing scheduled_at rejected with 400; unknown product rejected with 400; GET /api/payments/status/{sid} returns unpaid status; GET /api/payments/status/{unknown} → 404; GET /api/coaching/bookings lists the pending booking; GET /api/user/membership → {active:false} for fresh user; all 4 payment endpoints reject missing AND invalid bearer with 401; regressions (auth login/me, forgot-password preview fallback, reset-password bad-token 400, simplefin/link invalid-token 400, /api/accounts, /api/accounts/all, /api/providers catalog, /api/support/requests POST) all still respond as before. Frontend (mobile viewport 375x812): logged in as alex+test1@jaleter.app; Home shows Net Worth $0, Budget 0%, NO '7-day stewardship streak' banner, NO fake alert (0%<80%); Budget screen shows all subcategories $0 across Give/Steward/Grow/Enjoy; Net Worth hero=$0, Cash Protection strip Cash=$0/Committed=$0/Available=$0, growth caption exact-match 'Updates with your linked accounts', NO '+4.8%' string anywhere; More→Book Coaching renders 'PICK A TIME' + 30 slots (10 business days × 10AM/2PM/4PM), 'Book & Pay $50' disabled until a slot is picked, then tap posts to /api/payments/checkout and the app navigates to a real Stripe checkout page (verified Stripe Sandbox '$50 USD' page loaded); More→Membership shows NO 'ACTIVE' pill, exact button label 'Subscribe — $75 / year', tap posts to /api/payments/checkout and redirects to Stripe. Google button is visible on Login screen. All test data (pending bookings, unpaid payment_transactions, leftover TEST_reg_* file imports from prior iterations totalling $113 on Assets list) was cleaned from MongoDB. Deprecation warnings for shadow*/pointerEvents remain (already tracked as P3 in iteration_10).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Coaching slot picker → Stripe checkout (minor UX)",
+        "issue": "The scheduled_at sent to POST /api/payments/checkout is serialized in UTC (e.g. '2026-07-17T10:00:00.000Z') while the slot label reads 'Fri, Jul 17 · 10:00 AM' in the browser's local timezone. In this test the two happened to match because the preview browser is on UTC, but for a real user on ET/PT the ISO in the request and the label the user tapped will represent different wall-clock hours. Not blocking (booking + Stripe URL still return correctly) but worth aligning so the confirmation email/screen matches what the user picked.",
+        "affected_testIDs": ["coaching-slot-*", "coaching-book"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Net Worth",
+        "issues": [
+          "Assets list showed $113 total from three TEST_reg_* file-imported entries left over by earlier iterations' regression suites. Cleaned up in this run; not a product bug — flagging so future regression tests always tear down file-import fixtures."
+        ]
+      }
+    ],
+    "react_native_issues": [
+      {
+        "component": "shadow* / pointerEvents",
+        "issue": "Console emits 'shadow* style props are deprecated. Use boxShadow' and 'props.pointerEvents is deprecated. Use style.pointerEvents' on every screen mount. Already tracked as P3 in iteration_10 action items — no new occurrences added by this iteration."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration11_payments.py",
+    "/app/test_reports/pytest/iteration11_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL (low): Send scheduled_at as the user's local wall-clock ISO with offset (e.g. '2026-07-17T10:00:00-04:00') instead of UTC 'Z' so the Stripe metadata and any confirmation email reflect the slot label the user actually tapped.",
+    "OPTIONAL (low, carried from iteration_10): migrate remaining shadow* → boxShadow and pointerEvents prop → style.pointerEvents to silence RN-Web deprecation warnings.",
+    "OPTIONAL (low, carried from iteration_10): bump CircleBtn 38→44px to meet 44x44 touch target."
+  ],
+  "critical_code_review_comments": [
+    "payments_service.py — server-side PRODUCTS catalog is the single source of truth for amount/currency; the checkout endpoint ignores any client-supplied amount. Good.",
+    "payments_service.py:_apply_paid_side_effects is idempotent (only fires when payment_status transitions from non-'paid' to 'paid'), and membership extension correctly stacks from max(current_expiry, now) + 365d. Good.",
+    "server.py:/api/payments/status/{session_id} scopes the initial lookup by session_id AND user_id — prevents user A from polling the state of user B's session. Good.",
+    "server.py:/api/coaching/bookings sorts scheduled_at DESC and limits 20 — reasonable for the UI but note there's no pagination if a heavy user ever exceeds 20 confirmed bookings. Low priority.",
+    "payments_service.py:create_pending_booking rejects sub-15-minute windows and non-ISO strings via ValueError → mapped to 400 in the route. Good.",
+    "index.tsx:1131 upcomingCoachingSlots(10) is generated with the client's local Date, but the slot.iso serialized to /api/payments/checkout is UTC (…Z). See integration_issues above."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration11_payments.py (NEW — 26 tests: products, checkout happy-path for both products + past-time & missing-scheduled-at & unknown-product 400s, status happy-path + 404, coaching/bookings listing, membership inactive, 8 auth-required parametrized checks across missing+invalid tokens on 4 payment endpoints, regressions for auth/forgot/reset/simplefin/accounts/all/providers/support)",
+    "/app/test_reports/pytest/iteration11_results.xml (NEW — junit output, 26 passed)",
+    "MongoDB cleanup: deleted 3 file linked_accounts + 6 file-* bank_transactions ($113 residue on Net Worth) + 1 pending coaching booking + 2 unpaid payment_transactions belonging to alex+test1@jaleter.app that were created by this test run and by leftover regression fixtures. Alex password NOT changed — still 'password123'."
+  ],
+  "success_rate": {
+    "backend": "100% (26/26 in test_iteration11_payments.py)",
+    "frontend": "100% of requested flows verified: login, mock-data-removal on Home/Budget/NetWorth, coaching slot picker + Stripe checkout URL, membership subscribe + Stripe checkout URL, Google button visible on Login"
+  },
+  "seed_data_creation": "None persistent. Test-run byproducts (2 payment_transactions, 1 coaching_booking, 1 TEST_ITER11 support_request) were all deleted at end of run. Prior iteration_9/10 leftovers (3 file linked_accounts + 6 imported TEST_reg_* bank_transactions) that were still inflating Alex's Assets list by $113 were also cleaned up.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Re-run: cd /app/backend && EXPO_PUBLIC_BACKEND_URL=https://no-changes-mobile.preview.emergentagent.com pytest tests/test_iteration11_payments.py -v → expect 26 passed. Frontend: log in as alex+test1@jaleter.app / password123 on mobile viewport 375x812. If Stripe test key expires, the checkout URL will fail — currently STRIPE_API_KEY=sk_test_emergent routes through the Emergent proxy and produces valid checkout.stripe.com Sandbox URLs. Do NOT try to complete a card payment — the polling loop on the frontend simply keeps status='unpaid' which is expected. If you need to test the 'paid' branch, directly upsert payment_status='paid' onto a payment_transactions doc and hit GET /api/payments/status/{sid} — _apply_paid_side_effects will grant the entitlement idempotently.",
+  "rca_of_issue": "N/A — no bugs found. All requested backend endpoints and frontend flows behave as specified in test_result.md test_sequence 10."
+}

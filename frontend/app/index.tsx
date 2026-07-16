@@ -1,5 +1,7 @@
-import React, { useState, useMemo, useEffect, createContext, useContext } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, createContext, useContext } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, StatusBar as RNStatusBar, Platform, Linking, Dimensions } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
+import * as ExpoLinking from 'expo-linking';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -37,39 +39,126 @@ const useThemed = () => {
 
 const MONTHS = ['July', 'Aug', 'Sep'];
 
+/* ---------------- Payments & Scheduling ---------------- */
+// Generates upcoming coaching slots: next N business days at 10am, 2pm, 4pm (local time).
+function upcomingCoachingSlots(days: number = 10): { label: string; iso: string }[] {
+  const slots: { label: string; iso: string }[] = [];
+  const hours = [10, 14, 16];
+  const now = new Date();
+  let d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1); // start tomorrow
+  let added = 0;
+  while (added < days) {
+    const day = d.getDay();
+    if (day !== 0 && day !== 6) { // skip weekends
+      for (const h of hours) {
+        const slot = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, 0, 0);
+        if (slot.getTime() > now.getTime() + 30 * 60 * 1000) {
+          const dateLabel = slot.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+          const timeLabel = slot.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+          slots.push({ label: `${dateLabel} · ${timeLabel}`, iso: slot.toISOString() });
+        }
+      }
+      added += 1;
+    }
+    d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+  }
+  return slots;
+}
+
+function formatBookingDate(iso: string): string {
+  try {
+    const d = new Date(iso);
+    const dateLabel = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    const timeLabel = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return `${dateLabel} at ${timeLabel}`;
+  } catch { return iso; }
+}
+
+type CheckoutResult = { ok: boolean; paid?: boolean; canceled?: boolean; error?: string; sessionId?: string };
+
+// Reusable Stripe Checkout runner. Opens hosted Checkout, waits for redirect,
+// then polls /api/payments/status until payment_status becomes 'paid'.
+function usePayment() {
+  const { token } = useAuth();
+  const start = useCallback(async (product: 'coaching_session' | 'jaleter_premium', extras?: { scheduled_at?: string }): Promise<CheckoutResult> => {
+    if (!token) return { ok: false, error: 'You must be signed in to purchase.' };
+    const platform = Platform.OS === 'web' ? 'web' : 'mobile';
+    let body: any = { product, platform };
+    if (extras?.scheduled_at) body.scheduled_at = extras.scheduled_at;
+    let created: any;
+    try {
+      created = await apiCall('/api/payments/checkout', { method: 'POST', body: JSON.stringify(body) }, token);
+    } catch (e: any) {
+      return { ok: false, error: e?.message || 'Could not start checkout.' };
+    }
+    const { url, session_id } = created;
+    if (!url) return { ok: false, error: 'Payment provider did not return a URL.' };
+
+    if (Platform.OS === 'web') {
+      // On web, browser will navigate away; we return here — the app will poll on return via the
+      // web-return handler (checkout=success in URL) which lives in MainApp.
+      if (typeof window !== 'undefined') window.location.href = url;
+      return { ok: true, sessionId: session_id };
+    }
+
+    // Native: open Stripe Checkout in an auth session; wait for the jaleter://checkout redirect.
+    const redirectScheme = ExpoLinking.createURL('checkout');
+    let redirectResult: any;
+    try {
+      redirectResult = await WebBrowser.openAuthSessionAsync(url, redirectScheme);
+    } catch (e: any) {
+      return { ok: false, error: e?.message || 'Could not open Stripe Checkout.' };
+    }
+    if (redirectResult?.type !== 'success') {
+      // Poll once anyway in case user completed but browser was dismissed
+      try {
+        const status = await apiCall(`/api/payments/status/${session_id}`, { method: 'GET' }, token);
+        if (status?.payment_status === 'paid') return { ok: true, paid: true, sessionId: session_id };
+      } catch {}
+      return { ok: true, canceled: true, sessionId: session_id };
+    }
+
+    // Poll status (Stripe may lag a moment)
+    for (let i = 0; i < 8; i += 1) {
+      try {
+        const status = await apiCall(`/api/payments/status/${session_id}`, { method: 'GET' }, token);
+        if (status?.payment_status === 'paid') return { ok: true, paid: true, sessionId: session_id };
+        if (status?.status === 'expired') return { ok: true, canceled: true, sessionId: session_id };
+      } catch {}
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+    return { ok: true, sessionId: session_id, error: 'Payment is still processing.' };
+  }, [token]);
+  return { start };
+}
+
 /* ---------------- DATA ---------------- */
 const initialCategories = [
   { id: 'give', name: 'Give', tagline: 'Lead with generosity', subcategories: [
-    { id: 'tithe', name: 'Tithe', budgeted: 900 }, { id: 'missions', name: 'Missions', budgeted: 150 }, { id: 'extra-giving', name: 'Extra Giving', budgeted: 150 }] },
+    { id: 'tithe', name: 'Tithe', budgeted: 0 }, { id: 'missions', name: 'Missions', budgeted: 0 }, { id: 'extra-giving', name: 'Extra Giving', budgeted: 0 }] },
   { id: 'steward', name: 'Steward', tagline: 'Protect what you have', subcategories: [
-    { id: 'housing', name: 'Housing', budgeted: 1650 }, { id: 'food', name: 'Food & Dining', budgeted: 800 }, { id: 'transport', name: 'Transportation', budgeted: 550 }, { id: 'utilities', name: 'Utilities', budgeted: 600 }] },
+    { id: 'housing', name: 'Housing', budgeted: 0 }, { id: 'food', name: 'Food & Dining', budgeted: 0 }, { id: 'transport', name: 'Transportation', budgeted: 0 }, { id: 'utilities', name: 'Utilities', budgeted: 0 }] },
   { id: 'grow', name: 'Grow', tagline: 'Build future wealth', subcategories: [
-    { id: 'investments', name: 'Investments', budgeted: 900 }, { id: 'emergency', name: 'Emergency Fund', budgeted: 500 }, { id: 'education', name: 'Education', budgeted: 300 }] },
+    { id: 'investments', name: 'Investments', budgeted: 0 }, { id: 'emergency', name: 'Emergency Fund', budgeted: 0 }, { id: 'education', name: 'Education', budgeted: 0 }] },
   { id: 'enjoy', name: 'Enjoy', tagline: 'Enjoy life responsibly', subcategories: [
-    { id: 'travel', name: 'Travel', budgeted: 450 }, { id: 'shopping', name: 'Shopping', budgeted: 350 }, { id: 'entertainment', name: 'Entertainment', budgeted: 300 }] },
+    { id: 'travel', name: 'Travel', budgeted: 0 }, { id: 'shopping', name: 'Shopping', budgeted: 0 }, { id: 'entertainment', name: 'Entertainment', budgeted: 0 }] },
 ];
-const initialIncome = [{ id: 'w2', name: 'W-2 Income', budgeted: 5200 }, { id: 'contract', name: 'Contract Income', budgeted: 1500 }, { id: 'business', name: 'Business Income', budgeted: 900 }];
+const initialIncome = [{ id: 'w2', name: 'W-2 Income', budgeted: 0 }, { id: 'contract', name: 'Contract Income', budgeted: 0 }, { id: 'business', name: 'Business Income', budgeted: 0 }];
 type Tx = { id: string; date: string; name: string; amount: number; type: 'income' | 'expense'; groupId: string; detailId?: string; origin: string; period: string; };
-const initialTx: Tx[] = ([
-  ['tx1','Jul 01','Paycheck',5200,'income','w2'],['tx2','Jul 05','Client project',1400,'income','contract'],['tx3','Jul 10','Business deposit',1000,'income','business'],
-  ['tx4','Jul 02','Tithe',900,'expense','give','tithe'],['tx5','Jul 04','Missions',60,'expense','give','missions'],['tx6','Jul 03','Mortgage',1450,'expense','steward','housing'],
-  ['tx7','Jul 08','Groceries & dining',680.5,'expense','steward','food'],['tx8','Jul 09','Transportation',420,'expense','steward','transport'],['tx9','Jul 11','Utilities',384.5,'expense','steward','utilities'],
-  ['tx10','Jul 06','Investments',700,'expense','grow','investments'],['tx11','Jul 12','Emergency Fund',250,'expense','grow','emergency'],['tx12','Jul 13','Education',90,'expense','grow','education'],
-  ['tx13','Jul 07','Travel',420,'expense','enjoy','travel'],['tx14','Jul 13','Shopping',310,'expense','enjoy','shopping'],['tx15','Jul 14','Entertainment',285,'expense','enjoy','entertainment'],
-] as any[]).map(([id,date,name,amount,type,groupId,detailId]) => ({ id, date, name, amount, type, groupId, detailId, origin: id==='tx12'?'Manual':'SimpleFIN', period: 'July' }));
+const initialTx: Tx[] = [];
 
 type Asset = { id: string; name: string; value: number; source: string; icon: string; };
 const initialAssets: Asset[] = [
-  { id: 'cash', name: 'Cash', value: 18450, source: 'SimpleFIN', icon: 'wallet-outline' },
-  { id: 'investments', name: 'Investments', value: 42750, source: 'SimpleFIN', icon: 'trending-up' },
-  { id: 'real-estate', name: 'Real Estate', value: 185000, source: 'Manual', icon: 'business-outline' },
-  { id: 'vehicles', name: 'Vehicles', value: 42000, source: 'Manual', icon: 'car-outline' },
+  { id: 'cash', name: 'Cash', value: 0, source: 'Manual', icon: 'wallet-outline' },
+  { id: 'investments', name: 'Investments', value: 0, source: 'Manual', icon: 'trending-up' },
+  { id: 'real-estate', name: 'Real Estate', value: 0, source: 'Manual', icon: 'business-outline' },
+  { id: 'vehicles', name: 'Vehicles', value: 0, source: 'Manual', icon: 'car-outline' },
 ];
 const initialLiabilities: Asset[] = [
-  { id: 'mortgage', name: 'Mortgage', value: 151300, source: 'Manual', icon: 'home-outline' },
-  { id: 'auto-loan', name: 'Auto Loan', value: 26400, source: 'SimpleFIN', icon: 'car-outline' },
-  { id: 'credit-cards', name: 'Credit Cards', value: 2200, source: 'SimpleFIN', icon: 'card-outline' },
-  { id: 'student-loans', name: 'Student Loans', value: 29850, source: 'Manual', icon: 'cash-outline' },
+  { id: 'mortgage', name: 'Mortgage', value: 0, source: 'Manual', icon: 'home-outline' },
+  { id: 'auto-loan', name: 'Auto Loan', value: 0, source: 'Manual', icon: 'car-outline' },
+  { id: 'credit-cards', name: 'Credit Cards', value: 0, source: 'Manual', icon: 'card-outline' },
+  { id: 'student-loans', name: 'Student Loans', value: 0, source: 'Manual', icon: 'cash-outline' },
 ];
 
 /* ---------------- Shared UI ---------------- */
@@ -635,28 +724,50 @@ const FirstConnect = ({ onConnect, onSkip }: any) => {
 };
 
 /* ---------------- Paywall ---------------- */
-const Paywall = ({ onContinue }: any) => (
-  <ScrollView style={s.lightScreen} contentContainerStyle={{ padding: 23, paddingTop: 60, paddingBottom: 28 }}>
-    <View style={s.paywallMark}><Text style={{ color: '#e2b96f', fontSize: 24 }}>✦</Text></View>
-    <View style={s.onboardHeading}>
-      <Text style={s.eyebrow}>JALETER PREMIUM</Text>
-      <Text style={s.onboardH1}>Steward today.{'\n'}Build tomorrow.</Text>
-      <Text style={s.onboardHint}>Everything you need to turn daily decisions into a lasting legacy.</Text>
-    </View>
-    <View style={s.priceCard}>
-      <Text style={{ color: C.goldEyebrow2, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 }}>ANNUAL MEMBERSHIP</Text>
-      <Text style={s.priceStrong}>$75<Text style={{ fontSize: 13, color: '#8d867d', fontWeight: '500' }}>/year</Text></Text>
-      {['Secure SimpleFIN syncing', 'Budgets, Net Worth, and Legacy', '100 curated Faith + Focus messages'].map(t => (
-        <View key={t} style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginVertical: 5 }}>
-          <Ionicons name="checkmark" size={15} color="#a57537" />
-          <Text style={{ color: '#615b52', fontSize: 11 }}>{t}</Text>
-        </View>
-      ))}
-    </View>
-    <GoldButton label="Continue to secure checkout" onPress={onContinue} testID="paywall-checkout" />
-    <Pressable onPress={onContinue} testID="paywall-preview"><Text style={[s.loginLink, { marginTop: 20 }]}>Continue in preview mode</Text></Pressable>
-  </ScrollView>
-);
+const Paywall = ({ onContinue }: any) => {
+  const { start } = usePayment();
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const onSubscribe = async () => {
+    setBusy(true);
+    setToast(null);
+    const res = await start('jaleter_premium');
+    setBusy(false);
+    if (res.paid) {
+      setToast('Membership activated — welcome to Jaleter Premium.');
+      setTimeout(onContinue, 900);
+    } else if (res.canceled) {
+      setToast('Checkout canceled. You can start again anytime.');
+    } else if (res.error) {
+      setToast(res.error);
+    } else if (Platform.OS !== 'web') {
+      setToast('Payment is still processing. We\'ll unlock premium once Stripe confirms.');
+    }
+  };
+  return (
+    <ScrollView style={s.lightScreen} contentContainerStyle={{ padding: 23, paddingTop: 60, paddingBottom: 28 }}>
+      <View style={s.paywallMark}><Text style={{ color: '#e2b96f', fontSize: 24 }}>✦</Text></View>
+      <View style={s.onboardHeading}>
+        <Text style={s.eyebrow}>JALETER PREMIUM</Text>
+        <Text style={s.onboardH1}>Steward today.{'\n'}Build tomorrow.</Text>
+        <Text style={s.onboardHint}>Everything you need to turn daily decisions into a lasting legacy.</Text>
+      </View>
+      <View style={s.priceCard}>
+        <Text style={{ color: C.goldEyebrow2, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 }}>ANNUAL MEMBERSHIP</Text>
+        <Text style={s.priceStrong}>$75<Text style={{ fontSize: 13, color: '#8d867d', fontWeight: '500' }}>/year</Text></Text>
+        {['Secure SimpleFIN syncing', 'Budgets, Net Worth, and Legacy', '100 curated Faith + Focus messages'].map(t => (
+          <View key={t} style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginVertical: 5 }}>
+            <Ionicons name="checkmark" size={15} color="#a57537" />
+            <Text style={{ color: '#615b52', fontSize: 11 }}>{t}</Text>
+          </View>
+        ))}
+      </View>
+      <GoldButton label={busy ? 'Opening secure checkout…' : 'Subscribe — $75 / year'} onPress={onSubscribe} disabled={busy} testID="paywall-checkout" />
+      <Pressable onPress={onContinue} testID="paywall-preview"><Text style={[s.loginLink, { marginTop: 20 }]}>Continue in preview mode</Text></Pressable>
+      {toast && <Toast message={toast} onHide={() => setToast(null)} />}
+    </ScrollView>
+  );
+};
 
 /* ---------------- Home ---------------- */
 const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, navigate }: any) => {
@@ -692,29 +803,21 @@ const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, na
           <Text style={[s.snapshotLabel, { color: '#c4bdb2' }]}>Net Worth</Text>
           <Text style={[s.snapshotValue, { color: '#fff' }]}>{MONEY(netWorth)}</Text>
           <View style={{ flexDirection: 'row', gap: 3, marginTop: 8, alignItems: 'center' }}>
-            <Ionicons name="trending-up" size={12} color={C.greenSoft} />
-            <Text style={{ color: C.greenSoft, fontSize: 9 }}>4.8% this quarter</Text>
+            <Ionicons name="wallet-outline" size={12} color={C.greenSoft} />
+            <Text style={{ color: C.greenSoft, fontSize: 9 }}>Assets − Liabilities</Text>
           </View>
         </Pressable>
       </View>
-      {alertsEnabled && (
-        <Pressable style={s.alertBanner} onPress={() => navigate('budget', 'enjoy')} testID="home-alert">
+      {alertsEnabled && budgetUsage >= 80 && (
+        <Pressable style={s.alertBanner} onPress={() => navigate('budget')} testID="home-alert">
           <View style={s.alertIcon}><Ionicons name="notifications" size={18} color={C.alertIconText} /></View>
           <View style={{ flex: 1 }}>
-            <Text style={{ fontWeight: '700', fontSize: 11, color: C.alertText }}>Enjoy is approaching its limit</Text>
-            <Text style={{ color: '#8d806e', fontSize: 9 }}>You've used 92% of this month's budget.</Text>
+            <Text style={{ fontWeight: '700', fontSize: 11, color: C.alertText }}>You're approaching your budget limit</Text>
+            <Text style={{ color: '#8d806e', fontSize: 9 }}>{Math.round(budgetUsage)}% of this month's budget used.</Text>
           </View>
           <Ionicons name="chevron-forward" size={17} color={C.alertText} />
         </Pressable>
       )}
-      <View style={s.streakBanner}>
-        <Sparkle size={22} color="#77a17f" style={{ width: 36, textAlign: 'center' as any }} />
-        <View style={{ flex: 1 }}>
-          <Text style={{ fontWeight: '700', fontSize: 11, color: C.streakText }}>7-day stewardship streak</Text>
-          <Text style={{ color: '#8d806e', fontSize: 9 }}>You've checked in every day this week.</Text>
-        </View>
-        <Ionicons name="trophy" size={20} color="#80a487" />
-      </View>
       <View style={s.sectionTitle}>
         <Text style={[s.sectionH3, t.textInk]}>Your Legacy</Text>
         <Pressable onPress={() => navigate('legacy')} testID="home-legacy-link" style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -934,22 +1037,24 @@ const NetWorthScreen = ({ assets, liabilities }: any) => {
         <Text style={s.nwHeroStrong}>{visible ? MONEY(nw) : '••••••'}</Text>
         <View style={{ flexDirection: 'row', gap: 4, alignItems: 'center' }}>
           <Ionicons name="trending-up" size={13} color="#7fac8d" />
-          <Text style={{ color: '#7fac8d', fontSize: 10 }}>+4.8% this {period.toLowerCase()}</Text>
+          <Text style={{ color: '#7fac8d', fontSize: 10 }}>Updates with your linked accounts</Text>
         </View>
-        {/* Faux ascending line chart (no react-native-svg installed) */}
-        <View style={s.nwChart}>
-          {[62, 55, 48, 42, 33, 24, 15, 9].map((top, i, arr) => (
-            <View key={i} style={[s.nwChartDot, { left: `${(i / (arr.length - 1)) * 100}%`, top }]} />
-          ))}
-        </View>
+        {/* Ascending line chart placeholder (renders only when there is a positive net worth) */}
+        {nw > 0 && (
+          <View style={s.nwChart}>
+            {[62, 55, 48, 42, 33, 24, 15, 9].map((top, i, arr) => (
+              <View key={i} style={[s.nwChartDot, { left: `${(i / (arr.length - 1)) * 100}%`, top }]} />
+            ))}
+          </View>
+        )}
       </View>
       <PeriodPills values={['Month','Quarter','Year']} value={period} onChange={setPeriod} testID="nw-period" />
       <View style={[s.cashProtection, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
         <View style={{ flex: 1 }}><Text style={[s.cpSmall, t.textMuted]}>TOTAL CASH</Text><Text style={[s.cpStrong, t.textInk]}>{MONEY(cash)}</Text></View>
         <Text style={{ color: '#b99a6c' }}>−</Text>
-        <View style={{ flex: 1 }}><Text style={[s.cpSmall, t.textMuted]}>COMMITTED</Text><Text style={[s.cpStrong, t.textInk]}>{MONEY(5050)}</Text></View>
+        <View style={{ flex: 1 }}><Text style={[s.cpSmall, t.textMuted]}>COMMITTED</Text><Text style={[s.cpStrong, t.textInk]}>{MONEY(0)}</Text></View>
         <Text style={{ color: '#b99a6c' }}>=</Text>
-        <View style={[{ flex: 1.2 }, s.cpAvailable]}><Text style={[s.cpSmall, { color: '#c8b494' }]}>AVAILABLE</Text><Text style={[s.cpStrong, { color: '#f3dfbd' }]}>{MONEY(Math.max(0, cash - 5050))}</Text></View>
+        <View style={[{ flex: 1.2 }, s.cpAvailable]}><Text style={[s.cpSmall, { color: '#c8b494' }]}>AVAILABLE</Text><Text style={[s.cpStrong, { color: '#f3dfbd' }]}>{MONEY(Math.max(0, cash))}</Text></View>
       </View>
       <WorthCard title="Assets" total={ta + linkedRows.filter((r:any) => (r.balance || 0) > 0 && !r.error).reduce((sum:number,r:any) => sum + (r.balance || 0), 0)} rows={[
         ...assets,
@@ -1021,31 +1126,145 @@ const LegacyScreen = ({ startingNetWorth, back }: any) => {
 };
 const CoachingScreen = ({ back }: any) => {
   const t = useThemed();
-  const [booked, setBooked] = useState(false);
+  const { token } = useAuth();
+  const { start } = usePayment();
+  const [slots] = useState(() => upcomingCoachingSlots(10));
+  const [selected, setSelected] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const [bookings, setBookings] = useState<any[]>([]);
+
+  const refreshBookings = useCallback(async () => {
+    if (!token) return;
+    try {
+      const data = await apiCall('/api/coaching/bookings', { method: 'GET' }, token);
+      setBookings(Array.isArray(data?.bookings) ? data.bookings : []);
+    } catch { /* ignore */ }
+  }, [token]);
+  useEffect(() => { refreshBookings(); }, [refreshBookings]);
+
+  const onBookAndPay = async () => {
+    if (!selected) { setToast('Please choose a time slot.'); return; }
+    setBusy(true);
+    setToast(null);
+    const res = await start('coaching_session', { scheduled_at: selected });
+    setBusy(false);
+    if (res.paid) {
+      const iso = selected;
+      setSelected(null);
+      setToast(`Session confirmed for ${formatBookingDate(iso)}.`);
+      refreshBookings();
+    } else if (res.canceled) {
+      setToast('Payment canceled. Your time slot was released.');
+    } else if (res.error) {
+      setToast(res.error);
+    } else if (Platform.OS !== 'web') {
+      setToast('Payment is still processing. It will confirm shortly.');
+      setTimeout(refreshBookings, 2500);
+    }
+  };
+
+  const upcoming = bookings
+    .filter((b) => b.status === 'confirmed' && new Date(b.scheduled_at).getTime() > Date.now())
+    .slice(0, 3);
+
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Coaching" subtitle="Personal financial clarity, one hour at a time." back={back} />
       <View style={s.coachingCard}>
         <View style={s.coachingIcon}><Ionicons name="chatbubble-outline" size={24} color={C.goldText} /></View>
-        <Text style={{ color: '#cda86d', fontSize: 9, letterSpacing: 1.2 }}>PRIVATE SESSION</Text>
-        <Text style={s.coachingPrice}>$50 / hour</Text>
+        <Text style={{ color: '#cda86d', fontSize: 9, letterSpacing: 1.2 }}>PRIVATE SESSION · 60 MIN</Text>
+        <Text style={s.coachingPrice}>$50</Text>
         <Text style={{ color: '#aaa298', fontSize: 10, textAlign: 'center' }}>Work through your budget, goals, or next financial decision with Danyell.</Text>
       </View>
-      <View style={{ marginTop: 14 }}>
-        <GoldButton label="Book time with Danyell" onPress={() => setBooked(true)} testID="coaching-book" />
+
+      {upcoming.length > 0 && (
+        <View style={{ marginTop: 18 }}>
+          <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 }, t.textInk]}>UPCOMING</Text>
+          {upcoming.map((b) => (
+            <View key={b.booking_id} style={[s.slotRow, { borderColor: '#c9a56c33', backgroundColor: t.dark ? D.surface : '#faf4e9' }]}>
+              <Ionicons name="checkmark-circle" size={17} color="#8fa88f" />
+              <Text style={[{ flex: 1, fontSize: 11, fontWeight: '600' }, t.textInk]}>{formatBookingDate(b.scheduled_at)}</Text>
+              <Text style={{ color: '#8fa88f', fontSize: 9, fontWeight: '700' }}>CONFIRMED</Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      <View style={{ marginTop: 18 }}>
+        <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 }, t.textInk]}>PICK A TIME</Text>
+        {slots.map((slot) => {
+          const active = selected === slot.iso;
+          return (
+            <Pressable
+              key={slot.iso}
+              onPress={() => setSelected(slot.iso)}
+              style={[s.slotRow, { borderColor: active ? '#c9a56c' : (t.dark ? D.border : '#eae3d5'), backgroundColor: active ? (t.dark ? '#2a2521' : '#fff8ec') : (t.dark ? D.surface : '#fff') }]}
+              testID={`coaching-slot-${slot.iso}`}
+            >
+              <Ionicons name={active ? 'radio-button-on' : 'radio-button-off'} size={16} color={active ? '#c9a56c' : '#9b958c'} />
+              <Text style={[{ flex: 1, fontSize: 11, fontWeight: active ? '700' : '500' }, t.textInk]}>{slot.label}</Text>
+            </Pressable>
+          );
+        })}
       </View>
-      {booked && <Toast message="Session reserved for July 22 at 10:00 AM." onHide={() => setBooked(false)} />}
+
+      <View style={{ marginTop: 18 }}>
+        <GoldButton label={busy ? 'Opening secure checkout…' : 'Book & Pay $50'} onPress={onBookAndPay} disabled={busy || !selected} testID="coaching-book" />
+      </View>
+      {toast && <Toast message={toast} onHide={() => setToast(null)} />}
     </ScrollView>
   );
 };
 const MembershipScreen = ({ back }: any) => {
   const t = useThemed();
+  const { token } = useAuth();
+  const { start } = usePayment();
+  const [membership, setMembership] = useState<{ active: boolean; expires_at: string | null; plan: string | null } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const refresh = useCallback(async () => {
+    if (!token) return;
+    try {
+      const data = await apiCall('/api/user/membership', { method: 'GET' }, token);
+      setMembership(data);
+    } catch { setMembership(null); }
+  }, [token]);
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const onSubscribe = async () => {
+    setBusy(true);
+    setToast(null);
+    const res = await start('jaleter_premium');
+    setBusy(false);
+    if (res.paid) {
+      setToast('Membership activated for the next 12 months.');
+      refresh();
+    } else if (res.canceled) {
+      setToast('Checkout canceled.');
+    } else if (res.error) {
+      setToast(res.error);
+    } else if (Platform.OS !== 'web') {
+      setToast('Payment is still processing. Membership will unlock shortly.');
+      setTimeout(refresh, 2500);
+    }
+  };
+
+  const label = membership?.active
+    ? `Renew — $75 (extends to ${new Date(new Date(membership.expires_at as string).getTime() + 365 * 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })})`
+    : busy ? 'Opening secure checkout…' : 'Subscribe — $75 / year';
+
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Membership" subtitle="One simple annual plan." back={back} />
       <View style={[s.priceCard, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
         <Text style={{ color: C.goldEyebrow2, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 }}>JALETER PREMIUM</Text>
         <Text style={[s.priceStrong, t.textInk]}>$75<Text style={{ fontSize: 13, color: t.dark ? D.textMuted : '#8d867d', fontWeight: '500' }}>/year</Text></Text>
+        {membership?.active && (
+          <View style={{ marginTop: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: '#8fa88f22', alignSelf: 'flex-start' }}>
+            <Text style={{ color: '#5a7f60', fontSize: 10, fontWeight: '700' }}>ACTIVE · renews {new Date(membership.expires_at as string).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>
+          </View>
+        )}
         {['SimpleFIN account syncing','Full Budget and Transactions','Net Worth and Legacy planning','Faith + Focus library'].map(item => (
           <View key={item} style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginVertical: 5 }}>
             <Ionicons name="checkmark" size={15} color="#a57537" />
@@ -1053,7 +1272,8 @@ const MembershipScreen = ({ back }: any) => {
           </View>
         ))}
       </View>
-      <GoldButton label="Manage on secure website" onPress={() => {}} testID="membership-manage" />
+      <GoldButton label={label} onPress={onSubscribe} disabled={busy} testID="membership-manage" />
+      {toast && <Toast message={toast} onHide={() => setToast(null)} />}
     </ScrollView>
   );
 };
@@ -1432,14 +1652,45 @@ function MainApp() {
     if (!auth.user && stage === 'app') setStage('welcome');
   }, [auth.user]);
 
+  // On web, when Stripe redirects back with ?checkout=success&session_id=..., poll and show toast.
+  const [globalToast, setGlobalToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined' || !auth.token) return;
+    const params = new URLSearchParams(window.location.search || '');
+    const checkout = params.get('checkout');
+    const sessionId = params.get('session_id');
+    if (!checkout || !sessionId) return;
+    // Clean the URL immediately so refresh doesn't reprocess
+    window.history.replaceState(null, '', window.location.pathname);
+    if (checkout === 'cancel') {
+      setGlobalToast('Checkout canceled.');
+      return;
+    }
+    (async () => {
+      for (let i = 0; i < 8; i += 1) {
+        try {
+          const status = await apiCall(`/api/payments/status/${sessionId}`, { method: 'GET' }, auth.token);
+          if (status?.payment_status === 'paid') {
+            const label = status?.product === 'jaleter_premium' ? 'Membership activated.' : 'Session confirmed.';
+            setGlobalToast(label);
+            return;
+          }
+        } catch { /* keep polling */ }
+        await new Promise((r) => setTimeout(r, 1200));
+      }
+      setGlobalToast('Payment is still processing.');
+    })();
+  }, [auth.token]);
+
   const isDark = appearance === 'Dark';
   const income = transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
   const expense = transactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
-  const openingCash = 16800;
+  const openingCash = 0;
   const syncedCash = openingCash + income - expense;
   const syncedAssets = assets.map(x => x.id === 'cash' ? { ...x, value: syncedCash } : x);
   const netWorth = syncedAssets.reduce((sum, x) => sum + x.value, 0) - liabilities.reduce((sum, x) => sum + x.value, 0);
   const monthlyBudget = categories.flatMap(c => c.subcategories).reduce((sum, x) => sum + x.budgeted, 0);
+  const budgetUsage = monthlyBudget > 0 ? (expense / monthlyBudget) * 100 : 0;
   const nav = (screen: string, category: string | null = null) => { setActive(screen); if (category) setFocusCategory(category); };
 
   if (!hydrated || auth.loading) return <View style={{ flex: 1, backgroundColor: C.cream }} testID="auth-loading" />;
@@ -1461,7 +1712,7 @@ function MainApp() {
       {auth.user && stage === 'paywall' && <Paywall onContinue={() => setStage('app')} />}
       {auth.user && stage === 'app' && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
-          {active === 'home' && <HomeScreen name={displayName} experience={experience} netWorth={netWorth} budgetUsage={expense / monthlyBudget * 100} alertsEnabled={alerts.enabled} navigate={nav} />}
+          {active === 'home' && <HomeScreen name={displayName} experience={experience} netWorth={netWorth} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
           {active === 'budget' && <BudgetScreen categories={categories} incomeSources={incomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} />}
           {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} liabilities={liabilities} />}
@@ -1473,6 +1724,7 @@ function MainApp() {
           <BottomNav active={active} setActive={(id: string) => { setActive(id); }} isDark={isDark} />
         </View>
       )}
+      {globalToast && <Toast message={globalToast} onHide={() => setGlobalToast(null)} />}
     </SafeAreaView>
     </ThemeCtx.Provider>
   );
@@ -1607,6 +1859,7 @@ const s = StyleSheet.create({
   coachingCard: { padding: 24, borderRadius: 22, backgroundColor: C.ink3, alignItems: 'center' },
   coachingIcon: { width: 51, height: 51, borderRadius: 17, backgroundColor: '#2a251e', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   coachingPrice: { fontFamily: F.serif, fontSize: 26, fontWeight: '600', color: '#fff', marginVertical: 6 },
+  slotRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 14, borderWidth: 1, marginBottom: 8 },
   moreHero: { padding: 22, marginBottom: 13, borderRadius: 22, backgroundColor: C.ink3 },
   moreHeroH2: { fontFamily: F.serif, fontSize: 23, fontWeight: '600', color: '#fff', marginVertical: 8 },
   moreGridBtn: { flexDirection: 'row', alignItems: 'center', gap: 11, padding: 14, borderWidth: 1, borderColor: C.border, borderRadius: 18, backgroundColor: C.creamAlt },

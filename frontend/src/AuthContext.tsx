@@ -56,10 +56,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
 
-  // Restore existing session
+  const persist = useCallback(async (t: string, u: AuthUser) => {
+    await storage.secureSet(TOKEN_KEY, t);
+    setToken(t);
+    setUser(u);
+  }, []);
+
+  // Restore existing session, and consume ?session_id / #session_id from a Google web redirect
   useEffect(() => {
     (async () => {
       try {
+        // 1) On web, check whether we just came back from the Emergent Google flow
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          const hash = window.location.hash || '';
+          const search = window.location.search || '';
+          let sessionId: string | null = null;
+          if (hash.includes('session_id=')) sessionId = new URLSearchParams(hash.replace(/^#/, '')).get('session_id');
+          if (!sessionId && search.includes('session_id=')) sessionId = new URLSearchParams(search).get('session_id');
+          if (sessionId) {
+            try {
+              const data = await callApi('/api/auth/emergent/session', {
+                method: 'POST',
+                body: JSON.stringify({ session_id: sessionId }),
+              });
+              await persist(data.token, data.user);
+              // Clean the URL so refresh doesn't reprocess it
+              window.history.replaceState(null, '', window.location.pathname);
+              return; // Skip stored-token restore, we're authenticated
+            } catch {
+              // fall through to stored-token restore
+            }
+          }
+        }
+
+        // 2) Fallback: restore existing session from secure storage
         const stored = await storage.secureGet(TOKEN_KEY, '' as string);
         if (stored && typeof stored === 'string' && stored.length > 0) {
           try {
@@ -74,13 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoading(false);
       }
     })();
-  }, []);
-
-  const persist = useCallback(async (t: string, u: AuthUser) => {
-    await storage.secureSet(TOKEN_KEY, t);
-    setToken(t);
-    setUser(u);
-  }, []);
+  }, [persist]);
 
   const register = useCallback(async (name: string, email: string, password: string) => {
     const data = await callApi('/api/auth/register', {
