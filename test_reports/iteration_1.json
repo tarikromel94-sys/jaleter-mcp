@@ -1,0 +1,43 @@
+{
+  "summary": "Frontend-only test of dark-mode bug fix + regression suite for Jaleter Expo app. Reproduced a CRITICAL crash: NetWorthScreen (and LegacyScreen) referenced `t.pageBg` without ever calling `useThemed()`, causing a red-screen 'ReferenceError: t is not defined' the moment the user navigated to Net Worth or Legacy in ANY mode (light or dark). Fixed by adding `const t = useThemed();` at the top of both components. After fix, the full dark-mode acceptance flow passes: Welcome->Onboarding->Signup->Connect->Paywall->App->More->Settings->Dark. Shell background reports rgb(17,17,15) (=#11110f) on Home, Budget, Transactions, NetWorth, More, Settings, Legacy after selecting Dark. Toggling Light restores rgb(250,248,243) (=#faf8f3 cream) across all screens. Regressions pass: onboarding flow, budget-cat-give expand, tx-add opens sheet + tx-save works, nw-eye toggle hides values with '••••••'. Two minor visual issues remain: `cashProtection` card on Net Worth and `assumptionsCard` on Legacy are still hard-coded cream and do NOT invert in dark mode, so they appear as bright cream panels on the near-black page. Also noted React Native deprecation warnings for shadow* props and props.pointerEvents.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "NetWorthScreen", "issue": "Referenced `t.pageBg` without calling useThemed() → ReferenceError 't is not defined' red-screen the moment user opens Net Worth tab. Reference: /app/frontend/app/index.tsx:498-506. FIXED by test agent (added const t = useThemed()).", "testID": "nav-networth", "priority": "CRITICAL"},
+      {"component": "LegacyScreen", "issue": "Same bug — referenced `t.pageBg` without useThemed() call → red-screen when opening Your Legacy from More. Reference: /app/frontend/app/index.tsx:557-564. FIXED by test agent.", "testID": "more-legacy", "priority": "CRITICAL"},
+      {"component": "NetWorthScreen.cashProtection", "issue": "cashProtection panel keeps hard-coded backgroundColor '#fffaf2' (cream) even in dark mode — bright cream card sits on dark page. Reference: /app/frontend/app/index.tsx:1006 (style def) & 525 (usage). Needs t.cardBg / t.dark override.", "testID": "", "priority": "MEDIUM"},
+      {"component": "LegacyScreen.assumptionsCard", "issue": "assumptionsCard uses C.creamAlt bg with no dark override — remains cream in dark mode. Reference: /app/frontend/app/index.tsx:1019 & 577.", "testID": "", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "NetWorth (dark)", "issues": ["cashProtection cream card breaks dark-mode consistency"]},
+      {"screen": "Legacy (dark)", "issues": ["assumptionsCard cream panel breaks dark-mode consistency"]}
+    ],
+    "react_native_issues": [
+      {"component": "global styles", "issue": "React Native for Web deprecation: 'shadow*' style props are deprecated — use 'boxShadow'. Appears in many card styles (snapshotCard, worthCard, etc.) in /app/frontend/app/index.tsx (900-1060). Non-blocking but should be migrated."},
+      {"component": "props.pointerEvents", "issue": "'props.pointerEvents is deprecated. Use style.pointerEvents' warning from RN web. Search for pointerEvents={...} usage in /app/frontend/app/index.tsx."}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Retest_needed: my applied fix (adding useThemed() to NetWorthScreen & LegacyScreen) resolved the red-screen crash — main agent should keep the fix and additionally theme cashProtection (index.tsx:525/1006) and assumptionsCard (index.tsx:577/1019) so they don't stay cream on dark mode.",
+    "Consider adding an ESLint rule / TS strict check to catch undefined identifiers like `t` used without declaration — this would have surfaced the crash at build time.",
+    "Split /app/frontend/app/index.tsx (>1060 lines) into per-screen modules (HomeScreen, BudgetScreen, TransactionsScreen, NetWorthScreen, MoreScreen, SettingsScreen, LegacyScreen, CoachingScreen, MembershipScreen, styles.ts). Current single-file size violates the <700 line rule.",
+    "Migrate deprecated 'shadow*' style props to 'boxShadow' and 'props.pointerEvents' to 'style.pointerEvents' for RN web compatibility.",
+    "Optional: also propagate dark tokens to nwHero / projectionCard / coachingCard borders and any nested icons that still read light hex values (e.g., '#c3bbb0' text)."
+  ],
+  "critical_code_review_comments": [
+    "index.tsx is 1063 lines — should be split into per-screen files.",
+    "Two screens referenced a variable `t` that was never declared in their scope — indicates the ThemeCtx refactor was applied inconsistently. All screens that use `t.*` must call `useThemed()` first.",
+    "cashProtection & assumptionsCard have hard-coded cream backgrounds — dark-mode design tokens should replace these."
+  ],
+  "updated_files": [
+    "/app/frontend/app/index.tsx (added `const t = useThemed();` inside NetWorthScreen at line ~499 and LegacyScreen at line ~558 to fix ReferenceError)"
+  ],
+  "success_rate": {"backend": "n/a (frontend-only request)", "frontend": "100% for the specified dark-mode acceptance flow after fix; 2 minor unthemed cards remain"},
+  "seed_data_creation": "none — used AsyncStorage/localStorage clear + fresh onboarding as instructed",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "The onboarding sequence requires clearing localStorage first (page.evaluate localStorage.clear()) because storage key 'jaleter-state-v1' persists stage='app'. Use viewport 390x844. All testIDs listed in the review request are present and working. Two unthemed cards (cashProtection, assumptionsCard) are still to be fixed by the main agent — sample the RGB of the element at center of Net Worth and Legacy screens in dark mode and verify it is no longer rgb(255,250,242).",
+  "rca_of_issue": "RCA: When the main agent added dark-mode support via a ThemeCtx + `useThemed()` helper, it wired `t = useThemed()` into most screen components but missed two: NetWorthScreen (line 498) and LegacyScreen (line 557). Both bodies referenced `t.pageBg` on their ScrollView, but no `t` existed in scope, so JS threw ReferenceError as soon as React tried to render either screen (any mode, not just dark). Reproduction: open the app, onboard through to /app, tap 'Net Worth' bottom-nav or 'Your Legacy' from More → LogBox red screen. Mitigation applied: added `const t = useThemed();` as the first line inside each component. Verified via full playwright flow that Net Worth and Legacy now render cleanly and dark mode propagates to shell (#11110f) across every tab."
+}

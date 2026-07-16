@@ -78,28 +78,37 @@ const GoldButton = ({ label, onPress, disabled, testID }: any) => (
     </LinearGradient>
   </Pressable>
 );
-const CircleBtn = ({ children, onPress, testID, dark }: any) => (
-  <Pressable testID={testID} onPress={onPress} style={[s.circleBtn, dark && { backgroundColor: '#24221e' }]}>{children}</Pressable>
-);
-const PeriodPills = ({ values, value, onChange, testID }: any) => (
-  <View style={s.segmented} testID={testID}>
-    {values.map((v: string) => (
-      <Pressable key={v} testID={`${testID}-${v}`} onPress={() => onChange(v)} style={[s.pill, value === v && s.pillSelected]}>
-        <Text style={[s.pillText, value === v && s.pillTextSelected]}>{v}</Text>
-      </Pressable>
-    ))}
-  </View>
-);
-const PageHeader = ({ title, subtitle, back, action }: any) => (
-  <View style={s.pageHeader}>
-    <View style={s.headerActions}>
-      {back ? <CircleBtn onPress={back} testID="header-back"><Ionicons name="arrow-back" size={20} color={C.ink3} /></CircleBtn> : <View style={{width:38}} />}
-      {action || <View style={{width:38}} />}
+const CircleBtn = ({ children, onPress, testID, dark }: any) => {
+  const t = useThemed();
+  return (
+    <Pressable testID={testID} onPress={onPress} style={[s.circleBtn, dark && { backgroundColor: '#24221e' }, t.circleBg]}>{children}</Pressable>
+  );
+};
+const PeriodPills = ({ values, value, onChange, testID }: any) => {
+  const t = useThemed();
+  return (
+    <View style={[s.segmented, t.pillBg]} testID={testID}>
+      {values.map((v: string) => (
+        <Pressable key={v} testID={`${testID}-${v}`} onPress={() => onChange(v)} style={[s.pill, value === v && s.pillSelected, value === v && t.pillSelectedBg]}>
+          <Text style={[s.pillText, t.textMuted, value === v && s.pillTextSelected, value === v && t.textInk]}>{v}</Text>
+        </Pressable>
+      ))}
     </View>
-    <Text style={s.pageTitle}>{title}</Text>
-    {subtitle ? <Text style={s.pageSubtitle}>{subtitle}</Text> : null}
-  </View>
-);
+  );
+};
+const PageHeader = ({ title, subtitle, back, action }: any) => {
+  const t = useThemed();
+  return (
+    <View style={s.pageHeader}>
+      <View style={s.headerActions}>
+        {back ? <CircleBtn onPress={back} testID="header-back"><Ionicons name="arrow-back" size={20} color={t.dark ? D.text : C.ink3} /></CircleBtn> : <View style={{width:38}} />}
+        {action || <View style={{width:38}} />}
+      </View>
+      <Text style={[s.pageTitle, t.textInk]}>{title}</Text>
+      {subtitle ? <Text style={[s.pageSubtitle, t.textSubtle]}>{subtitle}</Text> : null}
+    </View>
+  );
+};
 const Sheet = ({ visible, close, title, subtitle, children }: any) => (
   <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
     <View style={s.modalBackdrop}>
@@ -269,16 +278,17 @@ const Paywall = ({ onContinue }: any) => (
 );
 
 /* ---------------- Home ---------------- */
-const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, navigate, isDark }: any) => {
+const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, navigate }: any) => {
+  const t = useThemed();
   const q = dailyQuote(experience as QuoteType, new Date());
   const projected = Math.round(netWorth * Math.pow(1.08, 33) + 1250 * 12 * ((Math.pow(1.08, 33) - 1) / 0.08));
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
   return (
-    <ScrollView style={[s.page, isDark && { backgroundColor: D.bg }]} contentContainerStyle={{ paddingBottom: 130 }}>
+    <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <View style={s.homeGreeting}>
         <View style={{ flex: 1 }}>
           <Text style={s.homeDate}>{today}</Text>
-          <Text style={[s.homeName, isDark && { color: D.text }]}>Good evening, {name}.</Text>
+          <Text style={[s.homeName, t.textInk]}>Good evening, {name}.</Text>
         </View>
         <CircleBtn onPress={() => navigate('settings')} testID="home-bell"><Ionicons name="notifications-outline" size={18} color={C.ink3} /></CircleBtn>
       </View>
@@ -289,13 +299,13 @@ const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, na
         <Text style={s.inspirationQuote}>{q.quote}</Text>
         <Text style={{ color: '#aaa297', fontSize: 9 }}>{q.source}</Text>
       </Pressable>
-      <View style={s.sectionTitle}><Text style={s.sectionH3}>Right Now</Text><Text style={s.sectionCap}>Your financial pulse</Text></View>
+      <View style={s.sectionTitle}><Text style={[s.sectionH3, t.textInk]}>Right Now</Text><Text style={[s.sectionCap, t.textMuted]}>Your financial pulse</Text></View>
       <View style={{ flexDirection: 'row', gap: 11 }}>
-        <Pressable style={s.snapshotCard} onPress={() => navigate('budget')} testID="home-budget-card">
-          <Text style={s.snapshotLabel}>Budget</Text>
-          <Text style={s.snapshotValue}>{Math.round(budgetUsage)}%</Text>
+        <Pressable style={[s.snapshotCard, t.cardBg]} onPress={() => navigate('budget')} testID="home-budget-card">
+          <Text style={[s.snapshotLabel, t.textMuted]}>Budget</Text>
+          <Text style={[s.snapshotValue, t.textInk]}>{Math.round(budgetUsage)}%</Text>
           <View style={s.miniProgress}><View style={[s.miniProgressBar, { width: `${Math.min(budgetUsage, 100)}%` }]} /></View>
-          <Text style={s.snapshotMeta}>used this month</Text>
+          <Text style={[s.snapshotMeta, t.textMuted]}>used this month</Text>
         </Pressable>
         <Pressable style={[s.snapshotCard, s.snapshotDark]} onPress={() => navigate('networth')} testID="home-networth-card">
           <Text style={[s.snapshotLabel, { color: '#c4bdb2' }]}>Net Worth</Text>
@@ -325,7 +335,7 @@ const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, na
         <Ionicons name="trophy" size={20} color="#80a487" />
       </View>
       <View style={s.sectionTitle}>
-        <Text style={s.sectionH3}>Your Legacy</Text>
+        <Text style={[s.sectionH3, t.textInk]}>Your Legacy</Text>
         <Pressable onPress={() => navigate('legacy')} testID="home-legacy-link" style={{ flexDirection: 'row', alignItems: 'center' }}>
           <Text style={{ color: '#857b6d', fontSize: 11 }}>Explore </Text>
           <Ionicons name="chevron-forward" size={13} color="#857b6d" />
@@ -345,6 +355,7 @@ const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, na
 
 /* ---------------- Budget ---------------- */
 const BudgetScreen = ({ categories, incomeSources, transactions, focusCategory, clearFocus }: any) => {
+  const t = useThemed();
   const [period, setPeriod] = useState('July');
   const [expanded, setExpanded] = useState<string[]>(['give']);
   const annual = period === 'Year';
@@ -356,7 +367,7 @@ const BudgetScreen = ({ categories, incomeSources, transactions, focusCategory, 
   const spent = (id: string) => relevant.filter((t: Tx) => t.type === 'expense' && (t.detailId === id || t.groupId === id)).reduce((sum: number, t: Tx) => sum + t.amount, 0);
   const budgetFor = (subBudget: number) => subBudget * (annual ? 12 : 1);
   return (
-    <ScrollView style={s.page} contentContainerStyle={{ paddingBottom: 130 }}>
+    <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Budget" subtitle="Give first. Steward wisely. Grow intentionally." />
       <PeriodPills values={[...MONTHS, 'Year']} value={period} onChange={setPeriod} testID="budget-period" />
       <View style={s.budgetSummary}>
@@ -364,7 +375,7 @@ const BudgetScreen = ({ categories, incomeSources, transactions, focusCategory, 
         <View style={s.budgetSumCell}><Text style={s.bsSmall}>Expenses</Text><Text style={s.bsStrong}>{MONEY(actualExpenses)}</Text><Text style={s.bsSmall}>actual</Text></View>
         <View style={s.budgetSumCell}><Text style={s.bsSmall}>Net</Text><Text style={s.bsStrong}>{MONEY(actualIncome - actualExpenses)}</Text><Text style={s.bsSmall}>remaining</Text></View>
       </View>
-      <View style={s.sectionTitle}><Text style={s.sectionH3}>Plan by Purpose</Text><Text style={s.sectionCap}>Budget vs. actual</Text></View>
+      <View style={[s.sectionTitle]}><Text style={[s.sectionH3, t.textInk]}>Plan by Purpose</Text><Text style={[s.sectionCap, t.textMuted]}>Budget vs. actual</Text></View>
       <View style={{ gap: 11 }}>
         {categories.map((c: any) => {
           const total = c.subcategories.reduce((sum: number, x: any) => sum + budgetFor(x.budgeted), 0);
@@ -373,18 +384,18 @@ const BudgetScreen = ({ categories, incomeSources, transactions, focusCategory, 
           const open = expanded.includes(c.id);
           const barColor = pct >= 100 ? C.red : pct >= 80 ? C.amber : C.green;
           return (
-            <View key={c.id} style={[s.budgetCategory, open && { borderColor: '#ddc7a6' }]}>
+            <View key={c.id} style={[s.budgetCategory, t.cardBg, open && { borderColor: '#ddc7a6' }]}>
               <Pressable style={s.categorySummary} onPress={() => setExpanded(xs => xs.includes(c.id) ? xs.filter(x => x !== c.id) : [...xs, c.id])} testID={`budget-cat-${c.id}`}>
                 <View style={s.purposeIcon}><Text style={s.purposeIconText}>{c.name[0]}</Text></View>
                 <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 12, fontWeight: '700', color: C.ink }}>{c.name}</Text>
-                  <Text style={{ fontSize: 9, color: C.muted2 }}>{c.tagline}</Text>
+                  <Text style={[{ fontSize: 12, fontWeight: '700', color: C.ink }, t.textInk]}>{c.name}</Text>
+                  <Text style={[{ fontSize: 9, color: C.muted2 }, t.textMuted]}>{c.tagline}</Text>
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={{ fontSize: 11, fontWeight: '700', color: C.ink }}>{MONEY(actual)}</Text>
-                  <Text style={{ fontSize: 8, color: C.muted2 }}>of {MONEY(total)}</Text>
+                  <Text style={[{ fontSize: 11, fontWeight: '700', color: C.ink }, t.textInk]}>{MONEY(actual)}</Text>
+                  <Text style={[{ fontSize: 8, color: C.muted2 }, t.textMuted]}>of {MONEY(total)}</Text>
                 </View>
-                <Ionicons name={open ? 'chevron-down' : 'chevron-forward'} size={17} color={C.muted} />
+                <Ionicons name={open ? 'chevron-down' : 'chevron-forward'} size={17} color={t.dark ? D.textMuted : C.muted} />
               </Pressable>
               <View style={s.categoryProgress}><View style={[s.categoryProgressBar, { width: `${Math.min(pct, 100)}%`, backgroundColor: barColor }]} /></View>
               <View style={s.categoryMeta}>
@@ -411,6 +422,7 @@ const BudgetScreen = ({ categories, incomeSources, transactions, focusCategory, 
 
 /* ---------------- Transactions ---------------- */
 const TransactionsScreen = ({ transactions, setTransactions, categories, incomeSources }: any) => {
+  const t = useThemed();
   const [filter, setFilter] = useState('All');
   const [editing, setEditing] = useState<any>(null);
   const [toast, setToast] = useState('');
@@ -421,7 +433,7 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
   };
   const remove = (id: string) => { setTransactions((xs: Tx[]) => xs.filter(x => x.id !== id)); setEditing(null); setToast('Transaction deleted.'); };
   return (
-    <ScrollView style={s.page} contentContainerStyle={{ paddingBottom: 130 }}>
+    <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Transactions" subtitle="Synced automatically. Editable anytime." action={
         <CircleBtn testID="tx-add" onPress={() => setEditing({ type: 'expense', name: '', amount: '', date: 'Jul 15', groupId: 'steward', detailId: 'housing' })}>
           <Ionicons name="add" size={19} color={C.ink3} />
@@ -436,18 +448,18 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
         <Ionicons name="checkmark" size={16} color="#50715b" />
       </View>
       <PeriodPills values={['All','Income','Expenses']} value={filter} onChange={setFilter} testID="tx-filter" />
-      <View style={s.transactionList}>
-        {shown.map((t: Tx) => (
-          <Pressable key={t.id} style={s.transactionRow} onPress={() => setEditing(t)} testID={`tx-${t.id}`}>
-            <View style={[s.txIcon, t.type === 'income' && { backgroundColor: '#e7f0e8' }]}>
-              <Ionicons name={t.type === 'income' ? 'trending-up' : 'receipt-outline'} size={16} color={t.type === 'income' ? '#4e765c' : '#886f4b'} />
+      <View style={[s.transactionList, t.cardBg]}>
+        {shown.map((tx: Tx) => (
+          <Pressable key={tx.id} style={[s.transactionRow, t.dividerBorder]} onPress={() => setEditing(tx)} testID={`tx-${tx.id}`}>
+            <View style={[s.txIcon, tx.type === 'income' && { backgroundColor: '#e7f0e8' }]}>
+              <Ionicons name={tx.type === 'income' ? 'trending-up' : 'receipt-outline'} size={16} color={tx.type === 'income' ? '#4e765c' : '#886f4b'} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 11, fontWeight: '700', color: C.ink }}>{t.name}</Text>
-              <Text style={{ fontSize: 8, color: C.muted2 }}>{t.date} · {t.origin}</Text>
+              <Text style={[{ fontSize: 11, fontWeight: '700', color: C.ink }, t.textInk]}>{tx.name}</Text>
+              <Text style={[{ fontSize: 8, color: C.muted2 }, t.textMuted]}>{tx.date} · {tx.origin}</Text>
             </View>
-            <Text style={{ fontSize: 11, fontWeight: '700', color: t.type === 'income' ? '#568066' : C.ink }}>{t.type === 'income' ? '+' : '−'}{EXACT(t.amount)}</Text>
-            <Ionicons name="chevron-forward" size={14} color="#b1aaa0" />
+            <Text style={[{ fontSize: 11, fontWeight: '700', color: tx.type === 'income' ? '#568066' : C.ink }, tx.type === 'expense' && t.textInk]}>{tx.type === 'income' ? '+' : '−'}{EXACT(tx.amount)}</Text>
+            <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#b1aaa0'} />
           </Pressable>
         ))}
       </View>
@@ -484,6 +496,7 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
 
 /* ---------------- Net Worth ---------------- */
 const NetWorthScreen = ({ assets, liabilities }: any) => {
+  const t = useThemed();
   const [period, setPeriod] = useState('Quarter');
   const [visible, setVisible] = useState(true);
   const ta = assets.reduce((sum: number, x: Asset) => sum + x.value, 0);
@@ -491,7 +504,7 @@ const NetWorthScreen = ({ assets, liabilities }: any) => {
   const nw = ta - tl;
   const cash = assets.find((x: Asset) => x.id === 'cash')?.value || 0;
   return (
-    <ScrollView style={s.page} contentContainerStyle={{ paddingBottom: 130 }}>
+    <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Net Worth" subtitle="Your full financial picture, in one place." action={
         <CircleBtn onPress={() => setVisible(!visible)} testID="nw-eye"><Ionicons name={visible ? 'eye-outline' : 'eye-off-outline'} size={18} color={C.ink3} /></CircleBtn>
       } />
@@ -522,31 +535,35 @@ const NetWorthScreen = ({ assets, liabilities }: any) => {
     </ScrollView>
   );
 };
-const WorthCard = ({ title, total, rows, hidden }: any) => (
-  <View style={s.worthCard}>
-    <View style={s.worthCardHeading}>
-      <Text style={{ fontSize: 13, fontWeight: '700', color: C.ink }}>{title}</Text>
-      <Text style={{ fontSize: 13, fontWeight: '700', color: C.ink }}>{hidden ? '••••••' : MONEY(total)}</Text>
-    </View>
-    {rows.map((r: Asset) => (
-      <View key={r.id} style={s.worthRow}>
-        <View style={s.worthIcon}><Ionicons name={r.icon as any} size={17} color="#817969" /></View>
-        <View style={{ flex: 1 }}><Text style={{ fontSize: 10, fontWeight: '700' }}>{r.name}</Text><Text style={{ fontSize: 8, color: '#9b958c' }}>{r.source}</Text></View>
-        <Text style={{ fontSize: 10, fontWeight: '700' }}>{hidden ? '••••' : MONEY(r.value)}</Text>
+const WorthCard = ({ title, total, rows, hidden }: any) => {
+  const t = useThemed();
+  return (
+    <View style={[s.worthCard, t.cardBg]}>
+      <View style={[s.worthCardHeading, t.dividerBorder]}>
+        <Text style={[{ fontSize: 13, fontWeight: '700', color: C.ink }, t.textInk]}>{title}</Text>
+        <Text style={[{ fontSize: 13, fontWeight: '700', color: C.ink }, t.textInk]}>{hidden ? '••••••' : MONEY(total)}</Text>
       </View>
-    ))}
-  </View>
-);
+      {rows.map((r: Asset) => (
+        <View key={r.id} style={[s.worthRow, t.dividerBorder]}>
+          <View style={[s.worthIcon, t.dark && { backgroundColor: D.surfaceAlt }]}><Ionicons name={r.icon as any} size={17} color={t.dark ? D.textMuted : '#817969'} /></View>
+          <View style={{ flex: 1 }}><Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{r.name}</Text><Text style={[{ fontSize: 8, color: '#9b958c' }, t.textMuted]}>{r.source}</Text></View>
+          <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{hidden ? '••••' : MONEY(r.value)}</Text>
+        </View>
+      ))}
+    </View>
+  );
+};
 
 /* ---------------- Legacy / Coaching / Membership / Settings / More ---------------- */
 const LegacyScreen = ({ startingNetWorth, back }: any) => {
+  const t = useThemed();
   const [timeframe, setTimeframe] = useState('Retirement');
   const [contribution, setContribution] = useState(1250);
   const rate = 8;
   const years = timeframe === '5yr' ? 5 : timeframe === '10yr' ? 10 : timeframe === '20yr' ? 20 : 33;
   const projection = Math.round(startingNetWorth * Math.pow(1 + rate / 100, years) + contribution * 12 * ((Math.pow(1 + rate / 100, years) - 1) / (rate / 100)));
   return (
-    <ScrollView style={s.page} contentContainerStyle={{ paddingBottom: 130 }}>
+    <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Your Legacy" subtitle="See what consistent stewardship can become." back={back} />
       <PeriodPills values={['5yr','10yr','20yr','Retirement']} value={timeframe} onChange={setTimeframe} testID="legacy-period" />
       <View style={s.projectionCard}>
@@ -573,9 +590,10 @@ const LegacyScreen = ({ startingNetWorth, back }: any) => {
   );
 };
 const CoachingScreen = ({ back }: any) => {
+  const t = useThemed();
   const [booked, setBooked] = useState(false);
   return (
-    <ScrollView style={s.page} contentContainerStyle={{ paddingBottom: 130 }}>
+    <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Coaching" subtitle="Personal financial clarity, one hour at a time." back={back} />
       <View style={s.coachingCard}>
         <View style={s.coachingIcon}><Ionicons name="chatbubble-outline" size={24} color={C.goldText} /></View>
@@ -590,50 +608,57 @@ const CoachingScreen = ({ back }: any) => {
     </ScrollView>
   );
 };
-const MembershipScreen = ({ back }: any) => (
-  <ScrollView style={s.page} contentContainerStyle={{ paddingBottom: 130 }}>
-    <PageHeader title="Membership" subtitle="One simple annual plan." back={back} />
-    <View style={s.priceCard}>
-      <Text style={{ color: C.goldEyebrow2, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 }}>JALETER PREMIUM</Text>
-      <Text style={s.priceStrong}>$75<Text style={{ fontSize: 13, color: '#8d867d', fontWeight: '500' }}>/year</Text></Text>
-      {['SimpleFIN account syncing','Full Budget and Transactions','Net Worth and Legacy planning','Faith + Focus library'].map(t => (
-        <View key={t} style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginVertical: 5 }}>
-          <Ionicons name="checkmark" size={15} color="#a57537" />
-          <Text style={{ color: '#615b52', fontSize: 11 }}>{t}</Text>
-        </View>
-      ))}
-    </View>
-    <GoldButton label="Manage on secure website" onPress={() => {}} testID="membership-manage" />
-  </ScrollView>
-);
-const MoreScreen = ({ navigate, linkedCount }: any) => (
-  <ScrollView style={s.page} contentContainerStyle={{ paddingBottom: 130 }}>
-    <PageHeader title="More" subtitle="Your legacy, membership, and preferences." />
-    <View style={s.moreHero}>
-      <Sparkle size={22} color="#d7ad6b" />
-      <Text style={s.moreHeroH2}>Build with purpose.</Text>
-      <Text style={{ color: '#aaa298', fontSize: 10 }}>Every feature is designed to connect today's stewardship with tomorrow's freedom.</Text>
-    </View>
-    <View style={{ gap: 10 }}>
-      {[
-        ['legacy','Your Legacy','Projection synced to Net Worth','trending-up-outline'],
-        ['coaching','Book Coaching','$50 per hour','chatbubble-outline'],
-        ['membership','Membership','$75 per year','sparkles-outline'],
-        ['settings','Settings',`${linkedCount} linked accounts`,'settings-outline'],
-      ].map(([id, name, sub, icon]) => (
-        <Pressable key={id} style={s.moreGridBtn} onPress={() => navigate(id)} testID={`more-${id}`}>
-          <View style={s.moreGridIcon}><Ionicons name={icon as any} size={20} color={C.goldEyebrow} /></View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: 12, fontWeight: '700' }}>{name}</Text>
-            <Text style={{ fontSize: 9, color: C.muted2 }}>{sub}</Text>
+const MembershipScreen = ({ back }: any) => {
+  const t = useThemed();
+  return (
+    <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
+      <PageHeader title="Membership" subtitle="One simple annual plan." back={back} />
+      <View style={[s.priceCard, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
+        <Text style={{ color: C.goldEyebrow2, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 }}>JALETER PREMIUM</Text>
+        <Text style={[s.priceStrong, t.textInk]}>$75<Text style={{ fontSize: 13, color: t.dark ? D.textMuted : '#8d867d', fontWeight: '500' }}>/year</Text></Text>
+        {['SimpleFIN account syncing','Full Budget and Transactions','Net Worth and Legacy planning','Faith + Focus library'].map(item => (
+          <View key={item} style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginVertical: 5 }}>
+            <Ionicons name="checkmark" size={15} color="#a57537" />
+            <Text style={{ color: t.dark ? D.textSubtle : '#615b52', fontSize: 11 }}>{item}</Text>
           </View>
-          <Ionicons name="chevron-forward" size={16} color="#aaa39a" />
-        </Pressable>
-      ))}
-    </View>
-  </ScrollView>
-);
+        ))}
+      </View>
+      <GoldButton label="Manage on secure website" onPress={() => {}} testID="membership-manage" />
+    </ScrollView>
+  );
+};
+const MoreScreen = ({ navigate, linkedCount }: any) => {
+  const t = useThemed();
+  return (
+    <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
+      <PageHeader title="More" subtitle="Your legacy, membership, and preferences." />
+      <View style={s.moreHero}>
+        <Sparkle size={22} color="#d7ad6b" />
+        <Text style={s.moreHeroH2}>Build with purpose.</Text>
+        <Text style={{ color: '#aaa298', fontSize: 10 }}>Every feature is designed to connect today's stewardship with tomorrow's freedom.</Text>
+      </View>
+      <View style={{ gap: 10 }}>
+        {[
+          ['legacy','Your Legacy','Projection synced to Net Worth','trending-up-outline'],
+          ['coaching','Book Coaching','$50 per hour','chatbubble-outline'],
+          ['membership','Membership','$75 per year','sparkles-outline'],
+          ['settings','Settings',`${linkedCount} linked accounts`,'settings-outline'],
+        ].map(([id, name, sub, icon]) => (
+          <Pressable key={id} style={[s.moreGridBtn, t.cardBg]} onPress={() => navigate(id)} testID={`more-${id}`}>
+            <View style={[s.moreGridIcon, t.dark && { backgroundColor: D.surfaceAlt }]}><Ionicons name={icon as any} size={20} color={C.goldEyebrow} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>{name}</Text>
+              <Text style={[{ fontSize: 9, color: C.muted2 }, t.textMuted]}>{sub}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={t.dark ? D.textMuted : '#aaa39a'} />
+          </Pressable>
+        ))}
+      </View>
+    </ScrollView>
+  );
+};
 const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, alerts, setAlerts, onLogout, back, linkedAccounts, addLinked }: any) => {
+  const t = useThemed();
   const [sheet, setSheet] = useState<string | null>(null);
   const [toast, setToast] = useState('');
   const rows: [string, string, string, any][] = [
@@ -643,19 +668,19 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
     ['privacy', 'Privacy Policy', 'Bank-data protection', 'lock-closed-outline'],
   ];
   return (
-    <ScrollView style={s.page} contentContainerStyle={{ paddingBottom: 130 }}>
+    <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Settings" subtitle="Make Jaleter work your way." back={back} action={<View style={s.avatar}><Text style={{ color: C.goldText, fontSize: 11, fontWeight: '700' }}>AW</Text></View>} />
-      <View style={s.settingsSection}>
+      <View style={[s.settingsSection, t.cardBg]}>
         <Text style={s.settingsH3}>Your Experience</Text>
         <Text style={s.settingsSub}>100 approved messages. No generated scripture.</Text>
         <PeriodPills values={['Faith','Both','Motivation']} value={experience} onChange={setExperience} testID="settings-exp" />
       </View>
-      <View style={s.settingsSection}>
+      <View style={[s.settingsSection, t.cardBg]}>
         <Text style={s.settingsH3}>Appearance</Text>
         <Text style={s.settingsSub}>Choose a look or follow your device.</Text>
         <PeriodPills values={['Light','System','Dark']} value={appearance} onChange={setAppearance} testID="settings-appear" />
       </View>
-      <View style={s.settingsSection}>
+      <View style={[s.settingsSection, t.cardBg]}>
         <Text style={s.settingsH3}>Budget Alerts</Text>
         <Text style={s.settingsSub}>Stay aware without feeling overwhelmed.</Text>
         <Pressable onPress={() => setAlerts({ ...alerts, enabled: !alerts.enabled })} style={s.settingToggleRow} testID="settings-alerts">
@@ -663,12 +688,12 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
           <View style={[s.toggle, alerts.enabled && s.toggleOn]}><View style={[s.toggleKnob, alerts.enabled && { transform: [{ translateX: 14 }] }]} /></View>
         </Pressable>
       </View>
-      <View style={s.settingsMenu}>
+      <View style={[s.settingsMenu, t.cardBg]}>
         {rows.map(([id, label, detail, icon]) => (
-          <Pressable key={id} onPress={() => setSheet(id)} style={s.settingsMenuBtn} testID={`settings-${id}`}>
-            <View style={s.settingsRowIcon}><Ionicons name={icon} size={17} color="#8a7b65" /></View>
-            <View style={{ flex: 1 }}><Text style={{ fontSize: 11, fontWeight: '700' }}>{label}</Text><Text style={{ fontSize: 9, color: C.muted3 }}>{detail}</Text></View>
-            <Ionicons name="chevron-forward" size={16} color="#b0aaa0" />
+          <Pressable key={id} onPress={() => setSheet(id)} style={[s.settingsMenuBtn, t.dividerBorder]} testID={`settings-${id}`}>
+            <View style={[s.settingsRowIcon, t.dark && { backgroundColor: D.surfaceAlt }]}><Ionicons name={icon} size={17} color={t.dark ? D.textMuted : '#8a7b65'} /></View>
+            <View style={{ flex: 1 }}><Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{label}</Text><Text style={[{ fontSize: 9, color: C.muted3 }, t.textMuted]}>{detail}</Text></View>
+            <Ionicons name="chevron-forward" size={16} color={t.dark ? D.textMuted : '#b0aaa0'} />
           </Pressable>
         ))}
       </View>
@@ -844,6 +869,7 @@ export default function App() {
   const bg = isDark ? D.bg : C.cream;
 
   return (
+    <ThemeCtx.Provider value={{ dark: isDark }}>
     <SafeAreaView style={[s.appShell, { backgroundColor: bg }]} testID="app-shell">
       <RNStatusBar barStyle={stage === 'welcome' || isDark ? 'light-content' : 'dark-content'} />
       {stage === 'welcome' && <Welcome onStart={() => setStage('onboarding')} onLogin={() => setStage('app')} />}
@@ -853,7 +879,7 @@ export default function App() {
       {stage === 'paywall' && <Paywall onContinue={() => setStage('app')} />}
       {stage === 'app' && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
-          {active === 'home' && <HomeScreen name={profile.name.split(' ')[0]} experience={experience} netWorth={netWorth} budgetUsage={expense / monthlyBudget * 100} alertsEnabled={alerts.enabled} navigate={nav} isDark={isDark} />}
+          {active === 'home' && <HomeScreen name={profile.name.split(' ')[0]} experience={experience} netWorth={netWorth} budgetUsage={expense / monthlyBudget * 100} alertsEnabled={alerts.enabled} navigate={nav} />}
           {active === 'budget' && <BudgetScreen categories={categories} incomeSources={incomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} />}
           {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} liabilities={liabilities} />}
@@ -866,6 +892,7 @@ export default function App() {
         </View>
       )}
     </SafeAreaView>
+    </ThemeCtx.Provider>
   );
 }
 
