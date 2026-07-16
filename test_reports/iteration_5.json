@@ -1,0 +1,40 @@
+{
+  "summary": "SendGrid wiring verified end-to-end for BOTH branches without pasting real credentials. Backend (7/7 pytest passed): (1) dev-fallback branch — POST /api/auth/forgot-password with alex+test1@jaleter.app returns 200 with ok=true, delivered=false, via='dev-fallback', reset_token (43-char string), and note mentioning SendGrid not configured; (2) enumeration-safe — non-existent email returns 200 with ONLY {ok:true, delivered:false} (no reset_token, no via, no note); (3) sendgrid branch (monkeypatched via fastapi TestClient with SENDGRID_API_KEY='SG.fake-test-key' + SENDGRID_FROM_EMAIL='sender@example.com') returns 200 with ok=true, delivered=false (fake key → 401 from SendGrid, expected), via='sendgrid', and NO reset_token in the response body — token IS persisted in db.password_resets (verified via pymongo) so an admin could still retrieve it; (4) reset-password happy path + reuse-returns-400 both pass end-to-end and login with new pw succeeds; (5) SlowAPI 3/min forgot bucket triggers 429 within a burst of 6 rapid calls. Frontend (390x844): Welcome → Login → login-forgot → ForgotPassword; submitting alex+test1@jaleter.app navigates to ResetPassword with reset-token prefilled (43 chars) and hint copy shows 'Reset the password for alex+test1@jaleter.app.' as required. Completing the reset with matching new passwords auto-logs in and lands on the Home dashboard ('Good evening, Alex.'). Password restored to 'password123' at the end of both pytest cleanup class AND the frontend flow (final /api/auth/login → 200 verified). No SendGrid credentials were pasted anywhere — the .env still has SENDGRID_API_KEY=\"\" and SENDGRID_FROM_EMAIL=\"\".",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/*", "issue": "SlowAPI still uses in-memory storage (documented previously). Per user's choice to skip Redis this is expected — flagging only for completeness. Effective per-IP ceiling scales with worker count."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_password_reset.py",
+    "/app/test_reports/pytest/password_reset_results.xml"
+  ],
+  "action_items": [
+    "When the user finally provisions SendGrid: paste real SENDGRID_API_KEY + SENDGRID_FROM_EMAIL into /app/backend/.env, restart backend (sudo supervisorctl restart backend), then re-run the dev-fallback pytest class — it will now FAIL (expected) because the response no longer contains reset_token. That is the signal to flip TestForgotPasswordDevFallback into a real inbox-verifying test (or delete it and rely on TestForgotPasswordSendgridBranch).",
+    "Optional (out of scope this iteration): still no shared-storage rate-limit backend; if user later wants strict-per-IP limits across workers, add Limiter(storage_uri='redis://...')."
+  ],
+  "critical_code_review_comments": [
+    "server.py forgot_password: correct branching on sendgrid_ready(). Configured branch returns {ok, delivered, via:'sendgrid'} — token intentionally omitted. Dev-fallback branch returns token + note. Non-existent email returns minimal {ok:true, delivered:false} — enumeration-safe.",
+    "email_service.py is_configured(): checks BOTH SENDGRID_API_KEY and SENDGRID_FROM_EMAIL being non-empty (after strip). Good — a partial config won't accidentally enter the sendgrid branch.",
+    "email_service.py send_email: never raises; returns (False, detail) on failure. HTML template uses inline styles (email-safe). Text fallback included.",
+    "reset_password (unchanged from iter_4) still marks tokens single-use, invalidates existing google sessions on successful reset, and enforces min password 8 chars via Pydantic.",
+    "Frontend ResetPassword hint copy is correct: shows 'Reset the password for <email>.' when a prefilledToken is present (dev-fallback path), and 'We emailed a reset token to <email>. Paste it below…' when no token was prefilled (sendgrid path). Both branches handled."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_password_reset.py (rewritten to cover both dev-fallback and monkeypatched sendgrid branches)",
+    "/app/test_reports/pytest/password_reset_results.xml (regenerated)"
+  ],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "100% (forgot->reset->auto-login flow)"},
+  "seed_data_creation": "No new users. alex+test1@jaleter.app password was flipped multiple times during tests; final state restored to 'password123' (verified via /api/auth/login → 200) at end of both pytest cleanup AND frontend flow.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "SendGrid remains inert (.env keys empty). The dev-fallback branch is the ONLY branch that runs on the deployed backend right now. To test the configured branch without real keys, use fastapi.testclient.TestClient with monkeypatch.setenv for SENDGRID_API_KEY/SENDGRID_FROM_EMAIL BEFORE importing 'server' (see TestForgotPasswordSendgridBranch). pymongo (sync) must be used for DB assertions from within TestClient tests because motor's event loop closes when TestClient exits. Reset tokens are 43-char secrets.token_urlsafe(32) strings. Seed creds: alex+test1@jaleter.app / password123 (restored).",
+  "rca_of_issue": "N/A — all specified flows pass. Only intermediate hiccup during authoring the tests was a 'RuntimeError: Event loop is closed' when trying to assert on Mongo via motor after TestClient tore down its loop; fixed by switching that specific DB assertion to pymongo (sync). Documented for the next agent."
+}

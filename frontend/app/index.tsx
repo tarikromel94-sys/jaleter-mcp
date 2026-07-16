@@ -360,7 +360,11 @@ const ResetPassword = ({ back, email, prefilledToken, onDone }: any) => {
         <View style={s.miniLogo}><Ionicons name="key-outline" size={22} color={C.goldText} /></View>
         <Text style={s.eyebrow}>SET A NEW PASSWORD</Text>
         <Text style={s.onboardH1}>Almost there.</Text>
-        <Text style={s.onboardHint}>{email ? `Reset the password for ${email}.` : 'Paste your reset token and choose a new password.'}</Text>
+        <Text style={s.onboardHint}>
+          {prefilledToken
+            ? (email ? `Reset the password for ${email}.` : 'Paste your reset token and choose a new password.')
+            : (email ? `We emailed a reset token to ${email}. Paste it below along with your new password.` : 'Paste the token from your email and choose a new password.')}
+        </Text>
       </View>
       <View style={{ gap: 2 }}>
         <Text style={s.label}>Reset token</Text>

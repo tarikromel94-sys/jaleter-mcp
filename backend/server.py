@@ -19,6 +19,8 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
+from email_service import build_password_reset_email, is_configured as sendgrid_ready, send_email
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -279,17 +281,21 @@ async def emergent_session(payload: EmergentSessionRequest):
 @api_router.post('/auth/forgot-password')
 @limiter.limit('3/minute')
 async def forgot_password(payload: ForgotPasswordRequest, request: Request):
-    """Generates a reset token that expires in 30 minutes.
-    In production the token would be emailed. For this preview app it is returned in
-    the response (dev mode) so the client can proceed with reset. This does NOT reveal
-    whether the email exists — a token is always returned for existing accounts, and
-    a fake success is returned for non-existent ones (email enumeration protection).
+    """Generates a reset token that expires in 30 minutes and emails it via SendGrid.
+
+    If SendGrid is not yet configured (preview mode) the token is returned in the
+    response so the app remains testable. When SendGrid IS configured, the token
+    is only sent by email and the response contains no `reset_token`.
+
+    Email enumeration is avoided by returning the same response shape for both
+    existing and non-existent emails.
     """
     email = payload.email.lower()
     user = await db.users.find_one({'email': email, 'provider': 'password'}, {'_id': 0})
     if not user:
-        # Do not leak whether the email exists; pretend success without a token.
+        # Same response shape regardless — do not leak existence.
         return {'ok': True, 'delivered': False}
+
     token = secrets.token_urlsafe(32)
     await db.password_resets.insert_one({
         'token': token,
@@ -299,8 +305,24 @@ async def forgot_password(payload: ForgotPasswordRequest, request: Request):
         'used': False,
         'created_at': datetime.now(timezone.utc),
     })
-    logger.info('Password reset token generated for %s (dev-mode, would be emailed in prod)', email)
-    return {'ok': True, 'delivered': True, 'reset_token': token, 'note': 'Dev mode: token returned in response. Wire SendGrid to email it in production.'}
+
+    if sendgrid_ready():
+        subject, html_body, text_body = build_password_reset_email(user.get('name', ''), token)
+        sent, detail = send_email(email, subject, html_body, text_body)
+        logger.info('Password reset email %s for %s (%s)', 'sent' if sent else 'FAILED', email, detail)
+        return {'ok': True, 'delivered': sent, 'via': 'sendgrid'}
+
+    # Preview fallback: SendGrid not configured. Return the token so the UI
+    # flow still works. This branch MUST become unreachable once
+    # SENDGRID_API_KEY + SENDGRID_FROM_EMAIL are set in production.
+    logger.warning('SENDGRID not configured; returning reset token in response (dev only). Set SENDGRID_API_KEY+SENDGRID_FROM_EMAIL in /app/backend/.env to enable email delivery.')
+    return {
+        'ok': True,
+        'delivered': False,
+        'reset_token': token,
+        'via': 'dev-fallback',
+        'note': 'SendGrid not configured. Set SENDGRID_API_KEY and SENDGRID_FROM_EMAIL in backend/.env to email reset tokens.',
+    }
 
 
 @api_router.post('/auth/reset-password', response_model=AuthResponse)

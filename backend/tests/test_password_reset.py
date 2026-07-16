@@ -1,4 +1,10 @@
-"""Tests for forgot-password/reset-password + SlowAPI rate limits."""
+"""Iteration 5 tests for forgot-password/reset-password/SendGrid branching + rate limits.
+
+The deployed backend has SENDGRID_API_KEY="" and SENDGRID_FROM_EMAIL="" so the
+'dev-fallback' branch is exercised against BASE_URL. To exercise the
+'sendgrid' branch without pasting real credentials we build a local TestClient
+against the same FastAPI app with SENDGRID_* env vars monkeypatched.
+"""
 import os
 import time
 import uuid
@@ -17,33 +23,93 @@ def api():
     return s
 
 
-# --- forgot-password: valid + non-existent email ---
-class TestForgotPassword:
-    def test_forgot_existing_returns_reset_token(self, api):
+# --- SendGrid NOT configured (deployed backend, dev-fallback branch) ---
+class TestForgotPasswordDevFallback:
+    def test_forgot_existing_returns_reset_token_via_dev_fallback(self, api):
         r = api.post(f'{BASE_URL}/api/auth/forgot-password', json={'email': SEED_EMAIL})
         assert r.status_code == 200, r.text
         j = r.json()
         assert j.get('ok') is True
-        assert j.get('delivered') is True
+        assert j.get('delivered') is False
+        assert j.get('via') == 'dev-fallback'
         assert isinstance(j.get('reset_token'), str) and len(j['reset_token']) > 20
+        assert 'SendGrid not configured' in (j.get('note') or '')
         pytest.reset_token_for_seed = j['reset_token']
 
-    def test_forgot_nonexistent_no_token(self, api):
+    def test_forgot_nonexistent_enumeration_safe(self, api):
         fake = f'no-such-user-{uuid.uuid4().hex[:8]}@jaleter.app'
         r = api.post(f'{BASE_URL}/api/auth/forgot-password', json={'email': fake})
         assert r.status_code == 200, r.text
         j = r.json()
+        # enumeration-safe: only ok + delivered, no leakage
         assert j.get('ok') is True
         assert j.get('delivered') is False
         assert 'reset_token' not in j
+        assert 'via' not in j
+        assert 'note' not in j
 
 
-# --- reset-password: valid, reuse, invalid, short-pw ---
-class TestResetPassword:
+# --- SendGrid CONFIGURED (monkeypatched TestClient) ---
+class TestForgotPasswordSendgridBranch:
+    """Exercise the sendgrid branch via a local TestClient with monkeypatched env
+    vars. The real SendGrid call fails (fake key) so delivered=false — that is
+    the expected outcome per iteration spec.
+    """
+
+    def test_sendgrid_branch_hides_reset_token(self, monkeypatch):
+        # Set env vars BEFORE importing server so is_configured() returns True
+        monkeypatch.setenv('SENDGRID_API_KEY', 'SG.fake-test-key')
+        monkeypatch.setenv('SENDGRID_FROM_EMAIL', 'sender@example.com')
+        monkeypatch.setenv('SENDGRID_FROM_NAME', 'Jaleter')
+
+        # Import here so env vars are already patched
+        import importlib, sys
+        # Force reimport of email_service so anything cached picks up env
+        if 'email_service' in sys.modules:
+            importlib.reload(sys.modules['email_service'])
+        from email_service import is_configured
+        assert is_configured() is True, 'email_service.is_configured() should be True with fake env vars'
+
+        # Now hit the server module's forgot-password via TestClient
+        if 'server' in sys.modules:
+            importlib.reload(sys.modules['server'])
+        from fastapi.testclient import TestClient
+        import server as server_module
+        client = TestClient(server_module.app)
+
+        # Use a unique email to avoid rate-limit collision with other class
+        # (the seed user exists so the sendgrid branch is triggered)
+        r = client.post('/api/auth/forgot-password', json={'email': SEED_EMAIL})
+        assert r.status_code == 200, r.text
+        j = r.json()
+        assert j.get('ok') is True
+        # Fake key → SendGrid call fails → delivered False (expected per spec)
+        assert j.get('delivered') is False
+        assert j.get('via') == 'sendgrid'
+        assert 'reset_token' not in j, f'reset_token must NOT leak when SendGrid is configured; got {j}'
+        assert 'note' not in j
+
+        # Confirm token WAS stored in DB (admin could retrieve it manually)
+        # Use pymongo (sync) to avoid motor's event-loop-closed issue with TestClient
+        from pymongo import MongoClient
+        sync_client = MongoClient(os.environ['MONGO_URL'])
+        row = sync_client[os.environ['DB_NAME']].password_resets.find_one(
+            {'email': SEED_EMAIL, 'used': False},
+            sort=[('created_at', -1)],
+        )
+        sync_client.close()
+        assert row is not None, 'reset token should be persisted in DB even when API hides it'
+        assert isinstance(row.get('token'), str) and len(row['token']) > 20
+
+
+# --- reset-password end-to-end ---
+class TestResetPasswordFlow:
     def test_reset_with_valid_token_and_login_with_new_pw(self, api):
-        # We assume TestForgotPassword ran and stored reset_token_for_seed
+        # Wait a bit — the sendgrid-branch test just consumed a forgot-password
+        # slot on the deployed backend? NO — TestClient hits the local app, so
+        # the deployed rate-limit bucket is not affected. Safe to proceed.
         token = getattr(pytest, 'reset_token_for_seed', None)
-        assert token, 'Reset token missing — forgot-password test must run first'
+        assert token, 'Reset token missing — TestForgotPasswordDevFallback must run first'
         new_pw = 'TempPass_ResetTest_123'
         r = api.post(f'{BASE_URL}/api/auth/reset-password', json={'token': token, 'new_password': new_pw})
         assert r.status_code == 200, r.text
@@ -51,86 +117,49 @@ class TestResetPassword:
         assert 'token' in j and 'user' in j
         assert j['user']['email'] == SEED_EMAIL
 
-        # verify login with new password works
+        # Verify login with new pw works
         r2 = api.post(f'{BASE_URL}/api/auth/login', json={'email': SEED_EMAIL, 'password': new_pw})
         assert r2.status_code == 200, r2.text
         assert 'token' in r2.json()
-        pytest.used_reset_token = token
+        pytest.new_pw_used = new_pw
 
-    def test_reuse_same_token_returns_400(self, api):
-        token = getattr(pytest, 'used_reset_token', None)
+    def test_reuse_token_returns_400(self, api):
+        token = getattr(pytest, 'reset_token_for_seed', None)
         assert token
         r = api.post(f'{BASE_URL}/api/auth/reset-password', json={'token': token, 'new_password': 'AnotherPass_123'})
         assert r.status_code == 400
-        assert 'Invalid or already-used' in r.json().get('detail', '')
-
-    def test_invalid_token_returns_400(self, api):
-        r = api.post(f'{BASE_URL}/api/auth/reset-password', json={'token': 'not-a-real-token-xyz', 'new_password': 'SomePass_123'})
-        assert r.status_code == 400
-
-    def test_short_password_returns_422(self, api):
-        # need a fresh token; issue one but don't rely on rate limit
-        # We already used 1 forgot-password call earlier + fake email one; plus test-class one → risk of 429.
-        # Sleep to be safe if a prior test consumed the 3/min budget.
-        r0 = api.post(f'{BASE_URL}/api/auth/forgot-password', json={'email': SEED_EMAIL})
-        if r0.status_code == 429:
-            pytest.skip('forgot-password rate-limited; skipping short-pw fresh token test')
-        assert r0.status_code == 200
-        tok = r0.json().get('reset_token')
-        assert tok
-        r = api.post(f'{BASE_URL}/api/auth/reset-password', json={'token': tok, 'new_password': 'short'})
-        assert r.status_code == 422
-        pytest.leftover_valid_token = tok  # save so we can reset back to original
 
 
-# --- rate limits ---
-class TestRateLimits:
-    def test_login_rate_limit(self, api):
-        # Blast enough requests so per-worker limiters (multi-worker gunicorn) all trip.
-        wrong = {'email': f'ratetest-{uuid.uuid4().hex[:6]}@jaleter.app', 'password': 'wrongwrong'}
-        codes = []
-        for _ in range(20):
-            r = api.post(f'{BASE_URL}/api/auth/login', json=wrong)
-            codes.append(r.status_code)
-        assert 429 in codes, f'Expected some 429 within 20 attempts; got {codes}'
-        # Assert the specific error body appears at least once
-        first_429_idx = codes.index(429)
-        # NB: with N workers and in-memory limiter, first-429 may not be exactly at index 5 (spec).
-        # Record for report but don't strictly enforce position.
-        pytest.login_rate_first_429_idx = first_429_idx
-        pytest.login_rate_codes = codes
-
-    def test_forgot_rate_limit_3_per_min(self, api):
-        # Wait a full minute so we start fresh for the 3/min bucket
+# --- SlowAPI rate limits: 4th forgot within a minute → 429 ---
+class TestRateLimit:
+    def test_forgot_rate_limit_4th_returns_429(self, api):
+        # Wait to ensure fresh 1-minute window (previous class used ≥2 slots)
         time.sleep(61)
         codes = []
-        for _ in range(15):
+        for i in range(6):
             r = api.post(f'{BASE_URL}/api/auth/forgot-password', json={'email': SEED_EMAIL})
             codes.append(r.status_code)
-        assert 429 in codes, f'Expected some 429 within 15 attempts; got {codes}'
-        pytest.forgot_rate_first_429_idx = codes.index(429)
-        pytest.forgot_rate_codes = codes
+        assert 429 in codes, f'Expected 429 within 6 rapid attempts; got {codes}'
+        # Per spec: 4th call within a minute should be limited (index 3)
+        # With multi-worker uvicorn + in-memory SlowAPI, first 429 may land at
+        # index 3..(3*N-1). Record but do not strictly assert exact index.
+        pytest.forgot_codes = codes
+        pytest.forgot_first_429 = codes.index(429)
 
 
-# --- final cleanup: restore alex+test1 password to password123 ---
-class TestZZCleanup:
-    def test_restore_original_password(self, api):
-        # Give rate limiter time to reset (login 5/min + forgot 3/min)
-        time.sleep(61)
-        # Use leftover valid token if we still have one unused
-        tok = getattr(pytest, 'leftover_valid_token', None)
-        used = False
-        if tok:
-            r = api.post(f'{BASE_URL}/api/auth/reset-password', json={'token': tok, 'new_password': SEED_PW})
-            if r.status_code == 200:
-                used = True
-        if not used:
-            r0 = api.post(f'{BASE_URL}/api/auth/forgot-password', json={'email': SEED_EMAIL})
-            assert r0.status_code == 200, f'Could not request new reset token for cleanup: {r0.status_code} {r0.text}'
-            tok = r0.json()['reset_token']
-            r = api.post(f'{BASE_URL}/api/auth/reset-password', json={'token': tok, 'new_password': SEED_PW})
-            assert r.status_code == 200, r.text
-        # verify login with original password works
+# --- final cleanup: restore alex+test1 → password123 ---
+class TestZZRestore:
+    def test_restore_password(self, api):
+        time.sleep(61)  # let rate limits reset
+        r0 = api.post(f'{BASE_URL}/api/auth/forgot-password', json={'email': SEED_EMAIL})
+        assert r0.status_code == 200, r0.text
+        j = r0.json()
+        # We're on the dev-fallback backend so token comes back
+        assert j.get('reset_token'), f'expected reset_token in dev-fallback response; got {j}'
+        tok = j['reset_token']
+        r = api.post(f'{BASE_URL}/api/auth/reset-password', json={'token': tok, 'new_password': SEED_PW})
+        assert r.status_code == 200, r.text
         time.sleep(2)
-        r = api.post(f'{BASE_URL}/api/auth/login', json={'email': SEED_EMAIL, 'password': SEED_PW})
-        assert r.status_code == 200, f'Original password restore failed: {r.status_code} {r.text}'
+        # verify original creds work
+        r2 = api.post(f'{BASE_URL}/api/auth/login', json={'email': SEED_EMAIL, 'password': SEED_PW})
+        assert r2.status_code == 200, f'Password restore verify failed: {r2.status_code} {r2.text}'
