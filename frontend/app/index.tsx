@@ -139,25 +139,44 @@ const Sparkle = ({ size = 20, color = C.goldGlow, style }: any) => (
 
 /* ---------------- Welcome ---------------- */
 const Welcome = ({ onStart, onLogin }: any) => (
-  <View style={s.welcome}>
-    <View style={s.welcomeContent}>
-      <View style={s.brandMark}>
-        <Sparkle size={22} style={{ position: 'absolute', right: 3, top: 0 }} />
-        <Sparkle size={10} style={{ position: 'absolute', left: 8, top: 14 }} />
+  <View style={s.welcome} testID="welcome-screen">
+    {/* Radial subtle gold glow behind the wordmark (approximated with a soft ellipse). */}
+    <View style={s.welcomeGlow} pointerEvents="none" />
+    <View style={s.welcomeCenter}>
+      {/* Sparkles above the wordmark */}
+      <View style={s.sparkleCluster}>
+        <Sparkle size={20} color="#f0d090" style={{ position: 'absolute', left: 6, top: 0 }} />
+        <Sparkle size={11} color="#e6c07b" style={{ position: 'absolute', right: 8, top: 12 }} />
       </View>
-      <Text style={s.welcomeH1}>Jaleter</Text>
-      <Text style={s.welcomeSubtitle}>SMART BUDGETING.{'\n'}WEALTHY LIVING.</Text>
-    </View>
-    {/* gold waves */}
-    <View style={s.goldWavesWrap} pointerEvents="none">
-      {[65,80,95,112,132].map((top, i) => (
-        <View key={i} style={[s.goldWave, { top, borderColor: i===3 ? '#f0bd67' : '#ad7d3d' }]} />
-      ))}
-    </View>
-    <View style={s.welcomeActions}>
-      <GoldButton label="Get Started" onPress={onStart} testID="welcome-get-started" />
-      <Pressable onPress={onLogin} testID="welcome-login" style={{ marginTop: 26 }}>
-        <Text style={s.loginLink}>Already have an account? <Text style={{ color: '#d9c5a5' }}>Log in</Text></Text>
+      <Text style={s.welcomeH1} testID="welcome-wordmark">Jaleter</Text>
+      <View style={{ height: 22 }} />
+      <Text style={s.welcomeSubtitle}>SMART BUDGETING.</Text>
+      <Text style={s.welcomeSubtitle}>WEALTHY LIVING.</Text>
+      {/* Elegant gold curve stack */}
+      <View style={s.curveStack} pointerEvents="none">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <View
+            key={i}
+            style={[
+              s.goldArc,
+              {
+                marginTop: i === 0 ? 24 : 8,
+                width: 320 - i * 18,
+                borderColor: i === 2 ? '#f2c779' : i === 1 || i === 3 ? '#c99855' : '#8f6a34',
+                opacity: 0.55 + i * 0.05,
+              },
+            ]}
+          />
+        ))}
+      </View>
+      <View style={{ height: 34 }} />
+      <Pressable onPress={onStart} testID="welcome-get-started" style={({ pressed }) => [s.goldPill, pressed && { opacity: 0.9 }]}>
+        <LinearGradient colors={['#f3d18b', '#e2b06a', '#c78f42']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={s.goldPillFill}>
+          <Text style={s.goldPillText}>Get Started</Text>
+        </LinearGradient>
+      </Pressable>
+      <Pressable onPress={onLogin} testID="welcome-login" style={{ marginTop: 22 }}>
+        <Text style={s.loginLink}>Already have an account? <Text style={{ color: '#f0d090', fontWeight: '600' }}>Log in</Text></Text>
       </Pressable>
     </View>
   </View>
@@ -1306,14 +1325,17 @@ const s = StyleSheet.create({
   loginLink: { color: C.muted4, textAlign: 'center', fontSize: 12 },
   circleBtn: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: C.creamAlt2, shadowColor: '#4d3824', shadowOpacity: 0.07, shadowRadius: 8 },
   /* Welcome */
-  welcome: { flex: 1, backgroundColor: '#0b0b0a', alignItems: 'center', justifyContent: 'flex-start' },
-  welcomeContent: { alignItems: 'center', marginTop: '30%' },
-  brandMark: { height: 30, width: 40, position: 'relative', marginBottom: 8 },
-  welcomeH1: { color: '#f3d18f', fontSize: 62, fontFamily: F.serif, fontWeight: '500', letterSpacing: -1, paddingHorizontal: 20, marginBottom: 20 },
-  welcomeSubtitle: { color: '#c5c0b9', fontSize: 12, letterSpacing: 2.2, textAlign: 'center', lineHeight: 22 },
-  goldWavesWrap: { position: 'absolute', left: 0, right: 0, top: '52%', height: 200, overflow: 'hidden' },
-  goldWave: { position: 'absolute', left: -100, right: -100, height: 90, borderTopWidth: 1, borderRadius: 999 },
-  welcomeActions: { position: 'absolute', left: 40, right: 40, bottom: 60 },
+  welcome: { flex: 1, backgroundColor: '#080807', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  welcomeGlow: { position: 'absolute', top: '18%', width: 480, height: 480, borderRadius: 240, backgroundColor: '#8a6222', opacity: 0.28 },
+  welcomeCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, width: '100%' },
+  sparkleCluster: { width: 60, height: 30, position: 'relative', marginBottom: 4 },
+  welcomeH1: { color: '#f3d18b', fontSize: 82, fontFamily: F.serifBold, letterSpacing: -1.5, lineHeight: 92 },
+  welcomeSubtitle: { color: '#c9c3ba', fontSize: 11, letterSpacing: 3, textAlign: 'center', marginTop: 2 },
+  curveStack: { alignItems: 'center', width: '100%' },
+  goldArc: { height: 34, borderTopWidth: 1, borderRadius: 320, alignSelf: 'center' },
+  goldPill: { width: '82%', borderRadius: 30, overflow: 'hidden', shadowColor: '#e2b06a', shadowOpacity: 0.35, shadowRadius: 18, shadowOffset: { width: 0, height: 6 } },
+  goldPillFill: { minHeight: 56, alignItems: 'center', justifyContent: 'center' },
+  goldPillText: { color: '#1a1305', fontSize: 16, fontWeight: '700', letterSpacing: 0.3 },
   /* Onboarding */
   onboardHeading: { alignItems: 'center', marginTop: 30, marginBottom: 24 },
   miniLogo: { width: 47, height: 47, borderRadius: 15, backgroundColor: C.ink3, alignItems: 'center', justifyContent: 'center', marginBottom: 15 },
