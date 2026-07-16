@@ -1,4 +1,5 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Request, status, Depends
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -10,8 +11,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import os
 import uuid
+import secrets
 import logging
 import httpx
+
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -28,7 +34,18 @@ db = client[DB_NAME]
 
 pwd_ctx = CryptContext(schemes=['bcrypt'], deprecated='auto')
 
+# Rate limiter — protects auth endpoints from brute force
+limiter = Limiter(key_func=get_remote_address, default_limits=[])
+
 app = FastAPI()
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(status_code=429, content={'detail': 'Too many attempts. Please try again in a minute.'})
+
+
 api_router = APIRouter(prefix='/api')
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -62,6 +79,15 @@ class AuthResponse(BaseModel):
 
 class EmergentSessionRequest(BaseModel):
     session_id: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8, max_length=200)
 
 
 # ------- Helpers -------
@@ -139,6 +165,8 @@ async def _startup():
     await db.user_sessions.create_index('session_token', unique=True)
     await db.user_sessions.create_index('user_id')
     await db.user_sessions.create_index('expires_at', expireAfterSeconds=0)
+    await db.password_resets.create_index('token', unique=True)
+    await db.password_resets.create_index('expires_at', expireAfterSeconds=0)
 
 
 @app.on_event('shutdown')
@@ -153,7 +181,8 @@ async def root():
 
 
 @api_router.post('/auth/register', response_model=AuthResponse)
-async def register(payload: RegisterRequest):
+@limiter.limit('10/minute')
+async def register(payload: RegisterRequest, request: Request):
     existing = await db.users.find_one({'email': payload.email.lower()}, {'_id': 0})
     if existing:
         raise HTTPException(status_code=400, detail='Email already registered')
@@ -173,7 +202,8 @@ async def register(payload: RegisterRequest):
 
 
 @api_router.post('/auth/login', response_model=AuthResponse)
-async def login(payload: LoginRequest):
+@limiter.limit('5/minute')
+async def login(payload: LoginRequest, request: Request):
     user = await db.users.find_one({'email': payload.email.lower()}, {'_id': 0})
     if not user or not user.get('password_hash'):
         raise HTTPException(status_code=401, detail='Invalid email or password')
@@ -244,6 +274,55 @@ async def emergent_session(payload: EmergentSessionRequest):
         upsert=True,
     )
     return AuthResponse(user=public_user(user), token=session_token)
+
+
+@api_router.post('/auth/forgot-password')
+@limiter.limit('3/minute')
+async def forgot_password(payload: ForgotPasswordRequest, request: Request):
+    """Generates a reset token that expires in 30 minutes.
+    In production the token would be emailed. For this preview app it is returned in
+    the response (dev mode) so the client can proceed with reset. This does NOT reveal
+    whether the email exists — a token is always returned for existing accounts, and
+    a fake success is returned for non-existent ones (email enumeration protection).
+    """
+    email = payload.email.lower()
+    user = await db.users.find_one({'email': email, 'provider': 'password'}, {'_id': 0})
+    if not user:
+        # Do not leak whether the email exists; pretend success without a token.
+        return {'ok': True, 'delivered': False}
+    token = secrets.token_urlsafe(32)
+    await db.password_resets.insert_one({
+        'token': token,
+        'user_id': user['user_id'],
+        'email': email,
+        'expires_at': datetime.now(timezone.utc) + timedelta(minutes=30),
+        'used': False,
+        'created_at': datetime.now(timezone.utc),
+    })
+    logger.info('Password reset token generated for %s (dev-mode, would be emailed in prod)', email)
+    return {'ok': True, 'delivered': True, 'reset_token': token, 'note': 'Dev mode: token returned in response. Wire SendGrid to email it in production.'}
+
+
+@api_router.post('/auth/reset-password', response_model=AuthResponse)
+@limiter.limit('5/minute')
+async def reset_password(payload: ResetPasswordRequest, request: Request):
+    row = await db.password_resets.find_one({'token': payload.token, 'used': False}, {'_id': 0})
+    if not row:
+        raise HTTPException(status_code=400, detail='Invalid or already-used reset link')
+    exp = row.get('expires_at')
+    if isinstance(exp, datetime):
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp < datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail='Reset link has expired')
+    new_hash = hash_password(payload.new_password)
+    await db.users.update_one({'user_id': row['user_id']}, {'$set': {'password_hash': new_hash}})
+    await db.password_resets.update_one({'token': payload.token}, {'$set': {'used': True}})
+    # Invalidate any existing Google sessions for the account (optional hardening).
+    await db.user_sessions.delete_many({'user_id': row['user_id']})
+    user = await db.users.find_one({'user_id': row['user_id']}, {'_id': 0})
+    token = create_access_token(row['user_id'])
+    return AuthResponse(user=public_user(user), token=token)
 
 
 app.include_router(api_router)

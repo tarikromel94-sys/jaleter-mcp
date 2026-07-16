@@ -255,7 +255,7 @@ const Signup = ({ back, onCreated, goLogin }: any) => {
 };
 
 /* ---------------- Login screen ---------------- */
-const Login = ({ back, goSignup }: any) => {
+const Login = ({ back, goSignup, goForgot }: any) => {
   const { login, loginWithGoogle } = useAuth();
   const [form, setForm] = useState({ email: '', password: '' });
   const [error, setError] = useState('');
@@ -285,6 +285,9 @@ const Login = ({ back, goSignup }: any) => {
         <TextInput testID="login-email" style={s.input} value={form.email} onChangeText={t => setForm({ ...form, email: t })} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" />
         <Text style={s.label}>Password</Text>
         <TextInput testID="login-password" style={s.input} value={form.password} onChangeText={t => setForm({ ...form, password: t })} placeholder="Your password" secureTextEntry />
+        <Pressable testID="login-forgot" onPress={goForgot} style={{ alignSelf: 'flex-end', marginTop: 8 }}>
+          <Text style={{ fontSize: 11, color: C.goldEyebrow, fontWeight: '600' }}>Forgot password?</Text>
+        </Pressable>
         {error ? <Text testID="login-error" style={s.formError}>{error}</Text> : null}
         <View style={{ marginTop: 14 }}><GoldButton label={busy ? 'Signing in...' : 'Log in'} onPress={onSubmit} disabled={!valid || busy} testID="login-submit" /></View>
         <View style={s.orDivider}><View style={s.orLine} /><Text style={s.orText}>or</Text><View style={s.orLine} /></View>
@@ -295,6 +298,82 @@ const Login = ({ back, goSignup }: any) => {
         <Pressable testID="login-to-signup" onPress={goSignup} style={{ alignItems: 'center', marginTop: 12 }}>
           <Text style={s.loginLink}>No account yet? <Text style={{ color: C.goldEyebrow }}>Sign up</Text></Text>
         </Pressable>
+      </View>
+    </ScrollView>
+  );
+};
+
+/* ---------------- Forgot password ---------------- */
+const ForgotPassword = ({ back, onSent }: any) => {
+  const { requestPasswordReset } = useAuth();
+  const [email, setEmail] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const valid = /\S+@\S+/.test(email);
+  const onSubmit = async () => {
+    setError(''); setBusy(true);
+    try {
+      const res = await requestPasswordReset(email.trim().toLowerCase());
+      // Dev mode: backend returns reset_token in response. Hand it to the next screen.
+      onSent(email.trim().toLowerCase(), res.reset_token || null);
+    } catch (e: any) { setError(e?.message || 'Could not send reset link.'); }
+    finally { setBusy(false); }
+  };
+  return (
+    <ScrollView style={s.lightScreen} contentContainerStyle={{ padding: 23, paddingTop: 54, paddingBottom: 28 }} keyboardShouldPersistTaps="handled">
+      <CircleBtn testID="forgot-back" onPress={back}><Ionicons name="arrow-back" size={20} color={C.ink3} /></CircleBtn>
+      <View style={s.onboardHeading}>
+        <View style={s.miniLogo}><Ionicons name="lock-open-outline" size={22} color={C.goldText} /></View>
+        <Text style={s.eyebrow}>PASSWORD RESET</Text>
+        <Text style={s.onboardH1}>Forgot your{'\n'}password?</Text>
+        <Text style={s.onboardHint}>Enter your Jaleter email and we&apos;ll send you a reset link.</Text>
+      </View>
+      <View style={{ gap: 2 }}>
+        <Text style={s.label}>Email</Text>
+        <TextInput testID="forgot-email" style={s.input} value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" />
+        {error ? <Text testID="forgot-error" style={s.formError}>{error}</Text> : null}
+        <View style={{ marginTop: 14 }}><GoldButton label={busy ? 'Sending...' : 'Send reset link'} onPress={onSubmit} disabled={!valid || busy} testID="forgot-submit" /></View>
+      </View>
+    </ScrollView>
+  );
+};
+
+/* ---------------- Reset password ---------------- */
+const ResetPassword = ({ back, email, prefilledToken, onDone }: any) => {
+  const { resetPassword } = useAuth();
+  const [form, setForm] = useState({ token: prefilledToken || '', password: '', confirm: '' });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const valid = form.token.length > 0 && form.password.length >= 8 && form.password === form.confirm;
+  const onSubmit = async () => {
+    setError(''); setBusy(true);
+    try {
+      await resetPassword(form.token.trim(), form.password);
+      onDone();
+    } catch (e: any) { setError(e?.message || 'Reset failed.'); }
+    finally { setBusy(false); }
+  };
+  return (
+    <ScrollView style={s.lightScreen} contentContainerStyle={{ padding: 23, paddingTop: 54, paddingBottom: 28 }} keyboardShouldPersistTaps="handled">
+      <CircleBtn testID="reset-back" onPress={back}><Ionicons name="arrow-back" size={20} color={C.ink3} /></CircleBtn>
+      <View style={s.onboardHeading}>
+        <View style={s.miniLogo}><Ionicons name="key-outline" size={22} color={C.goldText} /></View>
+        <Text style={s.eyebrow}>SET A NEW PASSWORD</Text>
+        <Text style={s.onboardH1}>Almost there.</Text>
+        <Text style={s.onboardHint}>{email ? `Reset the password for ${email}.` : 'Paste your reset token and choose a new password.'}</Text>
+      </View>
+      <View style={{ gap: 2 }}>
+        <Text style={s.label}>Reset token</Text>
+        <TextInput testID="reset-token" style={s.input} value={form.token} onChangeText={t => setForm({ ...form, token: t })} autoCapitalize="none" placeholder="Paste the reset token from the email" />
+        <Text style={s.label}>New password</Text>
+        <TextInput testID="reset-password" style={s.input} value={form.password} onChangeText={t => setForm({ ...form, password: t })} placeholder="At least 8 characters" secureTextEntry />
+        <Text style={s.label}>Confirm new password</Text>
+        <TextInput testID="reset-confirm" style={s.input} value={form.confirm} onChangeText={t => setForm({ ...form, confirm: t })} placeholder="Type it again" secureTextEntry />
+        {error ? <Text testID="reset-error" style={s.formError}>{error}</Text> : null}
+        {form.password.length > 0 && form.confirm.length > 0 && form.password !== form.confirm ? (
+          <Text style={s.formError}>Passwords don&apos;t match.</Text>
+        ) : null}
+        <View style={{ marginTop: 14 }}><GoldButton label={busy ? 'Resetting...' : 'Reset password'} onPress={onSubmit} disabled={!valid || busy} testID="reset-submit" /></View>
       </View>
     </ScrollView>
   );
@@ -896,7 +975,8 @@ export default function App() {
 function MainApp() {
   const auth = useAuth();
   const [hydrated, setHydrated] = useState(false);
-  const [stage, setStage] = useState<'welcome'|'onboarding'|'signup'|'login'|'connect'|'paywall'|'app'>('welcome');
+  const [stage, setStage] = useState<'welcome'|'onboarding'|'signup'|'login'|'forgot'|'reset'|'connect'|'paywall'|'app'>('welcome');
+  const [resetInfo, setResetInfo] = useState<{ email: string; token: string | null }>({ email: '', token: null });
   const [experience, setExperience] = useState('Both');
   const [appearance, setAppearance] = useState('Light');
   const [active, setActive] = useState('home');
@@ -961,7 +1041,9 @@ function MainApp() {
       {!auth.user && stage === 'welcome' && <Welcome onStart={() => setStage('onboarding')} onLogin={() => setStage('login')} />}
       {!auth.user && stage === 'onboarding' && <Onboarding experience={experience} setExperience={setExperience} onContinue={() => setStage('signup')} back={() => setStage('welcome')} />}
       {!auth.user && stage === 'signup' && <Signup back={() => setStage('onboarding')} onCreated={() => setStage('connect')} goLogin={() => setStage('login')} />}
-      {!auth.user && stage === 'login' && <Login back={() => setStage('welcome')} goSignup={() => setStage('signup')} />}
+      {!auth.user && stage === 'login' && <Login back={() => setStage('welcome')} goSignup={() => setStage('signup')} goForgot={() => setStage('forgot')} />}
+      {!auth.user && stage === 'forgot' && <ForgotPassword back={() => setStage('login')} onSent={(email: string, token: string | null) => { setResetInfo({ email, token }); setStage('reset'); }} />}
+      {!auth.user && stage === 'reset' && <ResetPassword back={() => setStage('login')} email={resetInfo.email} prefilledToken={resetInfo.token} onDone={() => { setResetInfo({ email: '', token: null }); setStage('app'); }} />}
       {auth.user && stage === 'connect' && <FirstConnect onConnect={() => { setLinkedAccounts([{ id: 'chase-checking', name: 'Everyday Checking' }]); setStage('paywall'); }} onSkip={() => setStage('paywall')} />}
       {auth.user && stage === 'paywall' && <Paywall onContinue={() => setStage('app')} />}
       {auth.user && stage === 'app' && (

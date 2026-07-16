@@ -1,0 +1,42 @@
+{
+  "summary": "Forgot-password + reset-password + SlowAPI rate limits tested end-to-end. Backend: 9/9 pytest passed (forgot returns reset_token for existing email, delivered:false with NO reset_token for non-existent email, reset succeeds and enables login with new password, reused token → 400, invalid token → 400, short password → 422, login and forgot rate limits both trigger 429 with the expected 'Too many attempts. Please try again in a minute.' body). Frontend (390x844): all 7 UI flows passed — login-forgot navigates to ForgotPassword; forgot-email/forgot-submit/forgot-back testIDs present and working; submitting existing email navigates to ResetPassword with reset-token prefilled (len≈43); mismatched confirm shows \"Passwords don't match.\" and reset-submit is disabled (opacity 0.45); matching passwords reset + auto-login lands on Home dashboard; forgot-back returns to Login. IMPORTANT observation on rate limit precision: with SlowAPI's default in-memory storage across multiple uvicorn workers, the FIRST 429 does not always appear on the exact 5th/6th login attempt (my run: first 429 at index 6 out of 15). The limit still triggers well within a minute for a single IP, but the effective throughput can be ~5*N/min where N = worker count. Not a functional break, but worth flagging. Credentials restored: alex+test1@jaleter.app is back to password123 (verified via /api/auth/login → 200) after both pytest cleanup and post-frontend restoration.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/login", "issue": "SlowAPI uses in-memory storage per worker; with multiple uvicorn workers the effective per-IP limit is ~5*N/min instead of 5/min. First 429 may not land exactly on the 5th/6th attempt. Consider adding storage_uri='memory://' explicitly OR shared Redis backend if strict-per-IP is required."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_password_reset.py",
+    "/app/test_reports/pytest/password_reset_results.xml"
+  ],
+  "action_items": [
+    "Optional: for stricter per-IP rate limits in multi-worker deployments, configure SlowAPI with a shared storage backend (redis://...) via Limiter(storage_uri=...). Current behavior still blocks brute-force in practice — no urgent fix required.",
+    "Before shipping to production: remove the reset_token field from the /api/auth/forgot-password response body (already documented as dev-mode) and wire SendGrid or an SMTP provider to deliver the token via email.",
+    "Consider carrying over the low-contrast Settings dark-mode issue from iteration_3 (still unaddressed, but cosmetic and out of this iteration's scope)."
+  ],
+  "critical_code_review_comments": [
+    "server.py: forgot-password correctly protects against email enumeration — non-existent email returns {ok:true, delivered:false} with NO reset_token. Existing-account response includes the token only because we're in dev mode; documented in the 'note' field.",
+    "server.py: reset-password properly marks tokens single-use via {'used': False} filter + {'$set': {'used': True}}. Reuse returns 400 with 'Invalid or already-used reset link' as required.",
+    "server.py: password_resets collection has TTL index on expires_at (expireAfterSeconds=0) — expired tokens are auto-purged by Mongo.",
+    "server.py: reset-password ALSO invalidates all existing Google sessions for the user (delete_many on user_sessions.user_id) — nice hardening for account takeover recovery.",
+    "AuthContext.tsx: requestPasswordReset and resetPassword wrapped correctly with error propagation via callApi's thrown Error(detail). Token from response is passed to ResetPassword screen via onSent — matches dev-mode flow.",
+    "index.tsx ResetPassword screen: valid gate requires token.length>0 AND password.length>=8 AND password===confirm. Correctly disables GoldButton and shows mismatch message inline."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_password_reset.py (new)",
+    "/app/test_reports/pytest/password_reset_results.xml (regenerated)"
+  ],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "100% (7/7 forgot/reset flows)"},
+  "seed_data_creation": "No new seed rows created; used existing alex+test1@jaleter.app. Password was flipped multiple times during tests and RESTORED to 'password123' at the end (verified via /api/auth/login → 200).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Forgot/reset endpoints stable. Reset tokens are 43 chars (secrets.token_urlsafe(32)). Rate limits: login 5/min, forgot 3/min, reset 5/min — but effective ceiling scales with worker count due to in-memory limiter storage. Seed creds: alex+test1@jaleter.app / password123 (restored). If your next test suite hammers login or forgot repeatedly, expect intermittent 429s during the first minute.",
+  "rca_of_issue": "N/A — all requested flows pass. The only observation worth flagging is the multi-worker rate-limit imprecision (see backend_issues.minor)."
+}

@@ -23,6 +23,8 @@ type AuthState = {
   login: (email: string, password: string) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
+  requestPasswordReset: (email: string) => Promise<{ delivered: boolean; reset_token?: string }>;
+  resetPassword: (token: string, newPassword: string) => Promise<void>;
 };
 
 const Ctx = createContext<AuthState | undefined>(undefined);
@@ -137,7 +139,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, [token]);
 
-  return <Ctx.Provider value={{ loading, user, token, register, login, loginWithGoogle, logout }}>{children}</Ctx.Provider>;
+  const requestPasswordReset = useCallback(async (email: string) => {
+    const data = await callApi('/api/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+    return { delivered: !!data?.delivered, reset_token: data?.reset_token };
+  }, []);
+
+  const resetPassword = useCallback(async (resetToken: string, newPassword: string) => {
+    const data = await callApi('/api/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token: resetToken, new_password: newPassword }),
+    });
+    await persist(data.token, data.user);
+  }, [persist]);
+
+  return <Ctx.Provider value={{ loading, user, token, register, login, loginWithGoogle, logout, requestPasswordReset, resetPassword }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth(): AuthState {
