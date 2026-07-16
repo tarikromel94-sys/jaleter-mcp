@@ -1,10 +1,37 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, createContext, useContext } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, StatusBar as RNStatusBar, Platform } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { C, F } from '@/src/jaleterTheme';
+import { storage } from '@/src/utils/storage';
+import { C, D, F } from '@/src/jaleterTheme';
 import { dailyQuote, MONEY, EXACT, QuoteType } from '@/src/quoteLibrary';
+
+const STORAGE_KEY = 'jaleter-state-v1';
+
+// Dark theme context
+const ThemeCtx = createContext<{ dark: boolean }>({ dark: false });
+const useDark = () => useContext(ThemeCtx).dark;
+
+// Themed style helper: overlays dark palette on light styles when in dark mode.
+const useThemed = () => {
+  const dark = useDark();
+  return {
+    dark,
+    pageBg: dark ? { backgroundColor: D.bg } : null,
+    cardBg: dark ? { backgroundColor: D.surface, borderColor: D.border } : null,
+    darkCard: dark ? { backgroundColor: D.surfaceAlt, borderColor: D.border } : null,
+    textInk: dark ? { color: D.text } : null,
+    textMuted: dark ? { color: D.textMuted } : null,
+    textSubtle: dark ? { color: D.textSubtle } : null,
+    inputBg: dark ? { backgroundColor: D.surfaceAlt, borderColor: D.border, color: D.text } : null,
+    circleBg: dark ? { backgroundColor: D.surface } : null,
+    pillBg: dark ? { backgroundColor: '#242220', borderColor: D.border } : null,
+    pillSelectedBg: dark ? { backgroundColor: D.surfaceAlt } : null,
+    dividerBg: dark ? { backgroundColor: D.border } : null,
+    dividerBorder: dark ? { borderColor: D.border } : null,
+  };
+};
 
 const MONTHS = ['July', 'Aug', 'Sep'];
 
@@ -242,16 +269,16 @@ const Paywall = ({ onContinue }: any) => (
 );
 
 /* ---------------- Home ---------------- */
-const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, navigate }: any) => {
+const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, navigate, isDark }: any) => {
   const q = dailyQuote(experience as QuoteType, new Date());
   const projected = Math.round(netWorth * Math.pow(1.08, 33) + 1250 * 12 * ((Math.pow(1.08, 33) - 1) / 0.08));
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
   return (
-    <ScrollView style={s.page} contentContainerStyle={{ paddingBottom: 130 }}>
+    <ScrollView style={[s.page, isDark && { backgroundColor: D.bg }]} contentContainerStyle={{ paddingBottom: 130 }}>
       <View style={s.homeGreeting}>
         <View style={{ flex: 1 }}>
           <Text style={s.homeDate}>{today}</Text>
-          <Text style={s.homeName}>Good evening, {name}.</Text>
+          <Text style={[s.homeName, isDark && { color: D.text }]}>Good evening, {name}.</Text>
         </View>
         <CircleBtn onPress={() => navigate('settings')} testID="home-bell"><Ionicons name="notifications-outline" size={18} color={C.ink3} /></CircleBtn>
       </View>
@@ -475,6 +502,12 @@ const NetWorthScreen = ({ assets, liabilities }: any) => {
           <Ionicons name="trending-up" size={13} color="#7fac8d" />
           <Text style={{ color: '#7fac8d', fontSize: 10 }}>+4.8% this {period.toLowerCase()}</Text>
         </View>
+        {/* Faux ascending line chart (no react-native-svg installed) */}
+        <View style={s.nwChart}>
+          {[62, 55, 48, 42, 33, 24, 15, 9].map((top, i, arr) => (
+            <View key={i} style={[s.nwChartDot, { left: `${(i / (arr.length - 1)) * 100}%`, top }]} />
+          ))}
+        </View>
       </View>
       <PeriodPills values={['Month','Quarter','Year']} value={period} onChange={setPeriod} testID="nw-period" />
       <View style={s.cashProtection}>
@@ -600,33 +633,57 @@ const MoreScreen = ({ navigate, linkedCount }: any) => (
     </View>
   </ScrollView>
 );
-const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, alerts, setAlerts, onLogout, back }: any) => (
-  <ScrollView style={s.page} contentContainerStyle={{ paddingBottom: 130 }}>
-    <PageHeader title="Settings" subtitle="Make Jaleter work your way." back={back} action={<View style={s.avatar}><Text style={{ color: C.goldText, fontSize: 11, fontWeight: '700' }}>AW</Text></View>} />
-    <View style={s.settingsSection}>
-      <Text style={s.settingsH3}>Your Experience</Text>
-      <Text style={s.settingsSub}>100 approved messages. No generated scripture.</Text>
-      <PeriodPills values={['Faith','Both','Motivation']} value={experience} onChange={setExperience} testID="settings-exp" />
-    </View>
-    <View style={s.settingsSection}>
-      <Text style={s.settingsH3}>Appearance</Text>
-      <Text style={s.settingsSub}>Choose a look or follow your device.</Text>
-      <PeriodPills values={['Light','System','Dark']} value={appearance} onChange={setAppearance} testID="settings-appear" />
-    </View>
-    <View style={s.settingsSection}>
-      <Text style={s.settingsH3}>Budget Alerts</Text>
-      <Text style={s.settingsSub}>Stay aware without feeling overwhelmed.</Text>
-      <Pressable onPress={() => setAlerts({ ...alerts, enabled: !alerts.enabled })} style={s.settingToggleRow} testID="settings-alerts">
-        <View style={{ flex: 1 }}><Text style={{ fontSize: 11, fontWeight: '700' }}>Enable alerts</Text><Text style={{ fontSize: 9, color: C.muted3 }}>Budget notifications</Text></View>
-        <View style={[s.toggle, alerts.enabled && s.toggleOn]}><View style={[s.toggleKnob, alerts.enabled && { transform: [{ translateX: 14 }] }]} /></View>
+const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, alerts, setAlerts, onLogout, back, linkedAccounts, addLinked }: any) => {
+  const [sheet, setSheet] = useState<string | null>(null);
+  const [toast, setToast] = useState('');
+  const rows: [string, string, string, any][] = [
+    ['accounts', 'Linked Accounts', `${linkedAccounts.length} connected`, 'link-outline'],
+    ['notifications', 'Notification Details', 'Manage every reminder', 'notifications-outline'],
+    ['terms', 'Terms of Use', 'Membership terms', 'document-text-outline'],
+    ['privacy', 'Privacy Policy', 'Bank-data protection', 'lock-closed-outline'],
+  ];
+  return (
+    <ScrollView style={s.page} contentContainerStyle={{ paddingBottom: 130 }}>
+      <PageHeader title="Settings" subtitle="Make Jaleter work your way." back={back} action={<View style={s.avatar}><Text style={{ color: C.goldText, fontSize: 11, fontWeight: '700' }}>AW</Text></View>} />
+      <View style={s.settingsSection}>
+        <Text style={s.settingsH3}>Your Experience</Text>
+        <Text style={s.settingsSub}>100 approved messages. No generated scripture.</Text>
+        <PeriodPills values={['Faith','Both','Motivation']} value={experience} onChange={setExperience} testID="settings-exp" />
+      </View>
+      <View style={s.settingsSection}>
+        <Text style={s.settingsH3}>Appearance</Text>
+        <Text style={s.settingsSub}>Choose a look or follow your device.</Text>
+        <PeriodPills values={['Light','System','Dark']} value={appearance} onChange={setAppearance} testID="settings-appear" />
+      </View>
+      <View style={s.settingsSection}>
+        <Text style={s.settingsH3}>Budget Alerts</Text>
+        <Text style={s.settingsSub}>Stay aware without feeling overwhelmed.</Text>
+        <Pressable onPress={() => setAlerts({ ...alerts, enabled: !alerts.enabled })} style={s.settingToggleRow} testID="settings-alerts">
+          <View style={{ flex: 1 }}><Text style={{ fontSize: 11, fontWeight: '700' }}>Enable alerts</Text><Text style={{ fontSize: 9, color: C.muted3 }}>Budget notifications</Text></View>
+          <View style={[s.toggle, alerts.enabled && s.toggleOn]}><View style={[s.toggleKnob, alerts.enabled && { transform: [{ translateX: 14 }] }]} /></View>
+        </Pressable>
+      </View>
+      <View style={s.settingsMenu}>
+        {rows.map(([id, label, detail, icon]) => (
+          <Pressable key={id} onPress={() => setSheet(id)} style={s.settingsMenuBtn} testID={`settings-${id}`}>
+            <View style={s.settingsRowIcon}><Ionicons name={icon} size={17} color="#8a7b65" /></View>
+            <View style={{ flex: 1 }}><Text style={{ fontSize: 11, fontWeight: '700' }}>{label}</Text><Text style={{ fontSize: 9, color: C.muted3 }}>{detail}</Text></View>
+            <Ionicons name="chevron-forward" size={16} color="#b0aaa0" />
+          </Pressable>
+        ))}
+      </View>
+      <Pressable onPress={onLogout} style={s.logoutBtn} testID="settings-logout">
+        <Ionicons name="log-out-outline" size={17} color={C.danger} />
+        <Text style={{ color: C.danger, fontSize: 12, fontWeight: '700' }}>Log Out</Text>
       </Pressable>
-    </View>
-    <Pressable onPress={onLogout} style={s.logoutBtn} testID="settings-logout">
-      <Ionicons name="log-out-outline" size={17} color={C.danger} />
-      <Text style={{ color: C.danger, fontSize: 12, fontWeight: '700' }}>Log Out</Text>
-    </Pressable>
-  </ScrollView>
-);
+      <LegalSheet visible={sheet === 'terms'} close={() => setSheet(null)} type="Terms of Use" />
+      <LegalSheet visible={sheet === 'privacy'} close={() => setSheet(null)} type="Privacy Policy" />
+      <NotificationsSheet visible={sheet === 'notifications'} close={() => setSheet(null)} onSave={(m: string) => { setSheet(null); setToast(m); }} />
+      <AccountLinkSheet visible={sheet === 'accounts'} close={() => setSheet(null)} onConfirm={(accs: any[]) => { addLinked(accs); setSheet(null); setToast('Accounts connected and syncing.'); }} />
+      {toast ? <Toast message={toast} onHide={() => setToast('')} /> : null}
+    </ScrollView>
+  );
+};
 
 /* ---------------- Bottom Nav ---------------- */
 const navItems = [
@@ -636,23 +693,103 @@ const navItems = [
   { id: 'networth', label: 'Net Worth', icon: 'wallet-outline' as const },
   { id: 'more', label: 'More', icon: 'ellipsis-horizontal' as const },
 ];
-const BottomNav = ({ active, setActive }: any) => (
-  <View style={s.bottomNav}>
+const BottomNav = ({ active, setActive, isDark }: any) => (
+  <View style={[s.bottomNav, isDark && { backgroundColor: '#151411ed', borderTopColor: '#2c2924' }]}>
     {navItems.map(({ id, label, icon }) => {
       const isActive = active === id;
+      const activeColor = isDark ? '#e7c58e' : C.ink2;
+      const inactiveColor = isDark ? '#827c74' : '#918b83';
       return (
         <Pressable key={id} onPress={() => setActive(id)} style={s.navBtn} testID={`nav-${id}`}>
-          {isActive && <View style={s.navIndicator} />}
-          <Ionicons name={icon} size={19} color={isActive ? C.ink2 : '#918b83'} />
-          <Text style={[s.navLabel, isActive && { color: C.ink2 }]}>{label}</Text>
+          {isActive && <View style={[s.navIndicator, isDark && { backgroundColor: '#dfb46e' }]} />}
+          <Ionicons name={icon} size={19} color={isActive ? activeColor : inactiveColor} />
+          <Text style={[s.navLabel, { color: isActive ? activeColor : inactiveColor }]}>{label}</Text>
         </Pressable>
       );
     })}
   </View>
 );
 
+/* ---------------- Extra Sheets ---------------- */
+const LegalSheet = ({ visible, close, type }: any) => (
+  <Sheet visible={visible} close={close} title={type} subtitle="Last updated July 15, 2026">
+    {type === 'Privacy Policy' ? (
+      <View>
+        <Text style={s.privacyPara}>Jaleter displays financial information you choose to link. Financial credentials are handled by SimpleFIN and are not stored by Jaleter.</Text>
+        <Text style={s.privacyPara}>We do not sell financial data. You control linked accounts and can disconnect them at any time.</Text>
+        <Text style={s.privacyPara}>Manual entries and preferences are used only to provide requested features.</Text>
+      </View>
+    ) : (
+      <View>
+        <Text style={s.privacyPara}>Jaleter provides budgeting and planning tools for educational purposes. It does not provide investment, tax, or legal advice.</Text>
+        <Text style={s.privacyPara}>Premium membership is $75 per year. Coaching is a separate $50 per hour service. Renewal and cancellation details are shown before checkout.</Text>
+        <Text style={s.privacyPara}>Projections are estimates and are not guarantees of future performance.</Text>
+      </View>
+    )}
+    <View style={{ marginTop: 14 }}><GoldButton label="Close" onPress={close} testID="legal-close" /></View>
+  </Sheet>
+);
+const NotificationsSheet = ({ visible, close, onSave }: any) => {
+  const labels: Record<string, string> = { daily: 'Daily check-in', weekly: 'Weekly summary', streak: 'Streak reminders', transactions: 'Large transactions', coaching: 'Coaching reminders' };
+  const [n, setN] = useState({ daily: true, weekly: true, streak: true, transactions: true, coaching: false });
+  return (
+    <Sheet visible={visible} close={close} title="Notification Details" subtitle="Choose exactly what reaches you.">
+      {Object.entries(n).map(([id, v]) => (
+        <Pressable key={id} testID={`notif-${id}`} onPress={() => setN(x => ({ ...x, [id]: !x[id as keyof typeof x] }))} style={s.settingToggleRow}>
+          <Text style={{ fontSize: 12, fontWeight: '700', flex: 1 }}>{labels[id]}</Text>
+          <View style={[s.toggle, v && s.toggleOn]}><View style={[s.toggleKnob, v && { transform: [{ translateX: 14 }] }]} /></View>
+        </Pressable>
+      ))}
+      <View style={{ marginTop: 14 }}><GoldButton label="Save preferences" onPress={() => onSave('Notification preferences saved.')} testID="notif-save" /></View>
+    </Sheet>
+  );
+};
+const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
+  const [step, setStep] = useState(1);
+  const [institution, setInstitution] = useState('');
+  useEffect(() => { if (visible) { setStep(1); setInstitution(''); } }, [visible]);
+  const banks = ['Chase', 'Bank of America', 'Capital One', 'Other'];
+  return (
+    <Sheet visible={visible} close={close} title="Connect with SimpleFIN" subtitle={`Step ${step} of 3 · Secure preview flow`}>
+      {step === 1 && (
+        <View>
+          <Text style={{ color: '#817b72', fontSize: 11, marginBottom: 12 }}>Choose your financial institution.</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 9 }}>
+            {banks.map(b => (
+              <Pressable key={b} testID={`bank-${b}`} onPress={() => setInstitution(b)} style={[s.bankBtn, institution === b && s.bankBtnSelected]}>
+                <Ionicons name="business-outline" size={18} color={institution === b ? '#8e632f' : '#5f5a52'} />
+                <Text style={{ fontSize: 11, color: institution === b ? '#8e632f' : '#5f5a52', marginTop: 6 }}>{b}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <View style={{ marginTop: 14 }}><GoldButton label="Continue" onPress={() => setStep(2)} disabled={!institution} testID="link-step2" /></View>
+        </View>
+      )}
+      {step === 2 && (
+        <View style={s.secureHandoff}>
+          <Ionicons name="shield-checkmark" size={31} color="#a8783c" />
+          <Text style={{ fontFamily: F.serif, fontSize: 16, fontWeight: '700', marginTop: 8 }}>Authenticate on {institution}</Text>
+          <Text style={{ color: '#817b72', fontSize: 11, textAlign: 'center', marginTop: 6 }}>SimpleFIN handles authentication. Jaleter never receives your bank credentials.</Text>
+          <View style={{ marginTop: 14, alignSelf: 'stretch' }}><GoldButton label="Continue securely" onPress={() => setStep(3)} testID="link-step3" /></View>
+        </View>
+      )}
+      {step === 3 && (
+        <View>
+          <View style={s.subscriptionCard}>
+            <Text style={{ color: '#c9a86f', fontSize: 9, letterSpacing: 1 }}>READY TO CONNECT</Text>
+            <Text style={{ fontFamily: F.serif, fontSize: 18, fontWeight: '700', color: '#fff', marginVertical: 6 }}>{institution}</Text>
+            <Text style={{ color: '#a9a198', fontSize: 10 }}>2 accounts selected · daily transaction sync</Text>
+          </View>
+          <GoldButton label="Confirm connection" onPress={() => onConfirm([{ id: `${institution}-c`, name: 'Everyday Checking', institution }, { id: `${institution}-s`, name: 'High-Yield Savings', institution }])} testID="link-confirm" />
+        </View>
+      )}
+    </Sheet>
+  );
+};
+
 /* ---------------- App root ---------------- */
 export default function App() {
+  const [hydrated, setHydrated] = useState(false);
   const [stage, setStage] = useState<'welcome'|'onboarding'|'signup'|'connect'|'paywall'|'app'>('welcome');
   const [experience, setExperience] = useState('Both');
   const [appearance, setAppearance] = useState('Light');
@@ -666,8 +803,33 @@ export default function App() {
   const [linkedAccounts, setLinkedAccounts] = useState<any[]>([]);
   const [focusCategory, setFocusCategory] = useState<string | null>(null);
   const [alerts, setAlerts] = useState({ enabled: true, threshold: 80 });
-  const insets = useSafeAreaInsets();
 
+  // Hydrate persisted state
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await storage.getItem(STORAGE_KEY, '' as string);
+        if (raw) {
+          const data = JSON.parse(raw);
+          if (data.experience) setExperience(data.experience);
+          if (data.appearance) setAppearance(data.appearance);
+          if (data.transactions) setTransactions(data.transactions);
+          if (data.linkedAccounts) setLinkedAccounts(data.linkedAccounts);
+          if (data.alerts) setAlerts(data.alerts);
+          if (data.profile) setProfile(data.profile);
+          if (data.stage === 'app') setStage('app');
+        }
+      } catch {}
+      setHydrated(true);
+    })();
+  }, []);
+  // Persist on change
+  useEffect(() => {
+    if (!hydrated) return;
+    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, profile, stage })).catch(() => {});
+  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, profile, stage]);
+
+  const isDark = appearance === 'Dark';
   const income = transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
   const expense = transactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
   const openingCash = 16800;
@@ -677,19 +839,21 @@ export default function App() {
   const monthlyBudget = categories.flatMap(c => c.subcategories).reduce((sum, x) => sum + x.budgeted, 0);
   const nav = (screen: string, category: string | null = null) => { setActive(screen); if (category) setFocusCategory(category); };
 
-  const bg = appearance === 'Dark' ? C.ink2 : C.cream;
+  if (!hydrated) return <View style={{ flex: 1, backgroundColor: C.cream }} />;
+
+  const bg = isDark ? D.bg : C.cream;
 
   return (
     <SafeAreaView style={[s.appShell, { backgroundColor: bg }]} testID="app-shell">
-      <RNStatusBar barStyle={stage === 'welcome' || appearance === 'Dark' ? 'light-content' : 'dark-content'} />
+      <RNStatusBar barStyle={stage === 'welcome' || isDark ? 'light-content' : 'dark-content'} />
       {stage === 'welcome' && <Welcome onStart={() => setStage('onboarding')} onLogin={() => setStage('app')} />}
       {stage === 'onboarding' && <Onboarding experience={experience} setExperience={setExperience} onContinue={() => setStage('signup')} back={() => setStage('welcome')} />}
       {stage === 'signup' && <Signup back={() => setStage('onboarding')} onCreate={(p: any) => { setProfile(p); setStage('connect'); }} />}
       {stage === 'connect' && <FirstConnect onConnect={() => { setLinkedAccounts([{ id: 'chase-checking', name: 'Everyday Checking' }]); setStage('paywall'); }} onSkip={() => setStage('paywall')} />}
       {stage === 'paywall' && <Paywall onContinue={() => setStage('app')} />}
       {stage === 'app' && (
-        <View style={{ flex: 1 }}>
-          {active === 'home' && <HomeScreen name={profile.name.split(' ')[0]} experience={experience} netWorth={netWorth} budgetUsage={expense / monthlyBudget * 100} alertsEnabled={alerts.enabled} navigate={nav} />}
+        <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
+          {active === 'home' && <HomeScreen name={profile.name.split(' ')[0]} experience={experience} netWorth={netWorth} budgetUsage={expense / monthlyBudget * 100} alertsEnabled={alerts.enabled} navigate={nav} isDark={isDark} />}
           {active === 'budget' && <BudgetScreen categories={categories} incomeSources={incomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} />}
           {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} liabilities={liabilities} />}
@@ -697,8 +861,8 @@ export default function App() {
           {active === 'legacy' && <LegacyScreen startingNetWorth={netWorth} back={() => nav('more')} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}
-          {active === 'settings' && <SettingsScreen experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} onLogout={() => { setStage('welcome'); setActive('home'); }} back={() => nav('more')} />}
-          <BottomNav active={active} setActive={(id: string) => { setActive(id); }} />
+          {active === 'settings' && <SettingsScreen experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} onLogout={() => { setStage('welcome'); setActive('home'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} />}
+          <BottomNav active={active} setActive={(id: string) => { setActive(id); }} isDark={isDark} />
         </View>
       )}
     </SafeAreaView>
@@ -808,8 +972,10 @@ const s = StyleSheet.create({
   amountInput: { position: 'relative', marginTop: 6 },
   amountPrefix: { position: 'absolute', left: 14, top: 15, zIndex: 2, fontWeight: '500' },
   /* Net Worth */
-  nwHero: { minHeight: 150, padding: 22, borderRadius: 23, backgroundColor: '#161512', marginBottom: 13 },
+  nwHero: { minHeight: 180, padding: 22, borderRadius: 23, backgroundColor: '#161512', marginBottom: 13, position: 'relative', overflow: 'hidden' },
   nwHeroStrong: { fontFamily: F.serif, fontSize: 34, fontWeight: '600', color: '#fff', marginVertical: 8 },
+  nwChart: { position: 'absolute', left: 22, right: 22, bottom: 14, height: 80 },
+  nwChartDot: { position: 'absolute', width: 6, height: 6, borderRadius: 3, backgroundColor: '#d0a665', marginLeft: -3 },
   cashProtection: { flexDirection: 'row', alignItems: 'center', gap: 6, padding: 15, borderWidth: 1, borderColor: '#e3d4bd', borderRadius: 18, backgroundColor: '#fffaf2', marginBottom: 12 },
   cpSmall: { color: '#948a7c', fontSize: 8 },
   cpStrong: { fontFamily: F.serif, fontSize: 13, fontWeight: '600', color: C.ink, marginTop: 4 },
@@ -843,6 +1009,15 @@ const s = StyleSheet.create({
   toggleOn: { backgroundColor: '#b48243' },
   toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#fff' },
   logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 14, borderWidth: 1, borderColor: '#ebd9d4', borderRadius: 16, backgroundColor: '#fff9f7', marginTop: 12 },
+  settingsMenu: { marginVertical: 10, paddingHorizontal: 15, paddingVertical: 4, borderWidth: 1, borderColor: C.border, borderRadius: 20, backgroundColor: C.creamAlt },
+  settingsMenuBtn: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 61, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: C.border2 },
+  settingsRowIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: '#f0ebe3', alignItems: 'center', justifyContent: 'center' },
+  /* Sheets extra */
+  bankBtn: { minWidth: '47%', minHeight: 70, padding: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#e1dbd1', borderRadius: 15, backgroundColor: '#fff' },
+  bankBtnSelected: { borderColor: '#b78343', backgroundColor: '#fff7e9' },
+  secureHandoff: { alignItems: 'center', gap: 10, padding: 22, borderWidth: 1, borderColor: '#e7dfd3', borderRadius: 18, backgroundColor: C.creamAlt },
+  subscriptionCard: { marginVertical: 12, padding: 20, borderRadius: 18, backgroundColor: C.ink3 },
+  privacyPara: { color: '#625e58', fontSize: 11, lineHeight: 18, marginBottom: 8 },
   /* Bottom nav */
   bottomNav: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 79, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 16, flexDirection: 'row', backgroundColor: '#faf8f2f5', borderTopWidth: 1, borderTopColor: C.border2 },
   navBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4 },

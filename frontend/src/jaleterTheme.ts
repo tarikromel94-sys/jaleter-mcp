@@ -42,6 +42,18 @@ export const C = {
 };
 
 export const F = {
-  serif: 'Georgia',      // Playfair Display fallback
+  serif: 'PlayfairDisplay',
+  serifBold: 'PlayfairDisplayBold',
   sans: 'System',
+};
+
+// Dark theme palette
+export const D = {
+  bg: '#11110f',
+  surface: '#1a1916',
+  surfaceAlt: '#211f1c',
+  border: '#302d28',
+  text: '#f3ede3',
+  textMuted: '#918a80',
+  textSubtle: '#aaa298',
 };
