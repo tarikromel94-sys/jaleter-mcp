@@ -161,7 +161,6 @@ class TestSyncSingleSimpleFin:
         finally:
             mongo.linked_accounts.delete_one({'_id': ObjectId(link_id)})
 
-    @pytest.mark.xfail(reason='BUG: sf_fetch_accounts does not catch httpx.ConnectError; unreachable SimpleFIN host leaks as 500 instead of 200+errors[]. See simplefin_service.py:96 — wrap httpx.AsyncClient.get in try/except httpx.HTTPError -> SimpleFinError.', strict=True)
     def test_sync_success_path_updates_last_sync_at(self, alex_headers, mongo, alex_id, monkeypatch):
         """Insert a linked_accounts doc that CAN decrypt (using a real Fernet round-trip).
         Since the endpoint calls the live SimpleFIN URL, we can't easily force success without
@@ -204,6 +203,19 @@ class TestSyncSingleSimpleFin:
             body = r.json()
             assert body['synced'] == 0
             assert isinstance(body['errors'], list)
+            # errors[] should contain our link_id — SimpleFIN was unreachable
+            assert any(e.get('link_id') == link_id for e in body['errors']), body
+            # And the error message should mention 'SimpleFIN unreachable' (per fix)
+            err_msgs = ' '.join(str(e.get('error', '')) for e in body['errors'] if e.get('link_id') == link_id)
+            assert 'SimpleFIN unreachable' in err_msgs or 'unreachable' in err_msgs.lower(), body
+
+            # Bulk /api/accounts/sync should also gracefully report the same broken link (not 500)
+            r_bulk = requests.post(f"{BASE_URL}/api/accounts/sync", headers=alex_headers)
+            assert r_bulk.status_code == 200, r_bulk.text
+            bulk_body = r_bulk.json()
+            assert 'synced' in bulk_body and 'errors' in bulk_body
+            assert isinstance(bulk_body['errors'], list)
+            assert any(e.get('link_id') == link_id for e in bulk_body['errors']), bulk_body
         finally:
             mongo.linked_accounts.delete_one({'_id': ObjectId(link_id)})
 

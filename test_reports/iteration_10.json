@@ -1,0 +1,40 @@
+{
+  "summary": "P1 fix VERIFIED. All 17/17 backend tests in test_iteration9.py now PASS (previously 16 pass + 1 xfail). The formerly xfail'd test test_sync_success_path_updates_last_sync_at now confirms: (a) POST /api/accounts/link/{id}/sync with an unreachable SimpleFIN host returns HTTP 200 with {synced:0, errors:[{link_id, error:'SimpleFIN unreachable: ConnectError'}]} — no more 500; (b) POST /api/accounts/sync (bulk) with the same broken link also returns 200 + errors[] populated. Extended the test to explicitly assert 'SimpleFIN unreachable' appears in the error message and to hit the bulk endpoint after the per-link endpoint. Regression suite (providers, modular link routes, CSV import, accounts/all, support/requests, auth/me, SnapTrade 503) all green. Alex password left at 'password123' — final /api/auth/login returned 200. No residual TEST_* data in Mongo after run.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration9.py",
+    "/app/test_reports/pytest/iteration10_results.xml"
+  ],
+  "action_items": [
+    "P1 (from iter_9) is DONE — no further backend action needed for the SimpleFIN httpx.HTTPError bug.",
+    "P3 (still open, low): Bump CircleBtn size 38→44 to meet Apple HIG 44x44 touch target.",
+    "P3 (still open, low): Migrate remaining shadow* → boxShadow and pointerEvents prop → style.pointerEvents on RN-Web to silence deprecation warnings."
+  ],
+  "critical_code_review_comments": [
+    "simplefin_service.py:62-66 and :99-103 — both httpx.AsyncClient blocks now correctly wrap the call in try/except httpx.HTTPError → SimpleFinError with a clear 'SimpleFIN unreachable: <ExcClass>' message. Uses e.__class__.__name__ (not the full repr) which avoids leaking hostnames/paths into the client response. Clean.",
+    "simplefin_service.py:66 uses `from e` (chained exception) which preserves traceback for server logs while still surfacing a friendly SimpleFinError to the sync loop in server.py:_sync_docs — good practice.",
+    "The fix is symmetric: claim_setup_token (used at link-creation time) and fetch_accounts (used at sync time) both handle transport failures identically. A user attempting to link during a bank outage now gets a clean 4xx/5xx with a helpful message rather than a generic 500."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration9.py (removed @pytest.mark.xfail on TestSyncSingleSimpleFin::test_sync_success_path_updates_last_sync_at; extended it to also POST /api/accounts/sync and assert the SimpleFIN-unreachable message)",
+    "/app/test_reports/pytest/iteration10_results.xml (NEW)"
+  ],
+  "success_rate": {
+    "backend": "100% (17/17)",
+    "frontend": "not tested this iteration (review requested backend only)"
+  },
+  "seed_data_creation": "Fixtures only — 1 TEST_other_* user + linked_accounts doc, 2 short-lived simplefin linked_accounts docs (invalid-crypt + Fernet-encrypted-unreachable-host), 1 file-provider linked_accounts, 1 TEST_bank_* support_request, a couple TEST_reg_* bank_transactions. All cleaned up in fixture/finally teardowns; post-run Mongo scan shows 0 TEST_ residuals across users/linked_accounts/bank_transactions/support_requests.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Re-run: `cd /app/backend && EXPO_PUBLIC_BACKEND_URL=<preview> MONGO_URL=mongodb://localhost:27017 DB_NAME=test_database pytest tests/test_iteration9.py -v` → expect 17 passed. The SimpleFIN network-failure branch is now covered end-to-end (per-link and bulk endpoints). If a future change touches simplefin_service.py, ensure both fetch_accounts and claim_setup_token keep their httpx.HTTPError → SimpleFinError wrappers.",
+  "rca_of_issue": "N/A — bug is fixed and verified. Original RCA in iteration_9.json.rca_of_issue. Fix implemented in simplefin_service.py at lines 62-66 (claim_setup_token) and 99-103 (fetch_accounts): both wrap the httpx.AsyncClient network call in try/except httpx.HTTPError → SimpleFinError(f'SimpleFIN unreachable: {e.__class__.__name__}'). Verification: seeded a linked_accounts doc with Fernet-encrypted access_url pointing at nonexistent.invalid.example.test; POST /api/accounts/link/{id}/sync returned HTTP 200 with body {synced:0, errors:[{link_id, error:'SimpleFIN unreachable: ConnectError'}]}; POST /api/accounts/sync returned the same shape."
+}

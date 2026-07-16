@@ -59,8 +59,11 @@ async def claim_setup_token(setup_token: str) -> str:
         raise SimpleFinError('Invalid Setup Token format') from e
     if not claim_url.startswith('https://'):
         raise SimpleFinError('Setup Token did not decode to a valid claim URL')
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(claim_url, headers={'Content-Length': '0'})
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(claim_url, headers={'Content-Length': '0'})
+    except httpx.HTTPError as e:
+        raise SimpleFinError(f'SimpleFIN unreachable: {e.__class__.__name__}') from e
     if resp.status_code == 403:
         raise SimpleFinError('Setup Token has already been used or was revoked')
     if resp.status_code != 200:
@@ -93,8 +96,11 @@ async def fetch_accounts(
         params['start-date'] = str(int(start_date))
     if end_date is not None:
         params['end-date'] = str(int(end_date))
-    async with httpx.AsyncClient(timeout=45.0) as client:
-        r = await client.get(f'{root}/accounts', auth=(user, pw), params=params)
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            r = await client.get(f'{root}/accounts', auth=(user, pw), params=params)
+    except httpx.HTTPError as e:
+        raise SimpleFinError(f'SimpleFIN unreachable: {e.__class__.__name__}') from e
     if r.status_code == 401:
         raise SimpleFinError('SimpleFIN rejected the stored credentials')
     if r.status_code == 429:
