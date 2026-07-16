@@ -187,7 +187,7 @@ class FileProvider(Provider):
             }
             try:
                 result = await self.db.bank_transactions.update_one(
-                    {'user_id': user_id, 'account_id': link_id, 'external_id': ext_id},
+                    {'user_id': user_id, 'provider': self.id, 'external_id': ext_id},
                     {'$setOnInsert': doc}, upsert=True,
                 )
                 if result.upserted_id:

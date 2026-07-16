@@ -195,8 +195,11 @@ async def _startup():
     await db.password_resets.create_index('token', unique=True)
     await db.password_resets.create_index('expires_at', expireAfterSeconds=0)
     await db.linked_accounts.create_index([('user_id', 1)])
+    await db.linked_accounts.create_index([('user_id', 1), ('provider', 1)])
     await db.bank_transactions.create_index([('user_id', 1), ('account_id', 1), ('external_id', 1)], unique=True)
+    await db.bank_transactions.create_index([('user_id', 1), ('provider', 1), ('external_id', 1)])
     await db.bank_transactions.create_index([('user_id', 1), ('date', -1)])
+    await db.support_requests.create_index([('user_id', 1), ('created_at', -1)])
 
 
 @app.on_event('shutdown')
@@ -414,6 +417,7 @@ async def simplefin_link(payload: SimpleFinLinkRequest, request: Request, curren
         raise HTTPException(status_code=500, detail=f'Encryption not configured: {e}')
     doc = {
         'user_id': current_user['user_id'],
+        'provider': 'simplefin',
         'access_url_encrypted': access_encrypted,
         'org_name': org.get('name'),
         'org_domain': org.get('domain'),
@@ -433,7 +437,13 @@ async def simplefin_link(payload: SimpleFinLinkRequest, request: Request, curren
 
 @api_router.get('/accounts')
 async def list_accounts(current_user: dict = Depends(get_current_user)):
-    cursor = db.linked_accounts.find({'user_id': current_user['user_id']}, {'access_url_encrypted': 1, 'org_name': 1, 'org_domain': 1, 'last_sync_at': 1})
+    cursor = db.linked_accounts.find(
+        {
+            'user_id': current_user['user_id'],
+            '$or': [{'provider': {'$exists': False}}, {'provider': 'simplefin'}],
+        },
+        {'access_url_encrypted': 1, 'org_name': 1, 'org_domain': 1, 'last_sync_at': 1},
+    )
     docs = await cursor.to_list(length=50)
     summaries: list[dict] = []
     for doc in docs:
@@ -452,7 +462,10 @@ async def list_accounts(current_user: dict = Depends(get_current_user)):
 
 @api_router.post('/accounts/sync')
 async def sync_accounts(current_user: dict = Depends(get_current_user)):
-    cursor = db.linked_accounts.find({'user_id': current_user['user_id']})
+    cursor = db.linked_accounts.find({
+        'user_id': current_user['user_id'],
+        '$or': [{'provider': {'$exists': False}}, {'provider': 'simplefin'}],
+    })
     docs = await cursor.to_list(length=50)
     total_new = 0
     errors: list[dict] = []
@@ -517,14 +530,15 @@ async def list_providers():
 
 
 @api_router.post('/accounts/link')
-async def provider_link(payload: ProviderLinkRequest, current_user: dict = Depends(get_current_user)):
+@limiter.limit('10/minute')
+async def provider_link(payload: ProviderLinkRequest, request: Request, current_user: dict = Depends(get_current_user)):
     """Modular link endpoint. Currently delegates SimpleFIN to its existing route.
     For 'snaptrade' returns a redirect_uri (or 503 if not configured)."""
     if payload.provider == 'simplefin':
         setup_token = (payload.payload or {}).get('setup_token')
         if not setup_token:
             raise HTTPException(status_code=400, detail='setup_token required for SimpleFIN')
-        return await simplefin_link(SimpleFinLinkRequest(setup_token=setup_token), request=None, current_user=current_user)  # type: ignore[arg-type]
+        return await simplefin_link(SimpleFinLinkRequest(setup_token=setup_token), request=request, current_user=current_user)
     if payload.provider not in _provider_registry:
         raise HTTPException(status_code=400, detail=f'Unknown provider: {payload.provider}')
     provider = _provider_registry[payload.provider]

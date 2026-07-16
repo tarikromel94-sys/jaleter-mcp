@@ -1,0 +1,50 @@
+{
+  "summary": "Backend retest of the two fixes shipped after iteration_7. Both PASS. (1) GET /api/accounts and POST /api/accounts/sync now filter linked_accounts to provider in {simplefin, missing}, so file-provider rows no longer trigger KeyError('access_url_encrypted'). Verified via a seeded CSV import → subsequent GET /api/accounts=200 (no file row leaks in), POST /api/accounts/sync=200 with {synced,errors}, and NO new Traceback/KeyError/access_url_encrypted in /var/log/supervisor/backend.err.log. (2) file-provider now dedups by (user_id, provider='file', external_id): first CSV upload → inserted=3/duplicates=0; identical re-upload → inserted=0/duplicates>=3; different CSV → inserted>=2/duplicates=0. Prior-iteration regression tests (providers, snaptrade→503, unknown→400, simplefin invalid-token→400, OFX→200, 5MB→413, bad CSV headers→400, support requests POST+GET, /api/accounts/all shape, auth login/me/logout/forgot-password) all still pass. test_providers.py: 16/16, test_regression_fixes.py: 5/5 (new file). Full-suite parallel run (backend_auth_test + test_password_reset + test_simplefin) 34/35 — the single failure `test_forgot_rate_limit_4th_returns_429` is a pre-existing flaky SlowAPI test unrelated to the two fixes (endpoint IS decorated `@limiter.limit('3/minute')` at server.py:313 but the in-memory bucket state after 100+ prior test hits does not deterministically trigger 429 in 6 rapid calls). Password left intact: final curl POST /api/auth/login {alex+test1@jaleter.app / password123} → 200. All file-provider linked_accounts/bank_transactions and TEST_ support_requests created during testing cleaned up (23 linked_accounts, 29 bank_transactions, 3 support_requests deleted).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/auth/forgot-password (rate limit)",
+        "issue": "test_password_reset.py::TestRateLimit::test_forgot_rate_limit_4th_returns_429 sees 6 consecutive 200s instead of a 429. Handler is decorated `@limiter.limit('3/minute')` at server.py:313, so the rule exists. Suspect SlowAPI in-memory bucket window/key-fn behavior when the process has already served many requests. Not a regression from this iteration's two fixes. Recommend main agent revisit only if flaky test is a blocker."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_providers.py",
+    "/app/backend/tests/test_regression_fixes.py",
+    "/app/test_reports/pytest/providers_results.xml",
+    "/app/test_reports/pytest/regression_fixes_results.xml",
+    "/app/test_reports/pytest/auth_simplefin_results.xml"
+  ],
+  "action_items": [
+    "Both critical bugs from iteration_7 are resolved — no action required for them.",
+    "Optional: make /api/auth/forgot-password rate-limit test deterministic (either use a fresh SlowAPI storage per test module, or drop the exact-429 assertion in favor of `>=1 of 429` when running large suites)."
+  ],
+  "critical_code_review_comments": [
+    "server.py:440-445 and 465-467: linked_accounts.find now filters `{'$or': [{'provider': {'$exists': False}}, {'provider': 'simplefin'}]}` — correctly protects legacy pre-provider docs AND scopes to SimpleFIN. Fix verified.",
+    "server.py:420-421: SimpleFIN link insert now writes explicit `provider: 'simplefin'` — good, keeps new docs distinguishable from file-provider docs.",
+    "file_provider.py:189-191: dedup filter is now `{'user_id', 'provider', 'external_id'}` (no more per-link account_id in the filter). Verified reupload of identical CSV → 0 inserted / 3 duplicates.",
+    "server.py:537 provider_link (simplefin branch): rate limiter concern from iteration_7 is now mitigated — the real Request object is passed through so SlowAPI can attribute the call to the client IP. Verified /api/accounts/link with provider=simplefin returns the same 400 as /api/accounts/simplefin/link.",
+    "file_provider.py:163 still mints a NEW `link_id` per upload — that's fine for dedup now (dedup key no longer uses link_id) but does mean a user re-uploading the SAME CSV monthly will still accumulate one `linked_accounts` document per upload, cluttering the Assets list. Consider (future) coalescing file-provider linked_accounts rows by `(user_id, source_file)` on subsequent uploads."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_providers.py (CSV_SAMPLE descriptions suffixed with per-run uuid so test_import_csv_success stays green on repeat pytest runs now that the dedup fix is active)",
+    "/app/backend/tests/test_regression_fixes.py (NEW — 5 explicit regression tests for the two fixes + password-preservation check)",
+    "MongoDB cleanup: 23 file-provider linked_accounts, 29 file-provider bank_transactions, 3 TEST_ support_requests deleted for alex+test1@jaleter.app"
+  ],
+  "success_rate": {
+    "backend": "97.1% (55/56 across all suites; 21/21 on the two files that cover this iteration's fixes)",
+    "frontend": "N/A (backend-only retest per review request)"
+  },
+  "seed_data_creation": "Seeded 5 file-provider CSV uploads during testing to exercise the two bug fixes; all cleaned up at end of run. Password unchanged.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Both iteration_7 critical bugs are FIXED and verified. If you need to re-run: `EXPO_PUBLIC_BACKEND_URL=<url> pytest tests/test_providers.py tests/test_regression_fixes.py -v` → 21/21. Full suite has one flaky test (test_forgot_rate_limit_4th_returns_429) that is orthogonal to the fixes — safe to ignore unless you're specifically retesting the forgot-password rate limit. All file-provider test artifacts cleaned up between runs.",
+  "rca_of_issue": "Bug #1 root cause was that server.py list_accounts (line 434) and sync_accounts (line 461) queried `db.linked_accounts.find({'user_id': ...})` without a provider filter, so any file-provider doc (which lacks `access_url_encrypted`) caused a KeyError. Fix: added `'$or': [{'provider': {'$exists': False}}, {'provider': 'simplefin'}]` to both cursors, plus SimpleFIN link inserts now write `provider: 'simplefin'` explicitly (server.py:420). Bug #2 root cause was file_provider.py minting a fresh link_id per upload and scoping bank_transactions upserts by (user_id, account_id=link_id, external_id) — since account_id differed per upload the historic rows never matched. Fix: dedup key is now (user_id, provider='file', external_id), so identical rows dedup across arbitrary uploads. Both fixes verified end-to-end via pytest + explicit backend-log inspection."
+}

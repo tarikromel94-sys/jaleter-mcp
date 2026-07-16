@@ -81,11 +81,15 @@ class TestAccountsLink:
 
 
 # ---------- /api/accounts/import ----------
+# Descriptions are per-run-unique so dedup across separate pytest runs does not
+# pollute test_import_csv_success (external_id is derived from
+# date|amount|description → uniqueness by description is enough).
+_RUN_TAG = uuid.uuid4().hex[:8]
 CSV_SAMPLE = (
     'Date,Description,Amount\n'
-    '2025-01-05,STARBUCKS COFFEE,-6.25\n'
-    '2025-01-06,Payroll Deposit,1500.00\n'
-    '2025-01-07,Comcast Internet,-89.99\n'
+    f'2025-01-05,STARBUCKS COFFEE {_RUN_TAG},-6.25\n'
+    f'2025-01-06,Payroll Deposit {_RUN_TAG},1500.00\n'
+    f'2025-01-07,Comcast Internet {_RUN_TAG},-89.99\n'
 )
 
 
