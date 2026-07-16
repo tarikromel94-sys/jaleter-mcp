@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, createContext, useContext } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, StatusBar as RNStatusBar, Platform, Linking } from 'react-native';
+import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, StatusBar as RNStatusBar, Platform, Linking, Dimensions } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Defs, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { storage } from '@/src/utils/storage';
@@ -137,50 +138,171 @@ const Sparkle = ({ size = 20, color = C.goldGlow, style }: any) => (
   <Text style={[{ color, fontSize: size, fontWeight: '700' }, style]}>✦</Text>
 );
 
-/* ---------------- Welcome ---------------- */
-const Welcome = ({ onStart, onLogin }: any) => (
-  <View style={s.welcome} testID="welcome-screen">
-    {/* Radial subtle gold glow behind the wordmark (approximated with a soft ellipse). */}
-    <View style={s.welcomeGlow} pointerEvents="none" />
-    <View style={s.welcomeCenter}>
-      {/* Sparkles above the wordmark */}
-      <View style={s.sparkleCluster}>
-        <Sparkle size={20} color="#f0d090" style={{ position: 'absolute', left: 6, top: 0 }} />
-        <Sparkle size={11} color="#e6c07b" style={{ position: 'absolute', right: 8, top: 12 }} />
-      </View>
-      <Text style={s.welcomeH1} testID="welcome-wordmark">Jaleter</Text>
-      <View style={{ height: 22 }} />
-      <Text style={s.welcomeSubtitle}>SMART BUDGETING.</Text>
-      <Text style={s.welcomeSubtitle}>WEALTHY LIVING.</Text>
-      {/* Elegant gold curve stack */}
-      <View style={s.curveStack} pointerEvents="none">
-        {[0, 1, 2, 3, 4].map((i) => (
-          <View
-            key={i}
-            style={[
-              s.goldArc,
-              {
-                marginTop: i === 0 ? 24 : 8,
-                width: 320 - i * 18,
-                borderColor: i === 2 ? '#f2c779' : i === 1 || i === 3 ? '#c99855' : '#8f6a34',
-                opacity: 0.55 + i * 0.05,
-              },
-            ]}
-          />
-        ))}
-      </View>
-      <View style={{ height: 34 }} />
-      <Pressable onPress={onStart} testID="welcome-get-started" style={({ pressed }) => [s.goldPill, pressed && { opacity: 0.9 }]}>
-        <LinearGradient colors={['#f3d18b', '#e2b06a', '#c78f42']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={s.goldPillFill}>
-          <Text style={s.goldPillText}>Get Started</Text>
-        </LinearGradient>
-      </Pressable>
-      <Pressable onPress={onLogin} testID="welcome-login" style={{ marginTop: 22 }}>
-        <Text style={s.loginLink}>Already have an account? <Text style={{ color: '#f0d090', fontWeight: '600' }}>Log in</Text></Text>
-      </Pressable>
+/* ---------------- Welcome (Get Started) ---------------- */
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const serifFont = Platform.select({ ios: 'PlayfairDisplay', android: 'PlayfairDisplay', default: 'PlayfairDisplay' });
+
+function GoldWaves() {
+  const height = SCREEN_HEIGHT;
+  const waves = [
+    { y: height * 0.49, opacity: 0.17, width: 0.7 },
+    { y: height * 0.51, opacity: 0.22, width: 0.75 },
+    { y: height * 0.53, opacity: 0.3, width: 0.85 },
+    { y: height * 0.55, opacity: 0.42, width: 1 },
+    { y: height * 0.57, opacity: 0.65, width: 1.25 },
+    { y: height * 0.59, opacity: 0.9, width: 1.55 },
+    { y: height * 0.61, opacity: 0.38, width: 0.9 },
+    { y: height * 0.63, opacity: 0.2, width: 0.7 },
+  ];
+  return (
+    <>
+      {waves.map((wave, index) => (
+        <Path
+          key={`wave-${index}`}
+          d={`M -70 ${wave.y - 95} C ${SCREEN_WIDTH * 0.12} ${wave.y + 50}, ${SCREEN_WIDTH * 0.36} ${wave.y + 125}, ${SCREEN_WIDTH * 0.59} ${wave.y + 84} C ${SCREEN_WIDTH * 0.78} ${wave.y + 50}, ${SCREEN_WIDTH * 0.82} ${wave.y - 88}, ${SCREEN_WIDTH + 80} ${wave.y - 155}`}
+          fill="none"
+          stroke="#E7B866"
+          strokeWidth={wave.width}
+          strokeOpacity={wave.opacity}
+        />
+      ))}
+      <Path
+        d={`M -80 ${height * 0.43} C ${SCREEN_WIDTH * 0.16} ${height * 0.68}, ${SCREEN_WIDTH * 0.46} ${height * 0.73}, ${SCREEN_WIDTH * 0.67} ${height * 0.61} C ${SCREEN_WIDTH * 0.82} ${height * 0.52}, ${SCREEN_WIDTH * 0.84} ${height * 0.42}, ${SCREEN_WIDTH + 70} ${height * 0.35}`}
+        fill="none" stroke="#F1C87D" strokeWidth="2" strokeOpacity="0.8"
+      />
+      <Path
+        d={`M -80 ${height * 0.44} C ${SCREEN_WIDTH * 0.17} ${height * 0.69}, ${SCREEN_WIDTH * 0.47} ${height * 0.74}, ${SCREEN_WIDTH * 0.68} ${height * 0.62} C ${SCREEN_WIDTH * 0.83} ${height * 0.53}, ${SCREEN_WIDTH * 0.85} ${height * 0.43}, ${SCREEN_WIDTH + 70} ${height * 0.36}`}
+        fill="none" stroke="#E4A94B" strokeWidth="6" strokeOpacity="0.08"
+      />
+    </>
+  );
+}
+
+function BackgroundArtwork() {
+  return (
+    <Svg
+      width={SCREEN_WIDTH}
+      height={SCREEN_HEIGHT}
+      viewBox={`0 0 ${SCREEN_WIDTH} ${SCREEN_HEIGHT}`}
+      style={StyleSheet.absoluteFill}
+      pointerEvents="none"
+    >
+      <Defs>
+        <RadialGradient id="topGlow" cx="28%" cy="10%" rx="72%" ry="65%">
+          <Stop offset="0%" stopColor="#463720" stopOpacity="0.25" />
+          <Stop offset="45%" stopColor="#201B13" stopOpacity="0.11" />
+          <Stop offset="100%" stopColor="#080807" stopOpacity="0" />
+        </RadialGradient>
+        <RadialGradient id="goldGlow" cx="91%" cy="66%" rx="65%" ry="48%">
+          <Stop offset="0%" stopColor="#E2AD58" stopOpacity="0.26" />
+          <Stop offset="35%" stopColor="#8E6029" stopOpacity="0.11" />
+          <Stop offset="100%" stopColor="#080807" stopOpacity="0" />
+        </RadialGradient>
+        <RadialGradient id="leftGlow" cx="0%" cy="78%" rx="55%" ry="42%">
+          <Stop offset="0%" stopColor="#C9903F" stopOpacity="0.15" />
+          <Stop offset="100%" stopColor="#080807" stopOpacity="0" />
+        </RadialGradient>
+      </Defs>
+      <Rect x="0" y="0" width={SCREEN_WIDTH} height={SCREEN_HEIGHT} fill="#080807" />
+      <Rect x="0" y="0" width={SCREEN_WIDTH} height={SCREEN_HEIGHT} fill="url(#topGlow)" />
+      <Rect x="0" y="0" width={SCREEN_WIDTH} height={SCREEN_HEIGHT} fill="url(#goldGlow)" />
+      <Rect x="0" y="0" width={SCREEN_WIDTH} height={SCREEN_HEIGHT} fill="url(#leftGlow)" />
+      <GoldWaves />
+    </Svg>
+  );
+}
+
+const Welcome = ({ onStart, onLogin }: any) => {
+  return (
+    <View style={welcomeStyles.screen}>
+      <RNStatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+      <BackgroundArtwork />
+      <SafeAreaView style={welcomeStyles.safeArea}>
+        <View style={welcomeStyles.content}>
+          <View style={welcomeStyles.brandSection}>
+            <View style={welcomeStyles.sparkles} pointerEvents="none">
+              <Text style={welcomeStyles.largeSparkle}>✦</Text>
+              <Text style={welcomeStyles.smallSparkle}>✦</Text>
+            </View>
+            <Text style={welcomeStyles.logo} numberOfLines={1} adjustsFontSizeToFit testID="welcome-wordmark">Jaleter</Text>
+            <View style={welcomeStyles.logoAccent} />
+            <Text style={welcomeStyles.tagline}>SMART BUDGETING.{'\n'}WEALTHY LIVING.</Text>
+          </View>
+          <View style={welcomeStyles.actions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Get Started"
+              testID="welcome-get-started"
+              onPress={onStart}
+              style={({ pressed }) => [welcomeStyles.buttonShadow, pressed && welcomeStyles.buttonPressed]}
+            >
+              <LinearGradient
+                colors={['#F8D99A', '#E8B85F', '#C98B35']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={welcomeStyles.primaryButton}
+              >
+                <View style={welcomeStyles.buttonHighlight} />
+                <Text style={welcomeStyles.primaryButtonText}>Get Started</Text>
+              </LinearGradient>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Log in"
+              testID="welcome-login"
+              onPress={onLogin}
+              hitSlop={12}
+              style={({ pressed }) => [welcomeStyles.loginButton, pressed && welcomeStyles.loginPressed]}
+            >
+              <Text style={welcomeStyles.loginText}>
+                Already have an account? <Text style={welcomeStyles.loginLink}>Log in</Text>
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </SafeAreaView>
     </View>
-  </View>
-);
+  );
+};
+
+const welcomeStyles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: '#080807' },
+  safeArea: { flex: 1 },
+  content: { flex: 1, paddingHorizontal: 28, justifyContent: 'space-between' },
+  brandSection: { alignItems: 'center', paddingTop: SCREEN_HEIGHT * 0.2 },
+  sparkles: { position: 'relative', width: 48, height: 38, marginBottom: 5 },
+  largeSparkle: { position: 'absolute', left: 4, top: 10, color: '#E3BD79', fontSize: 23, lineHeight: 26 },
+  smallSparkle: { position: 'absolute', right: 4, top: 0, color: '#F6DCA8', fontSize: 12, lineHeight: 15 },
+  logo: {
+    width: '100%', overflow: 'visible', color: '#F4DEB4', fontFamily: serifFont,
+    fontSize: 63, fontWeight: '400', lineHeight: 76, letterSpacing: -2, textAlign: 'center',
+    includeFontPadding: false,
+    textShadowColor: 'rgba(229, 184, 108, 0.16)',
+    textShadowOffset: { width: 0, height: 3 },
+    textShadowRadius: 12,
+  } as any,
+  logoAccent: { width: 38, height: 1, marginTop: 2, marginBottom: 22, backgroundColor: 'rgba(224, 181, 105, 0.38)' },
+  tagline: { color: 'rgba(245, 237, 224, 0.72)', fontSize: 11, fontWeight: '600', lineHeight: 19, letterSpacing: 3.1, textAlign: 'center' },
+  actions: { paddingBottom: Math.max(26, SCREEN_HEIGHT * 0.047) },
+  buttonShadow: {
+    width: '100%', borderRadius: 28,
+    shadowColor: '#E6B35D',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.28, shadowRadius: 16, elevation: 10,
+  },
+  buttonPressed: { opacity: 0.92, transform: [{ scale: 0.985 }] },
+  primaryButton: {
+    position: 'relative', overflow: 'hidden', width: '100%', height: 56,
+    alignItems: 'center', justifyContent: 'center', borderRadius: 28,
+    borderWidth: 1, borderColor: 'rgba(255, 232, 184, 0.52)',
+  },
+  buttonHighlight: { position: 'absolute', top: 1, left: 18, right: 18, height: 1, backgroundColor: 'rgba(255, 246, 218, 0.7)' },
+  primaryButtonText: { color: '#18130C', fontSize: 15, fontWeight: '700', letterSpacing: 0.1 },
+  loginButton: { minHeight: 45, alignItems: 'center', justifyContent: 'flex-end', paddingTop: 17 },
+  loginPressed: { opacity: 0.7 },
+  loginText: { color: 'rgba(224, 216, 203, 0.58)', fontSize: 12, textAlign: 'center' },
+  loginLink: { color: '#D7B375', fontWeight: '600' },
+});
 
 /* ---------------- Onboarding ---------------- */
 const Onboarding = ({ experience, setExperience, onContinue, back }: any) => {
