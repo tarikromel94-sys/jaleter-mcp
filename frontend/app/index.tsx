@@ -4,7 +4,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { storage } from '@/src/utils/storage';
-import { AuthProvider, useAuth } from '@/src/AuthContext';
+import { AuthProvider, useAuth, apiCall } from '@/src/AuthContext';
 import { C, D, F } from '@/src/jaleterTheme';
 import { dailyQuote, MONEY, EXACT, QuoteType } from '@/src/quoteLibrary';
 
@@ -384,29 +384,73 @@ const ResetPassword = ({ back, email, prefilledToken, onDone }: any) => {
 };
 
 /* ---------------- Connect ---------------- */
-const FirstConnect = ({ onConnect, onSkip }: any) => (
-  <ScrollView style={s.lightScreen} contentContainerStyle={{ padding: 23, paddingTop: 60, paddingBottom: 28 }}>
-    <View style={{ marginTop: 45, alignItems: 'center' }}>
-      <View style={s.connectLock}><Ionicons name="link" size={29} color={C.goldText} /></View>
-      <Text style={[s.eyebrow, { marginTop: 17 }]}>YOUR MONEY, IN ONE VIEW</Text>
-      <Text style={[s.onboardH1, { textAlign: 'center' }]}>Connect your first{'\n'}financial account.</Text>
-      <Text style={[s.onboardHint, { textAlign: 'center' }]}>Jaleter uses SimpleFIN to securely sync balances and transactions. We never ask for or store your bank password.</Text>
-    </View>
-    <View style={s.connectBenefits}>
-      {[
-        ['Automatic transactions', 'Keep Budget actuals current.'],
-        ['Accurate net worth', 'See cash and liabilities together.'],
-      ].map(([b, sm]) => (
-        <View key={b} style={{ flexDirection: 'row', gap: 11, alignItems: 'center', marginVertical: 10 }}>
-          <Ionicons name="checkmark" size={16} color="#a57537" />
-          <View style={{ flex: 1 }}><Text style={{ fontSize: 12, fontWeight: '700', color: C.ink }}>{b}</Text><Text style={{ fontSize: 10, color: C.muted2 }}>{sm}</Text></View>
+const FirstConnect = ({ onConnect, onSkip }: any) => {
+  const { token } = useAuth();
+  const [showLink, setShowLink] = useState(false);
+  const [setupToken, setSetupToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async () => {
+    if (!setupToken.trim()) { setError('Please paste your SimpleFIN Setup Token.'); return; }
+    setError(''); setBusy(true);
+    try {
+      const data = await apiCall('/api/accounts/simplefin/link', {
+        method: 'POST',
+        body: JSON.stringify({ setup_token: setupToken.trim() }),
+      }, token);
+      onConnect(data);
+    } catch (e: any) {
+      setError(e?.message || 'Could not link SimpleFIN.');
+    } finally { setBusy(false); }
+  };
+  return (
+    <ScrollView style={s.lightScreen} contentContainerStyle={{ padding: 23, paddingTop: 60, paddingBottom: 28 }} keyboardShouldPersistTaps="handled">
+      <View style={{ marginTop: 45, alignItems: 'center' }}>
+        <View style={s.connectLock}><Ionicons name="link" size={29} color={C.goldText} /></View>
+        <Text style={[s.eyebrow, { marginTop: 17 }]}>YOUR MONEY, IN ONE VIEW</Text>
+        <Text style={[s.onboardH1, { textAlign: 'center' }]}>Connect your first{'\n'}financial account.</Text>
+        <Text style={[s.onboardHint, { textAlign: 'center' }]}>Jaleter uses SimpleFIN to securely sync balances and transactions. We never ask for or store your bank password.</Text>
+      </View>
+      <View style={s.connectBenefits}>
+        {[
+          ['Automatic transactions', 'Keep Budget actuals current.'],
+          ['Accurate net worth', 'See cash and liabilities together.'],
+        ].map(([b, sm]) => (
+          <View key={b} style={{ flexDirection: 'row', gap: 11, alignItems: 'center', marginVertical: 10 }}>
+            <Ionicons name="checkmark" size={16} color="#a57537" />
+            <View style={{ flex: 1 }}><Text style={{ fontSize: 12, fontWeight: '700', color: C.ink }}>{b}</Text><Text style={{ fontSize: 10, color: C.muted2 }}>{sm}</Text></View>
+          </View>
+        ))}
+      </View>
+      {!showLink ? (
+        <GoldButton label="Connect with SimpleFIN" onPress={() => setShowLink(true)} testID="connect-simplefin" />
+      ) : (
+        <View>
+          <Text style={{ color: C.muted, fontSize: 11, marginBottom: 6, lineHeight: 16 }}>
+            1. Visit <Text style={{ fontWeight: '700', color: C.goldEyebrow }}>beta-bridge.simplefin.org</Text> and log in.
+            {'\n'}2. Tap <Text style={{ fontWeight: '700' }}>Create Setup Token</Text>, then copy it.
+            {'\n'}3. Paste the token below.
+          </Text>
+          <TextInput
+            testID="connect-setup-token"
+            style={[s.input, { minHeight: 80 }]}
+            value={setupToken}
+            onChangeText={setSetupToken}
+            multiline
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="Paste your SimpleFIN Setup Token here…"
+          />
+          {error ? <Text testID="connect-error" style={s.formError}>{error}</Text> : null}
+          <View style={{ marginTop: 12 }}>
+            <GoldButton label={busy ? 'Linking…' : 'Link accounts'} onPress={submit} disabled={busy || !setupToken.trim()} testID="connect-submit" />
+          </View>
         </View>
-      ))}
-    </View>
-    <GoldButton label="Connect with SimpleFIN" onPress={onConnect} testID="connect-simplefin" />
-    <Pressable onPress={onSkip} testID="connect-skip"><Text style={[s.loginLink, { marginTop: 20 }]}>Skip and enter manually</Text></Pressable>
-  </ScrollView>
-);
+      )}
+      <Pressable onPress={onSkip} testID="connect-skip"><Text style={[s.loginLink, { marginTop: 20 }]}>Skip and enter manually</Text></Pressable>
+    </ScrollView>
+  );
+};
 
 /* ---------------- Paywall ---------------- */
 const Paywall = ({ onContinue }: any) => (
@@ -925,44 +969,42 @@ const NotificationsSheet = ({ visible, close, onSave }: any) => {
   );
 };
 const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
-  const [step, setStep] = useState(1);
-  const [institution, setInstitution] = useState('');
-  useEffect(() => { if (visible) { setStep(1); setInstitution(''); } }, [visible]);
-  const banks = ['Chase', 'Bank of America', 'Capital One', 'Other'];
+  const { token } = useAuth();
+  const [setupToken, setSetupToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => { if (visible) { setSetupToken(''); setError(''); setBusy(false); } }, [visible]);
+  const submit = async () => {
+    if (!setupToken.trim()) { setError('Paste your SimpleFIN Setup Token.'); return; }
+    setError(''); setBusy(true);
+    try {
+      const data = await apiCall('/api/accounts/simplefin/link', {
+        method: 'POST',
+        body: JSON.stringify({ setup_token: setupToken.trim() }),
+      }, token);
+      onConfirm(data?.accounts || []);
+    } catch (e: any) { setError(e?.message || 'Could not link SimpleFIN.'); }
+    finally { setBusy(false); }
+  };
   return (
-    <Sheet visible={visible} close={close} title="Connect with SimpleFIN" subtitle={`Step ${step} of 3 · Secure preview flow`}>
-      {step === 1 && (
-        <View>
-          <Text style={{ color: '#817b72', fontSize: 11, marginBottom: 12 }}>Choose your financial institution.</Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 9 }}>
-            {banks.map(b => (
-              <Pressable key={b} testID={`bank-${b}`} onPress={() => setInstitution(b)} style={[s.bankBtn, institution === b && s.bankBtnSelected]}>
-                <Ionicons name="business-outline" size={18} color={institution === b ? '#8e632f' : '#5f5a52'} />
-                <Text style={{ fontSize: 11, color: institution === b ? '#8e632f' : '#5f5a52', marginTop: 6 }}>{b}</Text>
-              </Pressable>
-            ))}
-          </View>
-          <View style={{ marginTop: 14 }}><GoldButton label="Continue" onPress={() => setStep(2)} disabled={!institution} testID="link-step2" /></View>
-        </View>
-      )}
-      {step === 2 && (
-        <View style={s.secureHandoff}>
-          <Ionicons name="shield-checkmark" size={31} color="#a8783c" />
-          <Text style={{ fontFamily: F.serif, fontSize: 16, fontWeight: '700', marginTop: 8 }}>Authenticate on {institution}</Text>
-          <Text style={{ color: '#817b72', fontSize: 11, textAlign: 'center', marginTop: 6 }}>SimpleFIN handles authentication. Jaleter never receives your bank credentials.</Text>
-          <View style={{ marginTop: 14, alignSelf: 'stretch' }}><GoldButton label="Continue securely" onPress={() => setStep(3)} testID="link-step3" /></View>
-        </View>
-      )}
-      {step === 3 && (
-        <View>
-          <View style={s.subscriptionCard}>
-            <Text style={{ color: '#c9a86f', fontSize: 9, letterSpacing: 1 }}>READY TO CONNECT</Text>
-            <Text style={{ fontFamily: F.serif, fontSize: 18, fontWeight: '700', color: '#fff', marginVertical: 6 }}>{institution}</Text>
-            <Text style={{ color: '#a9a198', fontSize: 10 }}>2 accounts selected · daily transaction sync</Text>
-          </View>
-          <GoldButton label="Confirm connection" onPress={() => onConfirm([{ id: `${institution}-c`, name: 'Everyday Checking', institution }, { id: `${institution}-s`, name: 'High-Yield Savings', institution }])} testID="link-confirm" />
-        </View>
-      )}
+    <Sheet visible={visible} close={close} title="Connect with SimpleFIN" subtitle="Paste the Setup Token from beta-bridge.simplefin.org">
+      <Text style={{ color: '#817b72', fontSize: 11, marginBottom: 10, lineHeight: 16 }}>
+        Visit <Text style={{ fontWeight: '700', color: C.goldEyebrow }}>beta-bridge.simplefin.org</Text>, log in, tap <Text style={{ fontWeight: '700' }}>Create Setup Token</Text>, and paste it below.
+      </Text>
+      <TextInput
+        testID="link-setup-token"
+        style={[s.input, { minHeight: 90 }]}
+        value={setupToken}
+        onChangeText={setSetupToken}
+        multiline
+        autoCapitalize="none"
+        autoCorrect={false}
+        placeholder="Paste your Setup Token here…"
+      />
+      {error ? <Text testID="link-error" style={s.formError}>{error}</Text> : null}
+      <View style={{ marginTop: 14 }}>
+        <GoldButton label={busy ? 'Linking…' : 'Link account'} onPress={submit} disabled={busy || !setupToken.trim()} testID="link-submit" />
+      </View>
     </Sheet>
   );
 };
@@ -1048,7 +1090,7 @@ function MainApp() {
       {!auth.user && stage === 'login' && <Login back={() => setStage('welcome')} goSignup={() => setStage('signup')} goForgot={() => setStage('forgot')} />}
       {!auth.user && stage === 'forgot' && <ForgotPassword back={() => setStage('login')} onSent={(email: string, token: string | null) => { setResetInfo({ email, token }); setStage('reset'); }} />}
       {!auth.user && stage === 'reset' && <ResetPassword back={() => setStage('login')} email={resetInfo.email} prefilledToken={resetInfo.token} onDone={() => { setResetInfo({ email: '', token: null }); setStage('app'); }} />}
-      {auth.user && stage === 'connect' && <FirstConnect onConnect={() => { setLinkedAccounts([{ id: 'chase-checking', name: 'Everyday Checking' }]); setStage('paywall'); }} onSkip={() => setStage('paywall')} />}
+      {auth.user && stage === 'connect' && <FirstConnect onConnect={(data: any) => { setLinkedAccounts(data?.accounts || []); setStage('paywall'); }} onSkip={() => setStage('paywall')} />}
       {auth.user && stage === 'paywall' && <Paywall onContinue={() => setStage('app')} />}
       {auth.user && stage === 'app' && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>

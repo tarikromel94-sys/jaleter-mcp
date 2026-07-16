@@ -49,6 +49,8 @@ async function callApi(path: string, options: RequestInit = {}, token?: string |
   return res.json();
 }
 
+export { callApi as apiCall };
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<AuthUser | null>(null);

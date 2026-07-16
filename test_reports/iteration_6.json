@@ -1,0 +1,47 @@
+{
+  "summary": "SimpleFIN Bridge integration verified end-to-end. Backend: 16/16 pytest passed after fixing a critical import-order bug — server.py was importing simplefin_service (which reads SIMPLEFIN_ENC_KEY at module load) BEFORE calling load_dotenv(). That caused every real link attempt to raise 'SIMPLEFIN_ENC_KEY is not configured' → 500. Moved load_dotenv() above the simplefin_service import in /app/backend/server.py; restarted supervisor backend; verified via live demo Setup Token from https://beta-bridge.simplefin.org/info/developers that /api/accounts/simplefin/link now returns 200 with linked_count>0 and balances. Tests cover: Fernet encrypt/decrypt round-trip + InvalidToken → SimpleFinError('Access URL decryption failed'); SIMPLEFIN_ENC_KEY is a 44-char base64 ending with '='; auth-gating on GET /api/accounts, POST /api/accounts/simplefin/link, POST /api/accounts/sync (all 401 without Bearer); invalid Setup Token → 400 'Invalid Setup Token format'; well-formed base64 decoding to a non-https string → 400 'Setup Token did not decode to a valid claim URL'; live demo link → 200; GET /api/accounts after link returns balances; POST /api/accounts/sync inserts transactions and DB-level unique index on (user_id,account_id,external_id) prevents duplicates (verified via MongoDB aggregation for dup tuples = []); DELETE /api/accounts/link/{link_id} with bad ObjectId → 400, valid → 200 then 404 on repeat; auth regression /me + login still valid with password123. Frontend (390x844): logged in with alex+test1@jaleter.app/password123 → Home dashboard → nav-more → more-settings → settings-accounts → AccountLinkSheet modal opened with link-setup-token multi-line TextInput + link-submit GoldButton + 'Paste the Setup Token from beta-bridge.simplefin.org' subtitle. Typed 'notreal' → tapped link-submit (had to scrollIntoView because sheet is tall) → link-error rendered 'Invalid Setup Token format' from backend, modal stayed open (screenshot captured). FirstConnect testIDs (connect-simplefin, connect-setup-token, connect-submit, connect-error, connect-skip) all present in code (index.tsx:426-450) but only reachable via a fresh signup path — not exercised for the existing user. Regression: dark-mode pill and settings-logout still functional. Final /api/auth/login → 200 confirming password123 preserved.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "N/A", "issue": "simplefin_service.py reads SIMPLEFIN_ENC_KEY at module import time. Any future refactor that puts load_dotenv() below the import will silently re-break the link endpoint. Consider making Fernet init lazy (already partially — _fernet is None if key missing — but the check inside _require_fernet raises a stringly-typed SimpleFinError that server.py handles as 502 for /accounts and un-caught 500 for /link). Recommendation: catch SimpleFinError around sf_encrypt() in simplefin_link so misconfigured envs return 500 with 'SIMPLEFIN_ENC_KEY is not configured' explicitly rather than an opaque 500."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AccountLinkSheet (link-submit button)", "issue": "On 390x844, the Sheet content is tall enough that the link-submit GoldButton falls below the viewport when the token field has text. Playwright had to scroll into view before tap; a real thumb user must scroll inside the sheet body to reach the button. Consider wrapping sheet body in a ScrollView or shrinking the vertical padding.", "testID": "link-submit", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_simplefin.py",
+    "/app/test_reports/pytest/simplefin_results.xml"
+  ],
+  "action_items": [
+    "(informational) Import-order bug in /app/backend/server.py has been fixed by the testing agent (load_dotenv now runs before the simplefin_service import). Please review the change and keep the invariant in future edits.",
+    "Consider wrapping the AccountLinkSheet body in a scrollable container so the link-submit button is always reachable on 390px height without programmatic scroll.",
+    "Optional: add explicit try/except SimpleFinError around sf_encrypt() inside simplefin_link() so a misconfigured SIMPLEFIN_ENC_KEY yields a clean 500 with a diagnostic 'detail' rather than an opaque server error."
+  ],
+  "critical_code_review_comments": [
+    "CRITICAL (fixed): server.py imports simplefin_service (which reads SIMPLEFIN_ENC_KEY at module load) BEFORE calling load_dotenv(). Because supervisor does NOT inject SIMPLEFIN_ENC_KEY into the backend program's environment, the Fernet key was empty at import time and every link attempt returned 500. Moved load_dotenv() above the import.",
+    "simplefin_service.claim_setup_token: catches ALL exceptions during base64 decode as 'Invalid Setup Token format' — 'notreal' (7 chars) padded to 8 (b64 requires multiple of 4) actually decodes without error to garbage bytes; whether the error surfaces as 'Invalid Setup Token format' vs 'Setup Token did not decode to a valid claim URL' depends on whether the decoded bytes are valid UTF-8. Test accepts either wording. Observed 'Invalid Setup Token format' in practice — good.",
+    "server.py simplefin_link: on SimpleFIN 5xx or timeouts it correctly re-raises as 502; on client-side Setup Token errors it raises 400. Consider also handling SimpleFinError from sf_encrypt (SIMPLEFIN_ENC_KEY missing) — currently propagates as 500.",
+    "server.py sync_accounts: uses upsert with $setOnInsert keyed on (user_id, account_id, external_id) which matches the unique index. Duplicate protection verified by mongo aggregate.",
+    "server.py list_accounts: on decryption or SimpleFIN failure per-link, returns partial results with {link_id, org_name, error} — good UX. But it makes a synchronous httpx call per linked account inside a single request; consider asyncio.gather for multi-link users.",
+    "server.py DELETE /accounts/link/{link_id}: correctly scopes by user_id, so another user's link is not affected. Invalid ObjectId → 400.",
+    "simplefin_service.map_transaction: falls back to '{account_id}:{posted}:{amount_raw}' as external_id when txn.id is missing — SimpleFIN /transactions items DO come with 'id', so this fallback should rarely trigger, but note that if it does the (account_id, posted, amount) tuple must be stable across syncs for dedup to work.",
+    "Frontend AccountLinkSheet: correctly shows subtitle 'Paste the Setup Token from beta-bridge.simplefin.org' and inline instructions with the domain — matches spec. Error rendering hooks into the response body's 'detail' field via apiCall's default error extraction."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (moved load_dotenv above simplefin_service import — CRITICAL FIX)",
+    "/app/backend/tests/test_simplefin.py (created)",
+    "/app/test_reports/pytest/simplefin_results.xml (generated)"
+  ],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "100% (login → settings → AccountLinkSheet → bad token → link-error verified)"},
+  "seed_data_creation": "Cleaned up linked_accounts and bank_transactions for user_c1b5984b5e0c (alex+test1@jaleter.app) after live demo link tests. Password confirmed still 'password123' via /api/auth/login → 200 at end of run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "The load_dotenv order in server.py MUST stay before the simplefin_service import — regressing that will silently break every /api/accounts/simplefin/link call with a 500 (opaque). SimpleFIN demo endpoint (https://beta-bridge.simplefin.org) IS reachable from the container. Demo Setup Tokens are single-use — extract a fresh one from the /info/developers page HTML (long base64 string) at test time. The demo /accounts endpoint returns FRESH RANDOM transactions on each call, so counting txns before/after sync is unreliable; assert unique-tuple invariant via a mongo aggregation instead. When testing the AccountLinkSheet on 390x844, link-submit is below the fold — either wait for the sheet's body to scroll or use element.scrollIntoView() from Playwright. Seed creds unchanged: alex+test1@jaleter.app / password123.",
+  "rca_of_issue": "Root cause: In /app/backend/server.py, `from simplefin_service import ...` executed at line 23 while `load_dotenv(ROOT_DIR / '.env')` was at line 33. Python module imports run top-down, so simplefin_service.py's module-level `_ENC_KEY = os.getenv('SIMPLEFIN_ENC_KEY', '').encode() or b''` read an empty string from os.environ (supervisor doesn't inject SIMPLEFIN_ENC_KEY, and .env hadn't been loaded yet). `_fernet` stayed None. Every subsequent call to sf_encrypt()/sf_decrypt() raised SimpleFinError('SIMPLEFIN_ENC_KEY is not configured'). In server.py's simplefin_link handler, sf_encrypt is called OUTSIDE the try/except around SimpleFinError, so it propagated as an unhandled 500. Reproduction: POST /api/accounts/simplefin/link with any valid Setup Token → 500. Fix applied: reordered server.py so load_dotenv runs before the import; restarted backend; re-ran pytest — all 16 tests pass including a live end-to-end demo link, GET /accounts, POST /accounts/sync (with dup-invariant DB check), DELETE /accounts/link/{id}."
+}

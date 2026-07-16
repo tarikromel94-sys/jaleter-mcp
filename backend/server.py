@@ -19,10 +19,19 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from email_service import build_password_reset_email, is_configured as sendgrid_ready, send_email
-
+# IMPORTANT: load .env BEFORE importing modules that read env at module level
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+from email_service import build_password_reset_email, is_configured as sendgrid_ready, send_email
+from simplefin_service import (
+    SimpleFinError,
+    claim_setup_token,
+    decrypt as sf_decrypt,
+    encrypt as sf_encrypt,
+    fetch_accounts as sf_fetch_accounts,
+    map_transaction as sf_map_transaction,
+)
 
 MONGO_URL = os.environ['MONGO_URL']
 DB_NAME = os.environ['DB_NAME']
@@ -90,6 +99,10 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str = Field(min_length=8, max_length=200)
+
+
+class SimpleFinLinkRequest(BaseModel):
+    setup_token: str
 
 
 # ------- Helpers -------
@@ -169,6 +182,9 @@ async def _startup():
     await db.user_sessions.create_index('expires_at', expireAfterSeconds=0)
     await db.password_resets.create_index('token', unique=True)
     await db.password_resets.create_index('expires_at', expireAfterSeconds=0)
+    await db.linked_accounts.create_index([('user_id', 1)])
+    await db.bank_transactions.create_index([('user_id', 1), ('account_id', 1), ('external_id', 1)], unique=True)
+    await db.bank_transactions.create_index([('user_id', 1), ('date', -1)])
 
 
 @app.on_event('shutdown')
@@ -345,6 +361,134 @@ async def reset_password(payload: ResetPasswordRequest, request: Request):
     user = await db.users.find_one({'user_id': row['user_id']}, {'_id': 0})
     token = create_access_token(row['user_id'])
     return AuthResponse(user=public_user(user), token=token)
+
+
+# ------- SimpleFIN Banking Data -------
+def _account_summary(linked_id: str, org_name: str, org_domain: Optional[str], acc: dict, last_sync: Optional[datetime]) -> dict:
+    try:
+        balance = float(acc.get('balance') or 0)
+    except (TypeError, ValueError):
+        balance = 0.0
+    bd_ts = acc.get('balance-date')
+    balance_date = datetime.fromtimestamp(int(bd_ts), tz=timezone.utc).isoformat() if bd_ts else None
+    return {
+        'link_id': linked_id,
+        'account_id': acc.get('id'),
+        'name': acc.get('name') or 'Account',
+        'currency': acc.get('currency') or 'USD',
+        'balance': balance,
+        'balance_date': balance_date,
+        'org_name': org_name,
+        'org_domain': org_domain,
+        'last_sync_at': last_sync.isoformat() if last_sync else None,
+    }
+
+
+@api_router.post('/accounts/simplefin/link')
+async def simplefin_link(payload: SimpleFinLinkRequest, request: Request, current_user: dict = Depends(get_current_user)):
+    try:
+        access_url = await claim_setup_token(payload.setup_token)
+    except SimpleFinError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        account_set = await sf_fetch_accounts(access_url, balances_only=True)
+    except SimpleFinError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    org = account_set.get('org') or {}
+    accounts = account_set.get('accounts') or []
+    doc = {
+        'user_id': current_user['user_id'],
+        'access_url_encrypted': sf_encrypt(access_url),
+        'org_name': org.get('name'),
+        'org_domain': org.get('domain'),
+        'account_ids': [a.get('id') for a in accounts if a.get('id')],
+        'created_at': datetime.now(timezone.utc),
+        'last_sync_at': None,
+        'last_sync_start_date': None,
+    }
+    result = await db.linked_accounts.insert_one(doc)
+    return {
+        'link_id': str(result.inserted_id),
+        'org_name': org.get('name'),
+        'linked_count': len(doc['account_ids']),
+        'accounts': [_account_summary(str(result.inserted_id), org.get('name') or '', org.get('domain'), a, None) for a in accounts],
+    }
+
+
+@api_router.get('/accounts')
+async def list_accounts(current_user: dict = Depends(get_current_user)):
+    cursor = db.linked_accounts.find({'user_id': current_user['user_id']}, {'access_url_encrypted': 1, 'org_name': 1, 'org_domain': 1, 'last_sync_at': 1})
+    docs = await cursor.to_list(length=50)
+    summaries: list[dict] = []
+    for doc in docs:
+        link_id = str(doc['_id'])
+        try:
+            access_url = sf_decrypt(doc['access_url_encrypted'])
+            account_set = await sf_fetch_accounts(access_url, balances_only=True)
+        except SimpleFinError as e:
+            summaries.append({'link_id': link_id, 'org_name': doc.get('org_name'), 'error': str(e)})
+            continue
+        org = account_set.get('org') or {}
+        for acc in account_set.get('accounts') or []:
+            summaries.append(_account_summary(link_id, org.get('name') or doc.get('org_name') or '', org.get('domain') or doc.get('org_domain'), acc, doc.get('last_sync_at')))
+    return {'accounts': summaries}
+
+
+@api_router.post('/accounts/sync')
+async def sync_accounts(current_user: dict = Depends(get_current_user)):
+    cursor = db.linked_accounts.find({'user_id': current_user['user_id']})
+    docs = await cursor.to_list(length=50)
+    total_new = 0
+    errors: list[dict] = []
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    for doc in docs:
+        try:
+            access_url = sf_decrypt(doc['access_url_encrypted'])
+            account_set = await sf_fetch_accounts(access_url, balances_only=False, start_date=doc.get('last_sync_start_date'))
+        except SimpleFinError as e:
+            errors.append({'link_id': str(doc['_id']), 'error': str(e)})
+            continue
+        org_name = (account_set.get('org') or {}).get('name') or doc.get('org_name') or 'SimpleFIN'
+        for acc in account_set.get('accounts') or []:
+            account_id = acc.get('id')
+            for txn in acc.get('transactions') or []:
+                mapped = sf_map_transaction(current_user['user_id'], account_id, org_name, txn)
+                try:
+                    await db.bank_transactions.update_one(
+                        {'user_id': mapped['user_id'], 'account_id': mapped['account_id'], 'external_id': mapped['external_id']},
+                        {'$setOnInsert': mapped},
+                        upsert=True,
+                    )
+                    total_new += 1
+                except Exception as e:  # noqa: BLE001
+                    logger.warning('bank_transactions upsert failed: %s', e)
+        await db.linked_accounts.update_one(
+            {'_id': doc['_id']},
+            {'$set': {'last_sync_at': datetime.now(timezone.utc), 'last_sync_start_date': now_ts}},
+        )
+    return {'synced': total_new, 'errors': errors}
+
+
+@api_router.delete('/accounts/link/{link_id}')
+async def unlink(link_id: str, current_user: dict = Depends(get_current_user)):
+    from bson import ObjectId
+    try:
+        oid = ObjectId(link_id)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail='Invalid link id')
+    res = await db.linked_accounts.delete_one({'_id': oid, 'user_id': current_user['user_id']})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail='Linked account not found')
+    return {'ok': True, 'note': 'Remove this app from your SimpleFIN Bridge dashboard to fully revoke access.'}
+
+
+@api_router.get('/accounts/transactions')
+async def list_bank_transactions(current_user: dict = Depends(get_current_user), limit: int = 50):
+    cursor = db.bank_transactions.find(
+        {'user_id': current_user['user_id']},
+        {'_id': 0, 'user_id': 0, 'raw': 0},
+    ).sort('date', -1).limit(min(max(limit, 1), 200))
+    return {'transactions': [{**t, 'date': t['date'].isoformat() if isinstance(t.get('date'), datetime) else t.get('date')} async for t in cursor]}
 
 
 app.include_router(api_router)
