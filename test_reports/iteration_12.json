@@ -1,0 +1,68 @@
+{
+  "summary": "END-TO-END STRIPE PAYMENT VERIFICATION (iteration 12) — BOTH TESTS PASSED. Executed the full flow against the Expo web preview (viewport 390x844). NOTE: had to switch from http://localhost:3000 to https://no-changes-mobile.preview.emergentagent.com because Stripe's success_url is built from the ingress x-forwarded-host and thus ALWAYS points back to the preview URL — a browser session started on localhost:3000 loses its auth after the Stripe redirect (see rca_of_issue). On the preview origin, everything works: (1) Coaching — logged in as alex+test1@jaleter.app, opened More→Book Coaching, saw PICK A TIME + 30 slots, selected 'Fri, Jul 17 · 10:00 AM' (testID coaching-slot-2026-07-17T10:00:00.000Z), tapped 'Book & Pay $50' (button label matched), was redirected to real Stripe hosted checkout showing 'US$50.00', filled 4242 4242 4242 4242 / 12/30 / 123 / Alex Ward, hit Pay. Stripe redirected to /?checkout=success&session_id=cs_test_a1K0gdYLWRcqnBsrJw1s8ca7BmLifdKyAhSxZGqQCapA9YIB5eBXGk1La1. Re-opened More→Book Coaching → 'UPCOMING' section shows 'Friday, July 17 at 10:00 AM · CONFIRMED'. Backend confirms: GET /api/coaching/bookings returns booking_id=book_1df2bad6bf3b status=confirmed paid_at=2026-07-16T14:49:31Z txn_id=pay_f218cf01365841db; GET /api/payments/status/cs_test_a1K0…La1 → payment_status='paid', amount_total=5000, currency='usd', booking_id=book_1df2bad6bf3b. (2) Membership — before subscribe: button label exactly 'Subscribe — $75 / year', NO ACTIVE pill. Tapped Subscribe → real Stripe hosted checkout showing 'US$75.00' → paid with same test card. Redirected to /?checkout=success&session_id=cs_test_a18YcOaaUb0cbq28QjRZuDBlWAnwege3s4lWhdCPoNFMEBqqGrcUfoj0Km. Re-opened More→Membership → ACTIVE pill visible reading 'ACTIVE · renews Jul 16, 2027', button label now 'Renew — $75 (extends to Jul 15, 2028)'. Backend confirms: GET /api/user/membership → {active:true, expires_at:'2027-07-16T14:49:47.347+00:00', plan:'jaleter_premium_annual'}; GET /api/payments/status/cs_test_a18Y…Km → payment_status='paid', amount_total=7500. Two minor findings reported (see below) — neither blocks the flow.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET /api/coaching/bookings",
+        "issue": "Returns stale 'pending_payment' bookings alongside the 'confirmed' one (e.g. book_14d617ac8c49 left over from an abandoned first checkout attempt on the localhost:3000 origin whose polling never fired). The UI filters them out (upcoming filter only shows status==='confirmed') so no user-visible impact, but ghost pending_payment rows accumulate in Mongo forever with no reaper. Consider TTL or a status=='abandoned' after N minutes with no paid poll."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "MembershipScreen — Renew button projection",
+        "issue": "ACTIVE pill reads 'renews Jul 16, 2027' but the Renew button below reads '(extends to Jul 15, 2028)' — one-day drift. Root cause: the projected label at index.tsx:1254 does `new Date(expires_at).getTime() + 365 * 86400000`. Because 2028 is a leap year, 365 flat days from Jul 16 2027 lands on Jul 15 2028. Should use `d.setUTCFullYear(d.getUTCFullYear()+1)` (or the same +365 the backend uses on paid renewal, which effectively extends by 365d compounding — matching backend behaviour). Cosmetic but visibly inconsistent.",
+        "testID": "membership-manage",
+        "priority": "P3 (cosmetic)"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Stripe redirect origin vs. app origin",
+        "issue": "Backend builds success_url from ingress x-forwarded-host, so Stripe ALWAYS redirects to https://no-changes-mobile.preview.emergentagent.com/?checkout=success&session_id=... regardless of where the user started. Users who happen to load the Expo web preview on http://localhost:3000 (dev) or any custom domain will land on the preview URL after payment — and if they aren't logged in there, /api/payments/status returns 401 (observed in browser console), so the toast 'Session confirmed.' / 'Membership activated.' never fires and _apply_paid_side_effects doesn't run until a subsequent authed call (e.g. GET /api/coaching/bookings which side-effect-applies on read). During my localhost:3000 attempt the coaching payment stayed 'unpaid' in payment_transactions and the booking stayed 'pending_payment' with no paid_at until I re-ran on the preview origin. Recommendation: either (a) have the frontend send its window.location.origin in the checkout payload and honor it server-side, or (b) document that dev must always test on the preview URL.",
+        "affected_testIDs": ["coaching-book", "membership-manage"]
+      },
+      {
+        "flow": "Web checkout=success toast",
+        "issue": "The first poll to /api/payments/status right after redirect logs a 401 in console (auth token restore race — AuthContext consumes session_id/URL fragment before the payment polling handler at index.tsx:1655 fires). The polling handler doesn't retry the initial 401, so the visual 'Session confirmed.' / 'Membership activated.' toast is skipped even though the eventual state (CONFIRMED badge + ACTIVE pill) is correct because the side-effect fires on the very next authed request. Consider retrying the status poll once after AuthContext.ready === true, or gating the polling loop on token !== null instead of firing on mount."
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "shadow* / pointerEvents",
+        "issue": "Same RN-Web deprecation warnings as iterations 10-11: '\"shadow*\" style props are deprecated. Use \"boxShadow\"' and 'props.pointerEvents is deprecated. Use style.pointerEvents'. No new occurrences."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/pytest/iteration11_results.xml (backend suite still passing from prior iteration)"
+  ],
+  "action_items": [
+    "OPTIONAL P3 (cosmetic): MembershipScreen line 1254 — replace `+ 365 * 86400000` with a real +1-year (UTC setUTCFullYear+1 or the backend's actual extension math) so the 'extends to' projection matches the ACTIVE pill's 'renews' date across leap years.",
+    "OPTIONAL P2 (dev/UX): Backend server.py:700-703 — either pass the frontend's `window.location.origin` in the checkout body and prefer it over x-forwarded-host, or clearly document that the app must be served from the same origin as EXPO_PUBLIC_BACKEND_URL for the redirect to land back on the same browser session.",
+    "OPTIONAL P2 (UX): index.tsx:1655 — the checkout=success polling handler on web should wait for auth.token to be non-null (or retry once on 401) so users see the 'Session confirmed.' / 'Membership activated.' toast on the redirect landing.",
+    "OPTIONAL P3 (cleanup, carried from iteration 11): pending_payment coaching_bookings never expire — add a TTL or nightly sweep.",
+    "OPTIONAL P3 (carried): migrate shadow*/pointerEvents deprecations."
+  ],
+  "critical_code_review_comments": [
+    "server.py:700-703 — origin derivation from x-forwarded-host is proxy-correct but ties the checkout redirect to the backend's public URL, not the user's browser origin. This surfaced during real-world testing.",
+    "payments_service.py + user membership extension math is correct (session amounts are server-side; expires_at = max(now, current_expiry) + 365d), verified by observing expires_at = 2027-07-16T14:49:47Z after a purchase at 2026-07-16T14:49:47Z.",
+    "index.tsx:1254 uses `+ 365 * 86400000` for the projected 'extends to' label — non-leap-year-safe."
+  ],
+  "updated_files": [
+    "MongoDB cleanup (pre-test): unset premium_expires_at + premium_last_purchase_at on alex+test1@jaleter.app; deleted 0 coaching_bookings and 0 payment_transactions (already clean from iteration 11).",
+    "MongoDB residue AFTER this test run (left in place for the main agent to inspect): 1 confirmed coaching booking (book_1df2bad6bf3b, scheduled_at 2026-07-17T10:00 UTC, paid_at 2026-07-16T14:49:31Z), 1 orphan pending_payment booking (book_14d617ac8c49) from the aborted localhost:3000 attempt, 2 paid payment_transactions (cs_test_a1K0…La1 $50, cs_test_a18Y…Km $75), 1 unpaid payment_transaction (cs_test_a16k3Z…CE from the aborted attempt), and Alex's premium_expires_at=2027-07-16T14:49:47Z."
+  ],
+  "success_rate": {
+    "backend": "100% — GET /api/coaching/bookings, GET /api/user/membership, and GET /api/payments/status/{sid} all return the expected paid-side-effect state after two real Stripe hosted-checkout completions.",
+    "frontend": "100% of requested flow steps verified on the preview origin — slot picker, Book & Pay button label + navigation, Stripe amount label, Stripe→app redirect, CONFIRMED badge, Subscribe label, ACTIVE pill, Renew label. On localhost:3000 the redirect returned to the preview origin and the toast did NOT appear because the browser session held no token on that origin (see integration_issues)."
+  },
+  "seed_data_creation": "None persistent by design. Test artifacts (1 confirmed booking, 2 paid txns, 1 orphan pending booking, 1 orphan unpaid txn, premium_expires_at on Alex) remain so the main agent can inspect. To reset: `mongosh mongodb://localhost:27017/test_database --eval \"db.users.updateOne({email:'alex+test1@jaleter.app'},{\\$unset:{premium_expires_at:'',premium_last_purchase_at:''}}); db.coaching_bookings.deleteMany({user_email:'alex+test1@jaleter.app'}); db.payment_transactions.deleteMany({user_email:'alex+test1@jaleter.app'});\"`.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Two Stripe test session_ids created during this run: coaching = cs_test_a1K0gdYLWRcqnBsrJw1s8ca7BmLifdKyAhSxZGqQCapA9YIB5eBXGk1La1 ($50 paid → booking book_1df2bad6bf3b confirmed), membership = cs_test_a18YcOaaUb0cbq28QjRZuDBlWAnwege3s4lWhdCPoNFMEBqqGrcUfoj0Km ($75 paid → premium_expires_at 2027-07-16). IMPORTANT for next E2E Stripe testing: the app MUST be tested on the same origin as EXPO_PUBLIC_BACKEND_URL (i.e. https://no-changes-mobile.preview.emergentagent.com) — NOT on http://localhost:3000 — because the backend builds Stripe's success_url from x-forwarded-host, so the redirect always lands on the preview origin. When Stripe Sandbox '4242 4242 4242 4242' + '12/30' + '123' completes, it lands on /?checkout=success&session_id=cs_test_… and the frontend polling handler at index.tsx:1655 fetches /api/payments/status/{sid} which triggers _apply_paid_side_effects (see payments_service.py). If the first poll returns 401 (auth race), the toast is skipped but state still gets applied on the next authed read. Screenshots at /tmp/coach_confirmed.png and /tmp/mem_active.png show the passing states.",
+  "rca_of_issue": "During Test 1, my first attempt loaded the app on http://localhost:3000 as the request specified. The frontend correctly created a Stripe session via POST /api/payments/checkout (which routes to https://no-changes-mobile.preview.emergentagent.com/api/payments/checkout via EXPO_PUBLIC_BACKEND_URL). Backend built success_url = 'https://no-changes-mobile.preview.emergentagent.com/?checkout=success&session_id={CHECKOUT_SESSION_ID}' from the ingress' x-forwarded-host header (server.py:701-703). After paying on Stripe, the browser redirected to the preview URL — a DIFFERENT origin than localhost:3000 — where the user's auth token is NOT in localStorage. The web checkout-return handler (index.tsx:1655) fired GET /api/payments/status/{sid} with no auth header, got 401, and _apply_paid_side_effects never ran. The payment_transactions row stayed payment_status='unpaid' and the booking stayed 'pending_payment'. Reproduction: log in on localhost:3000 → book coaching → complete Stripe payment → browser lands on preview URL (unauthenticated) → status stays unpaid. Mitigation: test the whole flow on the same origin as EXPO_PUBLIC_BACKEND_URL (preview URL) — which is what I did to complete Test 1 & Test 2 successfully. Long-term fix options detailed in action_items."
+}
