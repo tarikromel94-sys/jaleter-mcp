@@ -142,42 +142,65 @@ const Sparkle = ({ size = 20, color = C.goldGlow, style }: any) => (
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const serifFont = Platform.select({ ios: 'PlayfairDisplay', android: 'PlayfairDisplay', default: 'PlayfairDisplay' });
 
-function GoldWaves() {
-  const height = SCREEN_HEIGHT;
-  const waves = [
-    { y: height * 0.49, opacity: 0.17, width: 0.7 },
-    { y: height * 0.51, opacity: 0.22, width: 0.75 },
-    { y: height * 0.53, opacity: 0.3, width: 0.85 },
-    { y: height * 0.55, opacity: 0.42, width: 1 },
-    { y: height * 0.57, opacity: 0.65, width: 1.25 },
-    { y: height * 0.59, opacity: 0.9, width: 1.55 },
-    { y: height * 0.61, opacity: 0.38, width: 0.9 },
-    { y: height * 0.63, opacity: 0.2, width: 0.7 },
+/**
+ * Gold silk-ribbon: a bundle of hairline strands living in the lower-middle band
+ * of the screen only. Each strand shares the same silhouette but is offset
+ * vertically by a small amount so the group reads as one flowing ribbon.
+ * The path starts off-screen left at ~45% height, dips through the lower-middle,
+ * and lifts toward the right edge.
+ */
+function GoldRibbon() {
+  const H = SCREEN_HEIGHT;
+  const W = SCREEN_WIDTH;
+  const baseY = H * 0.60;                      // ribbon centerline
+  const bandTop = H * 0.53;                    // top of allowed band
+  // Vertical offsets for each strand relative to baseY (in px). Positive = below.
+  const strands = [
+    { dy: -30, w: 0.5, o: 0.10, color: '#8a6a34' },
+    { dy: -22, w: 0.5, o: 0.14, color: '#a17a3e' },
+    { dy: -14, w: 0.6, o: 0.18, color: '#b58547' },
+    { dy: -6,  w: 0.7, o: 0.28, color: '#c99553' },
+    { dy:  0,  w: 0.9, o: 0.55, color: '#e6c07b' }, // central brighter
+    { dy:  6,  w: 0.9, o: 0.48, color: '#dcb26a' }, // central brighter
+    { dy: 14,  w: 0.7, o: 0.30, color: '#c99553' },
+    { dy: 22,  w: 0.6, o: 0.20, color: '#b58547' },
+    { dy: 30,  w: 0.5, o: 0.14, color: '#96723c' },
+    { dy: 38,  w: 0.5, o: 0.09, color: '#7a5e2f' },
   ];
+  const makePath = (dy: number) => {
+    // Start off-screen left at 45% height (slightly above baseY), curve down through
+    // the lower-middle, then rise toward the right edge. Keeps the whole silhouette
+    // inside the 22-25% band around baseY.
+    const startY = H * 0.45 + dy;
+    const dipY = baseY + 40 + dy;
+    const endY = H * 0.50 + dy;
+    return `M -60 ${startY} C ${W * 0.22} ${startY + 60}, ${W * 0.48} ${dipY}, ${W * 0.70} ${dipY - 25} C ${W * 0.88} ${dipY - 55}, ${W * 1.02} ${endY - 20}, ${W + 80} ${endY - 40}`;
+  };
   return (
     <>
-      {waves.map((wave, index) => (
+      {strands.map((strand, i) => (
         <Path
-          key={`wave-${index}`}
-          d={`M -70 ${wave.y - 95} C ${SCREEN_WIDTH * 0.12} ${wave.y + 50}, ${SCREEN_WIDTH * 0.36} ${wave.y + 125}, ${SCREEN_WIDTH * 0.59} ${wave.y + 84} C ${SCREEN_WIDTH * 0.78} ${wave.y + 50}, ${SCREEN_WIDTH * 0.82} ${wave.y - 88}, ${SCREEN_WIDTH + 80} ${wave.y - 155}`}
+          key={`ribbon-${i}`}
+          d={makePath(strand.dy)}
           fill="none"
-          stroke="#E7B866"
-          strokeWidth={wave.width}
-          strokeOpacity={wave.opacity}
+          stroke={strand.color}
+          strokeWidth={strand.w}
+          strokeOpacity={strand.o}
+          strokeLinecap="round"
         />
       ))}
-      <Path
-        d={`M -80 ${height * 0.43} C ${SCREEN_WIDTH * 0.16} ${height * 0.68}, ${SCREEN_WIDTH * 0.46} ${height * 0.73}, ${SCREEN_WIDTH * 0.67} ${height * 0.61} C ${SCREEN_WIDTH * 0.82} ${height * 0.52}, ${SCREEN_WIDTH * 0.84} ${height * 0.42}, ${SCREEN_WIDTH + 70} ${height * 0.35}`}
-        fill="none" stroke="#F1C87D" strokeWidth="2" strokeOpacity="0.8"
-      />
-      <Path
-        d={`M -80 ${height * 0.44} C ${SCREEN_WIDTH * 0.17} ${height * 0.69}, ${SCREEN_WIDTH * 0.47} ${height * 0.74}, ${SCREEN_WIDTH * 0.68} ${height * 0.62} C ${SCREEN_WIDTH * 0.83} ${height * 0.53}, ${SCREEN_WIDTH * 0.85} ${height * 0.43}, ${SCREEN_WIDTH + 70} ${height * 0.36}`}
-        fill="none" stroke="#E4A94B" strokeWidth="6" strokeOpacity="0.08"
-      />
+      {/* Reference clamp — invisible, just documents the 22-25% band constraint. */}
+      <Rect x={0} y={bandTop} width={W} height={H * 0.24} fill="transparent" />
     </>
   );
 }
 
+/**
+ * Background: pure #090908 field + a single, extremely faint warm glow
+ * biased to the bottom-right. Never resembles a visible circle/panel;
+ * gradient stops fade to full opacity by ~45% radius so >75% of the
+ * background stays truly black.
+ */
 function BackgroundArtwork() {
   return (
     <Svg
@@ -188,120 +211,138 @@ function BackgroundArtwork() {
       pointerEvents="none"
     >
       <Defs>
-        <RadialGradient id="topGlow" cx="28%" cy="10%" rx="72%" ry="65%">
-          <Stop offset="0%" stopColor="#463720" stopOpacity="0.25" />
-          <Stop offset="45%" stopColor="#201B13" stopOpacity="0.11" />
-          <Stop offset="100%" stopColor="#080807" stopOpacity="0" />
-        </RadialGradient>
-        <RadialGradient id="goldGlow" cx="91%" cy="66%" rx="65%" ry="48%">
-          <Stop offset="0%" stopColor="#E2AD58" stopOpacity="0.26" />
-          <Stop offset="35%" stopColor="#8E6029" stopOpacity="0.11" />
-          <Stop offset="100%" stopColor="#080807" stopOpacity="0" />
-        </RadialGradient>
-        <RadialGradient id="leftGlow" cx="0%" cy="78%" rx="55%" ry="42%">
-          <Stop offset="0%" stopColor="#C9903F" stopOpacity="0.15" />
-          <Stop offset="100%" stopColor="#080807" stopOpacity="0" />
+        <RadialGradient id="ambient" cx="86%" cy="88%" rx="55%" ry="42%">
+          <Stop offset="0%" stopColor="#7a5a2b" stopOpacity="0.14" />
+          <Stop offset="35%" stopColor="#5a4322" stopOpacity="0.06" />
+          <Stop offset="70%" stopColor="#090908" stopOpacity="0" />
+          <Stop offset="100%" stopColor="#090908" stopOpacity="0" />
         </RadialGradient>
       </Defs>
-      <Rect x="0" y="0" width={SCREEN_WIDTH} height={SCREEN_HEIGHT} fill="#080807" />
-      <Rect x="0" y="0" width={SCREEN_WIDTH} height={SCREEN_HEIGHT} fill="url(#topGlow)" />
-      <Rect x="0" y="0" width={SCREEN_WIDTH} height={SCREEN_HEIGHT} fill="url(#goldGlow)" />
-      <Rect x="0" y="0" width={SCREEN_WIDTH} height={SCREEN_HEIGHT} fill="url(#leftGlow)" />
-      <GoldWaves />
+      <Rect x="0" y="0" width={SCREEN_WIDTH} height={SCREEN_HEIGHT} fill="#090908" />
+      <Rect x="0" y="0" width={SCREEN_WIDTH} height={SCREEN_HEIGHT} fill="url(#ambient)" />
+      <GoldRibbon />
     </Svg>
   );
 }
 
-const Welcome = ({ onStart, onLogin }: any) => {
-  return (
-    <View style={welcomeStyles.screen}>
-      <RNStatusBar barStyle="light-content" backgroundColor="transparent" translucent />
-      <BackgroundArtwork />
-      <SafeAreaView style={welcomeStyles.safeArea}>
-        <View style={welcomeStyles.content}>
-          <View style={welcomeStyles.brandSection}>
-            <View style={welcomeStyles.sparkles} pointerEvents="none">
-              <Text style={welcomeStyles.largeSparkle}>✦</Text>
-              <Text style={welcomeStyles.smallSparkle}>✦</Text>
-            </View>
-            <Text style={welcomeStyles.logo} numberOfLines={1} adjustsFontSizeToFit testID="welcome-wordmark">Jaleter</Text>
-            <View style={welcomeStyles.logoAccent} />
-            <Text style={welcomeStyles.tagline}>SMART BUDGETING.{'\n'}WEALTHY LIVING.</Text>
+const Welcome = ({ onStart, onLogin }: any) => (
+  <View style={welcomeStyles.screen}>
+    <RNStatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+    <BackgroundArtwork />
+    <SafeAreaView style={welcomeStyles.safeArea}>
+      <View style={welcomeStyles.content}>
+        {/* Brand block — sits at ~28-32% from top via paddingTop */}
+        <View style={welcomeStyles.brandSection}>
+          <View style={welcomeStyles.sparkles} pointerEvents="none">
+            <Text style={welcomeStyles.largeSparkle}>✦</Text>
+            <Text style={welcomeStyles.smallSparkle}>✦</Text>
           </View>
-          <View style={welcomeStyles.actions}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Get Started"
-              testID="welcome-get-started"
-              onPress={onStart}
-              style={({ pressed }) => [welcomeStyles.buttonShadow, pressed && welcomeStyles.buttonPressed]}
-            >
-              <LinearGradient
-                colors={['#F8D99A', '#E8B85F', '#C98B35']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={welcomeStyles.primaryButton}
-              >
-                <View style={welcomeStyles.buttonHighlight} />
-                <Text style={welcomeStyles.primaryButtonText}>Get Started</Text>
-              </LinearGradient>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Log in"
-              testID="welcome-login"
-              onPress={onLogin}
-              hitSlop={12}
-              style={({ pressed }) => [welcomeStyles.loginButton, pressed && welcomeStyles.loginPressed]}
-            >
-              <Text style={welcomeStyles.loginText}>
-                Already have an account? <Text style={welcomeStyles.loginLink}>Log in</Text>
-              </Text>
-            </Pressable>
-          </View>
+          <Text style={welcomeStyles.logo} numberOfLines={1} adjustsFontSizeToFit testID="welcome-wordmark">
+            Jaleter
+          </Text>
+          <Text style={welcomeStyles.tagline}>SMART BUDGETING.</Text>
+          <Text style={welcomeStyles.tagline}>WEALTHY LIVING.</Text>
         </View>
-      </SafeAreaView>
-    </View>
-  );
-};
+        {/* Bottom actions */}
+        <View style={welcomeStyles.actions}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Get Started"
+            testID="welcome-get-started"
+            onPress={onStart}
+            style={({ pressed }) => [welcomeStyles.buttonWrap, pressed && welcomeStyles.buttonPressed]}
+          >
+            <LinearGradient
+              colors={['#F4D28F', '#DEAA55']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={welcomeStyles.primaryButton}
+            >
+              <Text style={welcomeStyles.primaryButtonText}>Get Started</Text>
+            </LinearGradient>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Log in"
+            testID="welcome-login"
+            onPress={onLogin}
+            hitSlop={12}
+            style={({ pressed }) => [welcomeStyles.loginButton, pressed && { opacity: 0.7 }]}
+          >
+            <Text style={welcomeStyles.loginText}>
+              Already have an account? <Text style={welcomeStyles.loginLink}>Log in</Text>
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    </SafeAreaView>
+  </View>
+);
 
 const welcomeStyles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#080807' },
+  screen: { flex: 1, backgroundColor: '#090908' },
   safeArea: { flex: 1 },
   content: { flex: 1, paddingHorizontal: 28, justifyContent: 'space-between' },
-  brandSection: { alignItems: 'center', paddingTop: SCREEN_HEIGHT * 0.2 },
-  sparkles: { position: 'relative', width: 48, height: 38, marginBottom: 5 },
-  largeSparkle: { position: 'absolute', left: 4, top: 10, color: '#E3BD79', fontSize: 23, lineHeight: 26 },
-  smallSparkle: { position: 'absolute', right: 4, top: 0, color: '#F6DCA8', fontSize: 12, lineHeight: 15 },
+  brandSection: { alignItems: 'center', paddingTop: SCREEN_HEIGHT * 0.30 },
+  sparkles: { position: 'relative', width: 44, height: 30, marginBottom: 6 },
+  largeSparkle: { position: 'absolute', left: 6, top: 8, color: '#E3BD79', fontSize: 18, lineHeight: 20 },
+  smallSparkle: { position: 'absolute', right: 4, top: 0, color: '#F6DCA8', fontSize: 10, lineHeight: 12 },
   logo: {
-    width: '100%', overflow: 'visible', color: '#F4DEB4', fontFamily: serifFont,
-    fontSize: 63, fontWeight: '400', lineHeight: 76, letterSpacing: -2, textAlign: 'center',
+    width: '100%',
+    color: '#EED7AB',
+    fontFamily: serifFont,
+    fontSize: 60,
+    fontWeight: '400',
+    lineHeight: 72,
+    letterSpacing: -0.5,
+    textAlign: 'center',
     includeFontPadding: false,
-    textShadowColor: 'rgba(229, 184, 108, 0.16)',
-    textShadowOffset: { width: 0, height: 3 },
-    textShadowRadius: 12,
   } as any,
-  logoAccent: { width: 38, height: 1, marginTop: 2, marginBottom: 22, backgroundColor: 'rgba(224, 181, 105, 0.38)' },
-  tagline: { color: 'rgba(245, 237, 224, 0.72)', fontSize: 11, fontWeight: '600', lineHeight: 19, letterSpacing: 3.1, textAlign: 'center' },
-  actions: { paddingBottom: Math.max(26, SCREEN_HEIGHT * 0.047) },
-  buttonShadow: {
-    width: '100%', borderRadius: 28,
-    shadowColor: '#E6B35D',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.28, shadowRadius: 16, elevation: 10,
+  tagline: {
+    color: 'rgba(245, 237, 224, 0.65)',
+    fontSize: 11,
+    fontWeight: '600',
+    lineHeight: 18,
+    letterSpacing: 2.8,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  actions: { paddingBottom: Math.max(28, SCREEN_HEIGHT * 0.05), alignItems: 'center' },
+  buttonWrap: {
+    width: '76%',
+    borderRadius: 28,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 4,
   },
   buttonPressed: { opacity: 0.92, transform: [{ scale: 0.985 }] },
   primaryButton: {
-    position: 'relative', overflow: 'hidden', width: '100%', height: 56,
-    alignItems: 'center', justifyContent: 'center', borderRadius: 28,
-    borderWidth: 1, borderColor: 'rgba(255, 232, 184, 0.52)',
+    width: '100%',
+    height: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 28,
   },
-  buttonHighlight: { position: 'absolute', top: 1, left: 18, right: 18, height: 1, backgroundColor: 'rgba(255, 246, 218, 0.7)' },
-  primaryButtonText: { color: '#18130C', fontSize: 15, fontWeight: '700', letterSpacing: 0.1 },
-  loginButton: { minHeight: 45, alignItems: 'center', justifyContent: 'flex-end', paddingTop: 17 },
-  loginPressed: { opacity: 0.7 },
-  loginText: { color: 'rgba(224, 216, 203, 0.58)', fontSize: 12, textAlign: 'center' },
-  loginLink: { color: '#D7B375', fontWeight: '600' },
+  primaryButtonText: {
+    color: '#1a1305',
+    fontSize: 15,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
+  loginButton: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingTop: 18,
+  },
+  loginText: {
+    color: 'rgba(210, 202, 190, 0.55)',
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  loginLink: { color: '#C69E5F', fontWeight: '600' },
 });
 
 /* ---------------- Onboarding ---------------- */
