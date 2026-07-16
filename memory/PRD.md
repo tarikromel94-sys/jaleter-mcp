@@ -1,32 +1,42 @@
 # Jaleter — Smart Budgeting (Expo Port)
 
 ## Overview
-This is a 1:1 port of the user-supplied Jaleter React web app (`main.jsx` + `styles.css`) into a React Native / Expo mobile app. The web version cannot run on this Expo-only platform, so the same design, screens, content, and interactions were rebuilt using RN components.
+1:1 port of the user-supplied Jaleter React web app into a React Native / Expo mobile app, now with full authentication.
 
-## Screens Implemented
-Onboarding flow: **Welcome → Onboarding (Faith/Both/Motivation) → Signup → FirstConnect (SimpleFIN) → Paywall → App**
-Main app (bottom nav): **Home dashboard, Budget, Transactions, Net Worth, More**
-More sub-screens: **Legacy (retirement projection), Coaching, Membership, Settings**
+## Auth (This Iteration)
+- **JWT email/password**: `passlib[bcrypt]` for hashing, `python-jose` for JWTs, 7-day access tokens
+- **Emergent-managed Google Auth**: one-tap sign-in, session token exchanged for local user record
+- Login + Register + Logout screens gate the entire app
+- Token persisted via `expo-secure-store` (`@/src/utils/storage.secureGet/secureSet` under key `jaleter_auth_token`)
+- Unified `/api/auth/me` endpoint accepts either JWT or Emergent session_token in `Authorization: Bearer …` header
 
-## Key Features
-- Gold-on-cream luxury theme with linear gradient buttons (`expo-linear-gradient`)
-- Serif headings (Georgia — Playfair Display fallback), Ionicons throughout
-- Sample data (4 purpose buckets: Give / Steward / Grow / Enjoy, 3 income sources, 15 transactions, assets & liabilities)
-- Interactive Budget with expandable categories, month/year toggle, live budget-vs-actual progress
-- Transactions with add/edit/delete via bottom-sheet Modal, income/expense filter
-- Net Worth with cash-committed-available breakdown and hide-values toggle
-- Legacy projection with 5yr/10yr/20yr/Retirement pills and contribution stepper
-- Settings: experience picker, appearance (Light/System/Dark), alerts toggle, logout back to Welcome
-- Daily-quote engine with 60+ curated Faith / Motivation / Focus items (`quoteLibrary.ts`)
+## Backend
+- `/app/backend/server.py` — FastAPI + Motor (MongoDB async)
+- `/api/auth/register`, `/api/auth/login`, `/api/auth/me`, `/api/auth/logout`, `/api/auth/emergent/session`
+- MongoDB collections: `users` (unique email + user_id), `user_sessions` (TTL on `expires_at`)
+- Env in `/app/backend/.env`: `MONGO_URL`, `DB_NAME`, `JWT_SECRET`, `ACCESS_TOKEN_EXPIRE_MINUTES`
 
-## Trade-offs vs Web Source
-- Serif font uses system Georgia (was Playfair Display from Google Fonts)
-- Custom SVG chart on Net Worth simplified; range slider in Legacy replaced with +/− stepper (RN has no native `<input type="range">`)
-- Some finer visual flourishes (radial gradients, box-shadows) approximated with flat colors + linear gradients
-- CSV export removed (browser-only API); dark theme toggle wired via Settings but full dark-palette parity is minimal
+## Frontend
+- `/app/frontend/app/index.tsx` — full app (all screens + state machine)
+- `/app/frontend/src/AuthContext.tsx` — `AuthProvider`, `useAuth()`, `loginWithGoogle`, cold-start session restore
+- `/app/frontend/src/quoteLibrary.ts` — 60+ curated Faith / Motivation / Focus messages
+- `/app/frontend/src/jaleterTheme.ts` — design tokens, Light + Dark palettes
+- `/app/frontend/app/_layout.tsx` — Playfair Display font loading + icon prewarm (preserved)
 
-## Files
-- `/app/frontend/app/index.tsx` — full app (all screens, state, styles)
-- `/app/frontend/src/quoteLibrary.ts` — curated quote engine
-- `/app/frontend/src/jaleterTheme.ts` — design tokens
-- `/app/frontend/app/_layout.tsx` — kept unchanged (icon-font prewarming)
+## Screens
+Onboarding: Welcome → Onboarding (Faith/Both/Motivation) → Signup → Login → FirstConnect (SimpleFIN) → Paywall  
+Main app: Home dashboard, Budget, Transactions, Net Worth, More (Legacy / Coaching / Membership / Settings)
+
+## Features
+- Gold-on-cream luxury theme, Playfair Display serif headings, Ionicons
+- Sample data (13 subcategories, 15 transactions, assets/liabilities)
+- Interactive Budget with expandable purpose buckets
+- Transactions with add/edit/delete (bottom-sheet modal)
+- Net Worth with cash-committed-available breakdown, hide-values eye toggle
+- Legacy projection with 5/10/20/Retirement pills and contribution stepper
+- Settings: experience picker, Light/System/Dark appearance, budget alerts, linked accounts, notifications, terms, privacy, logout
+- Working dark theme across every screen (`ThemeCtx` + `useThemed()` helper)
+- AsyncStorage persistence of UI prefs; SecureStore persistence of auth token
+
+## Files Reference
+- `/app/memory/test_credentials.md` — test JWT user + endpoint reference

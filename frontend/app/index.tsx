@@ -743,20 +743,20 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Settings" subtitle="Make Jaleter work your way." back={back} action={<View style={s.avatar}><Text style={{ color: C.goldText, fontSize: 11, fontWeight: '700' }}>AW</Text></View>} />
       <View style={[s.settingsSection, t.cardBg]}>
-        <Text style={s.settingsH3}>Your Experience</Text>
-        <Text style={s.settingsSub}>100 approved messages. No generated scripture.</Text>
+        <Text style={[s.settingsH3, t.textInk]}>Your Experience</Text>
+        <Text style={[s.settingsSub, t.textMuted]}>100 approved messages. No generated scripture.</Text>
         <PeriodPills values={['Faith','Both','Motivation']} value={experience} onChange={setExperience} testID="settings-exp" />
       </View>
       <View style={[s.settingsSection, t.cardBg]}>
-        <Text style={s.settingsH3}>Appearance</Text>
-        <Text style={s.settingsSub}>Choose a look or follow your device.</Text>
+        <Text style={[s.settingsH3, t.textInk]}>Appearance</Text>
+        <Text style={[s.settingsSub, t.textMuted]}>Choose a look or follow your device.</Text>
         <PeriodPills values={['Light','System','Dark']} value={appearance} onChange={setAppearance} testID="settings-appear" />
       </View>
       <View style={[s.settingsSection, t.cardBg]}>
-        <Text style={s.settingsH3}>Budget Alerts</Text>
-        <Text style={s.settingsSub}>Stay aware without feeling overwhelmed.</Text>
+        <Text style={[s.settingsH3, t.textInk]}>Budget Alerts</Text>
+        <Text style={[s.settingsSub, t.textMuted]}>Stay aware without feeling overwhelmed.</Text>
         <Pressable onPress={() => setAlerts({ ...alerts, enabled: !alerts.enabled })} style={s.settingToggleRow} testID="settings-alerts">
-          <View style={{ flex: 1 }}><Text style={{ fontSize: 11, fontWeight: '700' }}>Enable alerts</Text><Text style={{ fontSize: 9, color: C.muted3 }}>Budget notifications</Text></View>
+          <View style={{ flex: 1 }}><Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Enable alerts</Text><Text style={[{ fontSize: 9, color: C.muted3 }, t.textMuted]}>Budget notifications</Text></View>
           <View style={[s.toggle, alerts.enabled && s.toggleOn]}><View style={[s.toggleKnob, alerts.enabled && { transform: [{ translateX: 14 }] }]} /></View>
         </Pressable>
       </View>
