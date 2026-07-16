@@ -523,10 +523,10 @@ const NetWorthScreen = ({ assets, liabilities }: any) => {
         </View>
       </View>
       <PeriodPills values={['Month','Quarter','Year']} value={period} onChange={setPeriod} testID="nw-period" />
-      <View style={s.cashProtection}>
-        <View style={{ flex: 1 }}><Text style={s.cpSmall}>TOTAL CASH</Text><Text style={s.cpStrong}>{MONEY(cash)}</Text></View>
+      <View style={[s.cashProtection, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
+        <View style={{ flex: 1 }}><Text style={[s.cpSmall, t.textMuted]}>TOTAL CASH</Text><Text style={[s.cpStrong, t.textInk]}>{MONEY(cash)}</Text></View>
         <Text style={{ color: '#b99a6c' }}>−</Text>
-        <View style={{ flex: 1 }}><Text style={s.cpSmall}>COMMITTED</Text><Text style={s.cpStrong}>{MONEY(5050)}</Text></View>
+        <View style={{ flex: 1 }}><Text style={[s.cpSmall, t.textMuted]}>COMMITTED</Text><Text style={[s.cpStrong, t.textInk]}>{MONEY(5050)}</Text></View>
         <Text style={{ color: '#b99a6c' }}>=</Text>
         <View style={[{ flex: 1.2 }, s.cpAvailable]}><Text style={[s.cpSmall, { color: '#c8b494' }]}>AVAILABLE</Text><Text style={[s.cpStrong, { color: '#f3dfbd' }]}>{MONEY(Math.max(0, cash - 5050))}</Text></View>
       </View>
@@ -576,14 +576,14 @@ const LegacyScreen = ({ startingNetWorth, back }: any) => {
           ))}
         </View>
       </View>
-      <View style={s.assumptionsCard}>
+      <View style={[s.assumptionsCard, t.cardBg]}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          <View><Text style={{ fontSize: 11, fontWeight: '700' }}>Monthly Contribution</Text><Text style={{ fontSize: 8, color: '#999289' }}>Adjust consistent investment</Text></View>
+          <View><Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Monthly Contribution</Text><Text style={[{ fontSize: 8, color: '#999289' }, t.textMuted]}>Adjust consistent investment</Text></View>
           <Text style={{ fontSize: 18, fontWeight: '700', color: '#9a6d32' }}>{MONEY(contribution)}</Text>
         </View>
         <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-          <Pressable onPress={() => setContribution(Math.max(100, contribution - 250))} style={s.stepBtn} testID="contrib-minus"><Text>-</Text></Pressable>
-          <Pressable onPress={() => setContribution(Math.min(5000, contribution + 250))} style={s.stepBtn} testID="contrib-plus"><Text>+</Text></Pressable>
+          <Pressable onPress={() => setContribution(Math.max(100, contribution - 250))} style={[s.stepBtn, t.dark && { backgroundColor: D.surfaceAlt }]} testID="contrib-minus"><Text style={t.textInk}>-</Text></Pressable>
+          <Pressable onPress={() => setContribution(Math.min(5000, contribution + 250))} style={[s.stepBtn, t.dark && { backgroundColor: D.surfaceAlt }]} testID="contrib-plus"><Text style={t.textInk}>+</Text></Pressable>
         </View>
       </View>
     </ScrollView>
