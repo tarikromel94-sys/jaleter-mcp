@@ -396,9 +396,13 @@ async def simplefin_link(payload: SimpleFinLinkRequest, request: Request, curren
         raise HTTPException(status_code=502, detail=str(e))
     org = account_set.get('org') or {}
     accounts = account_set.get('accounts') or []
+    try:
+        access_encrypted = sf_encrypt(access_url)
+    except SimpleFinError as e:
+        raise HTTPException(status_code=500, detail=f'Encryption not configured: {e}')
     doc = {
         'user_id': current_user['user_id'],
-        'access_url_encrypted': sf_encrypt(access_url),
+        'access_url_encrypted': access_encrypted,
         'org_name': org.get('name'),
         'org_domain': org.get('domain'),
         'account_ids': [a.get('id') for a in accounts if a.get('id')],

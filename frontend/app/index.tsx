@@ -991,6 +991,7 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
       <Text style={{ color: '#817b72', fontSize: 11, marginBottom: 10, lineHeight: 16 }}>
         Visit <Text style={{ fontWeight: '700', color: C.goldEyebrow }}>beta-bridge.simplefin.org</Text>, log in, tap <Text style={{ fontWeight: '700' }}>Create Setup Token</Text>, and paste it below.
       </Text>
+      <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 380 }}>
       <TextInput
         testID="link-setup-token"
         style={[s.input, { minHeight: 90 }]}
@@ -1002,9 +1003,10 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
         placeholder="Paste your Setup Token here…"
       />
       {error ? <Text testID="link-error" style={s.formError}>{error}</Text> : null}
-      <View style={{ marginTop: 14 }}>
+      <View style={{ marginTop: 14, marginBottom: 24 }}>
         <GoldButton label={busy ? 'Linking…' : 'Link account'} onPress={submit} disabled={busy || !setupToken.trim()} testID="link-submit" />
       </View>
+      </ScrollView>
     </Sheet>
   );
 };
