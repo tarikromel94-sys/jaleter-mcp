@@ -4,6 +4,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { storage } from '@/src/utils/storage';
+import { AuthProvider, useAuth } from '@/src/AuthContext';
 import { C, D, F } from '@/src/jaleterTheme';
 import { dailyQuote, MONEY, EXACT, QuoteType } from '@/src/quoteLibrary';
 
@@ -198,12 +199,28 @@ const Onboarding = ({ experience, setExperience, onContinue, back }: any) => {
   );
 };
 
-/* ---------------- Signup ---------------- */
-const Signup = ({ back, onCreate }: any) => {
-  const [form, setForm] = useState({ name: 'Alex', email: 'alex@example.com', password: '', terms: false });
+/* ---------------- Signup (real register) ---------------- */
+const Signup = ({ back, onCreated, goLogin }: any) => {
+  const { register, loginWithGoogle } = useAuth();
+  const [form, setForm] = useState({ name: '', email: '', password: '', terms: false });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   const valid = !!form.name && /\S+@\S+/.test(form.email) && form.password.length >= 8 && form.terms;
+  const onSubmit = async () => {
+    setError(''); setBusy(true);
+    try {
+      await register(form.name.trim(), form.email.trim().toLowerCase(), form.password);
+      onCreated({ name: form.name.trim() });
+    } catch (e: any) {
+      setError(e?.message || 'Could not create account.');
+    } finally { setBusy(false); }
+  };
+  const onGoogle = async () => {
+    setError(''); setBusy(true);
+    try { await loginWithGoogle(); } catch (e: any) { setError(e?.message || 'Google sign-in failed.'); } finally { setBusy(false); }
+  };
   return (
-    <ScrollView style={s.lightScreen} contentContainerStyle={{ padding: 23, paddingTop: 54, paddingBottom: 28 }}>
+    <ScrollView style={s.lightScreen} contentContainerStyle={{ padding: 23, paddingTop: 54, paddingBottom: 28 }} keyboardShouldPersistTaps="handled">
       <CircleBtn testID="signup-back" onPress={back}><Ionicons name="arrow-back" size={20} color={C.ink3} /></CircleBtn>
       <View style={s.onboardHeading}>
         <View style={s.miniLogo}><Text style={s.miniLogoText}>J</Text></View>
@@ -213,16 +230,71 @@ const Signup = ({ back, onCreate }: any) => {
       </View>
       <View style={{ gap: 2 }}>
         <Text style={s.label}>Name</Text>
-        <TextInput testID="signup-name" style={s.input} value={form.name} onChangeText={t => setForm({ ...form, name: t })} />
+        <TextInput testID="signup-name" style={s.input} value={form.name} onChangeText={t => setForm({ ...form, name: t })} placeholder="Your name" />
         <Text style={s.label}>Email</Text>
-        <TextInput testID="signup-email" style={s.input} value={form.email} onChangeText={t => setForm({ ...form, email: t })} autoCapitalize="none" keyboardType="email-address" />
+        <TextInput testID="signup-email" style={s.input} value={form.email} onChangeText={t => setForm({ ...form, email: t })} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" />
         <Text style={s.label}>Password</Text>
         <TextInput testID="signup-password" style={s.input} value={form.password} onChangeText={t => setForm({ ...form, password: t })} placeholder="At least 8 characters" secureTextEntry />
         <Pressable testID="signup-terms" onPress={() => setForm({ ...form, terms: !form.terms })} style={s.checkRow}>
           <View style={[s.checkbox, form.terms && s.checkboxOn]}>{form.terms && <Ionicons name="checkmark" size={11} color="#fff" />}</View>
-          <Text style={{ fontSize: 12, color: C.ink, flex: 1 }}>I agree to Jaleter's Terms and Privacy Policy.</Text>
+          <Text style={{ fontSize: 12, color: C.ink, flex: 1 }}>I agree to Jaleter&apos;s Terms and Privacy Policy.</Text>
         </Pressable>
-        <View style={{ marginTop: 14 }}><GoldButton label="Create account" onPress={() => onCreate(form)} disabled={!valid} testID="signup-create" /></View>
+        {error ? <Text testID="signup-error" style={s.formError}>{error}</Text> : null}
+        <View style={{ marginTop: 14 }}><GoldButton label={busy ? 'Creating...' : 'Create account'} onPress={onSubmit} disabled={!valid || busy} testID="signup-create" /></View>
+        <View style={s.orDivider}><View style={s.orLine} /><Text style={s.orText}>or</Text><View style={s.orLine} /></View>
+        <Pressable testID="signup-google" onPress={onGoogle} disabled={busy} style={s.googleBtn}>
+          <Ionicons name="logo-google" size={16} color="#4285F4" />
+          <Text style={s.googleBtnText}>Continue with Google</Text>
+        </Pressable>
+        <Pressable testID="signup-to-login" onPress={goLogin} style={{ alignItems: 'center', marginTop: 12 }}>
+          <Text style={s.loginLink}>Already have an account? <Text style={{ color: C.goldEyebrow }}>Log in</Text></Text>
+        </Pressable>
+      </View>
+    </ScrollView>
+  );
+};
+
+/* ---------------- Login screen ---------------- */
+const Login = ({ back, goSignup }: any) => {
+  const { login, loginWithGoogle } = useAuth();
+  const [form, setForm] = useState({ email: '', password: '' });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const valid = /\S+@\S+/.test(form.email) && form.password.length >= 8;
+  const onSubmit = async () => {
+    setError(''); setBusy(true);
+    try { await login(form.email.trim().toLowerCase(), form.password); }
+    catch (e: any) { setError(e?.message || 'Login failed.'); }
+    finally { setBusy(false); }
+  };
+  const onGoogle = async () => {
+    setError(''); setBusy(true);
+    try { await loginWithGoogle(); } catch (e: any) { setError(e?.message || 'Google sign-in failed.'); } finally { setBusy(false); }
+  };
+  return (
+    <ScrollView style={s.lightScreen} contentContainerStyle={{ padding: 23, paddingTop: 54, paddingBottom: 28 }} keyboardShouldPersistTaps="handled">
+      <CircleBtn testID="login-back" onPress={back}><Ionicons name="arrow-back" size={20} color={C.ink3} /></CircleBtn>
+      <View style={s.onboardHeading}>
+        <View style={s.miniLogo}><Text style={s.miniLogoText}>J</Text></View>
+        <Text style={s.eyebrow}>WELCOME BACK</Text>
+        <Text style={s.onboardH1}>Log in to{'\n'}continue.</Text>
+        <Text style={s.onboardHint}>Sign in with your Jaleter email or Google account.</Text>
+      </View>
+      <View style={{ gap: 2 }}>
+        <Text style={s.label}>Email</Text>
+        <TextInput testID="login-email" style={s.input} value={form.email} onChangeText={t => setForm({ ...form, email: t })} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" />
+        <Text style={s.label}>Password</Text>
+        <TextInput testID="login-password" style={s.input} value={form.password} onChangeText={t => setForm({ ...form, password: t })} placeholder="Your password" secureTextEntry />
+        {error ? <Text testID="login-error" style={s.formError}>{error}</Text> : null}
+        <View style={{ marginTop: 14 }}><GoldButton label={busy ? 'Signing in...' : 'Log in'} onPress={onSubmit} disabled={!valid || busy} testID="login-submit" /></View>
+        <View style={s.orDivider}><View style={s.orLine} /><Text style={s.orText}>or</Text><View style={s.orLine} /></View>
+        <Pressable testID="login-google" onPress={onGoogle} disabled={busy} style={s.googleBtn}>
+          <Ionicons name="logo-google" size={16} color="#4285F4" />
+          <Text style={s.googleBtnText}>Continue with Google</Text>
+        </Pressable>
+        <Pressable testID="login-to-signup" onPress={goSignup} style={{ alignItems: 'center', marginTop: 12 }}>
+          <Text style={s.loginLink}>No account yet? <Text style={{ color: C.goldEyebrow }}>Sign up</Text></Text>
+        </Pressable>
       </View>
     </ScrollView>
   );
@@ -814,12 +886,20 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
 
 /* ---------------- App root ---------------- */
 export default function App() {
+  return (
+    <AuthProvider>
+      <MainApp />
+    </AuthProvider>
+  );
+}
+
+function MainApp() {
+  const auth = useAuth();
   const [hydrated, setHydrated] = useState(false);
-  const [stage, setStage] = useState<'welcome'|'onboarding'|'signup'|'connect'|'paywall'|'app'>('welcome');
+  const [stage, setStage] = useState<'welcome'|'onboarding'|'signup'|'login'|'connect'|'paywall'|'app'>('welcome');
   const [experience, setExperience] = useState('Both');
   const [appearance, setAppearance] = useState('Light');
   const [active, setActive] = useState('home');
-  const [profile, setProfile] = useState({ name: 'Alex' });
   const [categories] = useState(initialCategories);
   const [incomeSources] = useState(initialIncome);
   const [transactions, setTransactions] = useState<Tx[]>(initialTx);
@@ -829,7 +909,7 @@ export default function App() {
   const [focusCategory, setFocusCategory] = useState<string | null>(null);
   const [alerts, setAlerts] = useState({ enabled: true, threshold: 80 });
 
-  // Hydrate persisted state
+  // Hydrate persisted UI state (auth is separate)
   useEffect(() => {
     (async () => {
       try {
@@ -841,18 +921,23 @@ export default function App() {
           if (data.transactions) setTransactions(data.transactions);
           if (data.linkedAccounts) setLinkedAccounts(data.linkedAccounts);
           if (data.alerts) setAlerts(data.alerts);
-          if (data.profile) setProfile(data.profile);
-          if (data.stage === 'app') setStage('app');
         }
       } catch {}
       setHydrated(true);
     })();
   }, []);
-  // Persist on change
+  // Persist on change (skip auth-managed fields)
   useEffect(() => {
     if (!hydrated) return;
-    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, profile, stage })).catch(() => {});
-  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, profile, stage]);
+    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts })).catch(() => {});
+  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts]);
+
+  // When Login/Google flow completes, jump straight to the app.
+  // Signup flow stays on 'connect'/'paywall' cosmetic screens (handled by onCreated).
+  useEffect(() => {
+    if (auth.user && (stage === 'login' || stage === 'welcome')) setStage('app');
+    if (!auth.user && stage === 'app') setStage('welcome');
+  }, [auth.user]);
 
   const isDark = appearance === 'Dark';
   const income = transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
@@ -864,22 +949,24 @@ export default function App() {
   const monthlyBudget = categories.flatMap(c => c.subcategories).reduce((sum, x) => sum + x.budgeted, 0);
   const nav = (screen: string, category: string | null = null) => { setActive(screen); if (category) setFocusCategory(category); };
 
-  if (!hydrated) return <View style={{ flex: 1, backgroundColor: C.cream }} />;
+  if (!hydrated || auth.loading) return <View style={{ flex: 1, backgroundColor: C.cream }} testID="auth-loading" />;
 
   const bg = isDark ? D.bg : C.cream;
+  const displayName = (auth.user?.name || 'Friend').split(' ')[0];
 
   return (
     <ThemeCtx.Provider value={{ dark: isDark }}>
     <SafeAreaView style={[s.appShell, { backgroundColor: bg }]} testID="app-shell">
       <RNStatusBar barStyle={stage === 'welcome' || isDark ? 'light-content' : 'dark-content'} />
-      {stage === 'welcome' && <Welcome onStart={() => setStage('onboarding')} onLogin={() => setStage('app')} />}
-      {stage === 'onboarding' && <Onboarding experience={experience} setExperience={setExperience} onContinue={() => setStage('signup')} back={() => setStage('welcome')} />}
-      {stage === 'signup' && <Signup back={() => setStage('onboarding')} onCreate={(p: any) => { setProfile(p); setStage('connect'); }} />}
-      {stage === 'connect' && <FirstConnect onConnect={() => { setLinkedAccounts([{ id: 'chase-checking', name: 'Everyday Checking' }]); setStage('paywall'); }} onSkip={() => setStage('paywall')} />}
-      {stage === 'paywall' && <Paywall onContinue={() => setStage('app')} />}
-      {stage === 'app' && (
+      {!auth.user && stage === 'welcome' && <Welcome onStart={() => setStage('onboarding')} onLogin={() => setStage('login')} />}
+      {!auth.user && stage === 'onboarding' && <Onboarding experience={experience} setExperience={setExperience} onContinue={() => setStage('signup')} back={() => setStage('welcome')} />}
+      {!auth.user && stage === 'signup' && <Signup back={() => setStage('onboarding')} onCreated={() => setStage('connect')} goLogin={() => setStage('login')} />}
+      {!auth.user && stage === 'login' && <Login back={() => setStage('welcome')} goSignup={() => setStage('signup')} />}
+      {auth.user && stage === 'connect' && <FirstConnect onConnect={() => { setLinkedAccounts([{ id: 'chase-checking', name: 'Everyday Checking' }]); setStage('paywall'); }} onSkip={() => setStage('paywall')} />}
+      {auth.user && stage === 'paywall' && <Paywall onContinue={() => setStage('app')} />}
+      {auth.user && stage === 'app' && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
-          {active === 'home' && <HomeScreen name={profile.name.split(' ')[0]} experience={experience} netWorth={netWorth} budgetUsage={expense / monthlyBudget * 100} alertsEnabled={alerts.enabled} navigate={nav} />}
+          {active === 'home' && <HomeScreen name={displayName} experience={experience} netWorth={netWorth} budgetUsage={expense / monthlyBudget * 100} alertsEnabled={alerts.enabled} navigate={nav} />}
           {active === 'budget' && <BudgetScreen categories={categories} incomeSources={incomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} />}
           {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} liabilities={liabilities} />}
@@ -887,7 +974,7 @@ export default function App() {
           {active === 'legacy' && <LegacyScreen startingNetWorth={netWorth} back={() => nav('more')} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}
-          {active === 'settings' && <SettingsScreen experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} onLogout={() => { setStage('welcome'); setActive('home'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} />}
+          {active === 'settings' && <SettingsScreen experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} />}
           <BottomNav active={active} setActive={(id: string) => { setActive(id); }} isDark={isDark} />
         </View>
       )}
@@ -1036,6 +1123,12 @@ const s = StyleSheet.create({
   toggleOn: { backgroundColor: '#b48243' },
   toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#fff' },
   logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 14, borderWidth: 1, borderColor: '#ebd9d4', borderRadius: 16, backgroundColor: '#fff9f7', marginTop: 12 },
+  formError: { color: C.danger, fontSize: 11, marginTop: 10, marginBottom: -4 },
+  orDivider: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, marginBottom: 12 },
+  orLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: '#d8d2c7' },
+  orText: { fontSize: 10, color: C.muted2, letterSpacing: 1.5 },
+  googleBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, minHeight: 46, borderWidth: 1, borderColor: '#dcd6cb', borderRadius: 26, backgroundColor: '#fff' },
+  googleBtnText: { color: C.ink, fontSize: 13, fontWeight: '600' },
   settingsMenu: { marginVertical: 10, paddingHorizontal: 15, paddingVertical: 4, borderWidth: 1, borderColor: C.border, borderRadius: 20, backgroundColor: C.creamAlt },
   settingsMenuBtn: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 61, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: C.border2 },
   settingsRowIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: '#f0ebe3', alignItems: 'center', justifyContent: 'center' },
