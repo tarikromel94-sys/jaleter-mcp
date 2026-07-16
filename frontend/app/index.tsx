@@ -775,7 +775,10 @@ const Paywall = ({ onContinue }: any) => {
 const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, navigate }: any) => {
   const t = useThemed();
   const q = dailyQuote(experience as QuoteType, new Date());
-  const projected = Math.round(netWorth * Math.pow(1.08, 33) + 1250 * 12 * ((Math.pow(1.08, 33) - 1) / 0.08));
+  // Project only what we can actually project: 33 years of compounding on the user's real net worth.
+  // No hidden assumed contributions — the deep Legacy screen has a slider for that.
+  const projected = netWorth > 0 ? Math.round(netWorth * Math.pow(1.08, 33)) : 0;
+  const hasProjection = projected > 0;
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
@@ -829,11 +832,30 @@ const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, na
       </View>
       <Pressable style={s.legacyTeaser} onPress={() => navigate('legacy')} testID="home-legacy">
         <Text style={{ color: '#c9a56c', fontSize: 8, letterSpacing: 1.3 }}>RETIREMENT PROJECTION</Text>
-        <Text style={s.legacyStrong}>{MONEY(projected)}</Text>
-        <Text style={{ color: '#aaa297', fontSize: 10, lineHeight: 15 }}>Consistency today can change your family's tomorrow.</Text>
-        <View style={s.teaserBars}>
-          {[28,36,44,57,70,88].map((h,i) => <LinearGradient key={i} colors={['#e5c38b','#7d5b31']} style={[s.teaserBar, { height: `${h}%` }]} />)}
-        </View>
+        {hasProjection ? (
+          <>
+            <Text style={s.legacyStrong}>{MONEY(projected)}</Text>
+            <Text style={{ color: '#aaa297', fontSize: 10, lineHeight: 15, marginBottom: 14 }}>
+              33-year compounding of your current net worth.
+            </Text>
+            <View style={s.teaserBarsFlow}>
+              {[28, 36, 44, 57, 70, 88].map((h, i) => (
+                <LinearGradient key={i} colors={['#e5c38b', '#7d5b31']} style={[s.teaserBarFlow, { height: h }]} />
+              ))}
+            </View>
+          </>
+        ) : (
+          <>
+            <Text style={s.legacyStrong}>{MONEY(0)}</Text>
+            <Text style={{ color: '#aaa297', fontSize: 10, lineHeight: 15, marginBottom: 12 }}>
+              Link an account or add assets, then open the Legacy page to model your future.
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={{ color: '#e5c38b', fontSize: 11, fontWeight: '700', letterSpacing: 0.4 }}>Start your legacy</Text>
+              <Ionicons name="chevron-forward" size={13} color="#e5c38b" />
+            </View>
+          </>
+        )}
       </Pressable>
     </ScrollView>
   );
@@ -1850,6 +1872,8 @@ const s = StyleSheet.create({
   legacyStrong: { fontFamily: F.serif, fontSize: 30, fontWeight: '600', color: '#fff', marginVertical: 6 },
   teaserBars: { position: 'absolute', right: 20, bottom: 20, width: 115, height: 80, flexDirection: 'row', alignItems: 'flex-end', gap: 7 },
   teaserBar: { width: 11, borderRadius: 5 },
+  teaserBarsFlow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, height: 92, marginTop: 4 },
+  teaserBarFlow: { width: 14, borderRadius: 5 },
   /* Budget */
   budgetSummary: { flexDirection: 'row', gap: 1, marginBottom: 12, borderRadius: 19, overflow: 'hidden', backgroundColor: '#302d28' },
   budgetSumCell: { flex: 1, padding: 14, backgroundColor: C.ink3 },
