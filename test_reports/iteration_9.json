@@ -1,0 +1,52 @@
+{
+  "summary": "Iteration 9 tests PASS — 16/17 backend + full frontend smoke. New endpoints work: POST /api/accounts/link/{link_id}/sync returns 401 without bearer, 400 for invalid ObjectId, 404 for other user's link_id / nonexistent id, 400 with detail \"Sync not supported for provider 'file'\" for file-provider links, and 200 with {synced:int, errors:list} for SimpleFIN links (decrypt-fail path returns 200 with errors[] populated — verified idempotent second call still 200 with synced=0). POST /api/accounts/snaptrade/callback returns 401 without bearer and 503 'SnapTrade not configured' when inert. app.json scheme='jaleter' confirmed. Frontend: alex+test1@jaleter.app / password123 login works, /transactions header shows BOTH tx-import (cloud-upload) and tx-add (plus) circular buttons (both 38x38), settings-accounts sheet title is now 'Linked accounts', all 3 link-mode-{simplefin,file,request} buttons render, no red screen on web despite Linking.addEventListener usage. Regression: /api/providers, /api/accounts/link (snaptrade→503, unknown→400), /api/accounts/import (CSV), /api/accounts/all, /api/support/requests, /api/auth/me — all green. Password left at 'password123' (verified via final login=200). ONE PRE-EXISTING BUG SURFACED (marked xfail): simplefin_service.py:96 sf_fetch_accounts does not catch httpx.ConnectError / other httpx.HTTPError — a linked SimpleFIN account whose host is unreachable causes the sync endpoint to return HTTP 500 instead of 200 with errors[]. This is a real user-facing risk (transient network / bank outage) and was inherited from previous iterations; the new per-link route inherits it verbatim. See action_items.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/accounts/link/{link_id}/sync AND POST /api/accounts/sync",
+        "issue": "sf_fetch_accounts (simplefin_service.py:96) does NOT wrap httpx transport errors (ConnectError, ReadTimeout, RemoteProtocolError, etc.) as SimpleFinError. When a SimpleFIN host is unreachable or times out, _sync_docs (server.py:488-518) only catches SimpleFinError, so the httpx exception bubbles up and FastAPI returns HTTP 500. Repro: seed a linked_accounts doc with a validly-Fernet-encrypted access_url pointing to a non-existent DNS host → POST /api/accounts/link/{id}/sync → 500 Internal Server Error + Traceback in /var/log/supervisor/backend.err.log ending in `httpx.ConnectError: [Errno -2] Name or service not known`. Expected per review spec: 200 with {synced:0, errors:[{link_id, error}]}. Fix: in simplefin_service.fetch_accounts, wrap `r = await client.get(...)` in `try/except httpx.HTTPError as e: raise SimpleFinError(f'SimpleFIN unreachable: {e}') from e`. Same fix should also cover claim_setup_token()."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "CircleBtn (tx-import, tx-add)", "issue": "Touch target is 38x38 — below Apple HIG minimum 44x44. Both header buttons on /transactions and every link-sync/link-remove row button in the Linked-accounts sheet inherit this size (s.circleBtn). Not blocking, but fingers will occasionally miss on small devices.", "testID": "tx-import, tx-add, link-sync-*, link-remove-*", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Root layout", "issues": ["Console warnings on every screen mount: `\"shadow*\" style props are deprecated. Use \"boxShadow\"` and `props.pointerEvents is deprecated. Use style.pointerEvents`. Non-blocking but will become errors on future RN versions."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration9.py",
+    "/app/test_reports/pytest/iteration9_results.xml"
+  ],
+  "action_items": [
+    "P1: Harden simplefin_service.fetch_accounts (and claim_setup_token) to catch httpx.HTTPError and raise SimpleFinError instead — otherwise any transient bank/SimpleFIN outage returns HTTP 500 to the mobile client and the frontend's green 'Refreshed' toast will never fire; the per-link sync endpoint currently promises 200+errors[] but does not honor that when the underlying transport fails.",
+    "P3: Bump CircleBtn size from 38x38 to 44x44 (Apple HIG / WCAG 2.5.5) so tx-import, tx-add, link-sync-*, link-remove-* meet minimum touch targets on small phones.",
+    "P3: Migrate remaining `shadow*` StyleSheet props to `boxShadow` and `pointerEvents` prop to `style.pointerEvents` to silence RN-Web deprecation warnings."
+  ],
+  "critical_code_review_comments": [
+    "server.py:473-485 (new /api/accounts/link/{link_id}/sync route): correctly validates ObjectId (400), scopes lookup by user_id (404), rejects non-simplefin providers (400 with provider name in detail). Clean.",
+    "server.py:488-518 (_sync_docs helper): only catches SimpleFinError inside the per-doc loop; bare httpx exceptions escape → 500. See P1 action item.",
+    "server.py:544-557 (/api/accounts/snaptrade/callback): correct inert 503 path, but the route is defined BEFORE `_provider_registry = build_registry(db)` on line 561, which works only because the handler is called after startup. Consider moving `_provider_registry` initialization above the callback route for clarity, or lazy-init inside the handler.",
+    "app/index.tsx:1232-1244 (Linking effect): correctly guards with `Linking.getInitialURL().then(...)` and returns the subscription remove(). On web the event never fires, which is fine — verified no crash on page load.",
+    "app/index.tsx:1105-1110 (AccountLinkSheet YOUR ACCOUNTS rows): link-sync-{link_id} button is only rendered for simplefin rows; file/import rows only get link-remove — matches backend contract (file provider 400s on sync).",
+    "app/index.tsx:667-670: tx-import CircleBtn shows the hourglass-outline icon while importing — good UX feedback. Uses expo-document-picker; multipart POST to /api/accounts/import."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration9.py (NEW — 17 pytest tests covering new endpoints + regression)",
+    "/app/test_reports/pytest/iteration9_results.xml (NEW)"
+  ],
+  "success_rate": {
+    "backend": "94.1% (16/17; 1 xfail documenting a pre-existing httpx.ConnectError → 500 bug in simplefin_service)",
+    "frontend": "100% smoke (10/10 UI checkpoints — login, tx-import, tx-add, sheet title 'Linked accounts', all 3 link-mode-* buttons, no red screen)"
+  },
+  "seed_data_creation": "During pytest: (a) 1 file-provider linked_accounts + a couple bank_transactions from test_import_csv, (b) 1 TEST_bank_* support_request, (c) 2 short-lived simplefin linked_accounts docs (unreachable+invalid-crypt) for the sync tests, (d) 1 secondary user TEST_other_*@jaleter.app for the cross-tenant 404 assertion. Every fixture cleans up in its teardown; final MongoDB scan for TEST_ prefixes returned 0 residuals. alex password preserved: final /api/auth/login returned 200.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "To re-run just this iteration's suite: `cd /app/backend && EXPO_PUBLIC_BACKEND_URL=<preview> MONGO_URL=mongodb://localhost:27017 DB_NAME=test_database pytest tests/test_iteration9.py -v` → 16 passed, 1 xfailed. The xfail is intentional and documents a real backend bug (P1 action item). If the main agent hardens simplefin_service.fetch_accounts against httpx.HTTPError, flip the xfail to pass (remove `@pytest.mark.xfail(..., strict=True)` on TestSyncSingleSimpleFin::test_sync_success_path_updates_last_sync_at) — the test then asserts 200 shape on an unreachable host, which is exactly what the review request promised. Frontend: no changes needed; sheet + header buttons render correctly on 390x844 web preview.",
+  "rca_of_issue": "PRE-EXISTING BUG (surfaced by this iteration's new per-link sync route, though it also affects the batch /api/accounts/sync endpoint): simplefin_service.py:62 and :96 use `async with httpx.AsyncClient(...)` and call `.get(...)` without try/except. Only the HTTP status branches (401/429/other) are converted to SimpleFinError. Any transport-layer failure (DNS resolution, TCP refused, TLS handshake, read timeout) raises httpx.HTTPError → propagates through _sync_docs (which only catches SimpleFinError) → FastAPI serializes as 500. Mitigation (main agent should implement): wrap the `.get(...)` calls in `try/except httpx.HTTPError as e: raise SimpleFinError(f'SimpleFIN unreachable: {e}') from e`. Reproduction: seed linked_accounts with `access_url_encrypted = Fernet(SIMPLEFIN_ENC_KEY).encrypt(b'https://user:pw@nonexistent.invalid.example.test/simplefin').decode()`, then POST /api/accounts/link/{that_id}/sync → 500 with the traceback shown in /var/log/supervisor/backend.err.log at time of test run."
+}

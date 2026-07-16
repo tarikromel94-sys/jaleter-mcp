@@ -467,6 +467,25 @@ async def sync_accounts(current_user: dict = Depends(get_current_user)):
         '$or': [{'provider': {'$exists': False}}, {'provider': 'simplefin'}],
     })
     docs = await cursor.to_list(length=50)
+    return await _sync_docs(current_user, docs)
+
+
+@api_router.post('/accounts/link/{link_id}/sync')
+async def sync_single(link_id: str, current_user: dict = Depends(get_current_user)):
+    from bson import ObjectId
+    try:
+        oid = ObjectId(link_id)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail='Invalid link id')
+    doc = await db.linked_accounts.find_one({'_id': oid, 'user_id': current_user['user_id']})
+    if not doc:
+        raise HTTPException(status_code=404, detail='Linked account not found')
+    if doc.get('provider') and doc['provider'] != 'simplefin':
+        raise HTTPException(status_code=400, detail=f"Sync not supported for provider '{doc['provider']}'")
+    return await _sync_docs(current_user, [doc])
+
+
+async def _sync_docs(current_user: dict, docs: list) -> dict:
     total_new = 0
     errors: list[dict] = []
     now_ts = int(datetime.now(timezone.utc).timestamp())
@@ -483,12 +502,13 @@ async def sync_accounts(current_user: dict = Depends(get_current_user)):
             for txn in acc.get('transactions') or []:
                 mapped = sf_map_transaction(current_user['user_id'], account_id, org_name, txn)
                 try:
-                    await db.bank_transactions.update_one(
+                    result = await db.bank_transactions.update_one(
                         {'user_id': mapped['user_id'], 'account_id': mapped['account_id'], 'external_id': mapped['external_id']},
                         {'$setOnInsert': mapped},
                         upsert=True,
                     )
-                    total_new += 1
+                    if result.upserted_id:
+                        total_new += 1
                 except Exception as e:  # noqa: BLE001
                     logger.warning('bank_transactions upsert failed: %s', e)
         await db.linked_accounts.update_one(
@@ -518,6 +538,23 @@ async def list_bank_transactions(current_user: dict = Depends(get_current_user),
         {'_id': 0, 'user_id': 0, 'raw': 0},
     ).sort('date', -1).limit(min(max(limit, 1), 200))
     return {'transactions': [{**t, 'date': t['date'].isoformat() if isinstance(t.get('date'), datetime) else t.get('date')} async for t in cursor]}
+
+
+# ------- SnapTrade OAuth Callback -------
+@api_router.post('/accounts/snaptrade/callback')
+async def snaptrade_callback(current_user: dict = Depends(get_current_user)):
+    """Called by the app after the SnapTrade Connection Portal redirects back
+    to `jaleter://snaptrade-callback`. We simply trigger a sync so the newly
+    authorized brokerage account materializes in `/api/accounts/all`.
+    """
+    provider = _provider_registry.get('snaptrade')
+    if not provider or not provider.is_configured():
+        raise HTTPException(status_code=503, detail='SnapTrade not configured')
+    try:
+        result = await provider.sync(current_user['user_id'])
+    except ProviderError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {'ok': True, **result}
 
 
 # ------- Modular Provider Layer -------

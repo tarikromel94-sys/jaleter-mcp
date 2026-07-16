@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, createContext, useContext } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, StatusBar as RNStatusBar, Platform } from 'react-native';
+import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, StatusBar as RNStatusBar, Platform, Linking } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -619,24 +619,56 @@ const BudgetScreen = ({ categories, incomeSources, transactions, focusCategory, 
   );
 };
 
+/* ---------------- File import helper (shared) ---------------- */
+async function pickAndImport(token: string | null, onDone: (msg: string) => void, onError: (err: string) => void, setBusy: (b: boolean) => void) {
+  setBusy(true);
+  try {
+    const DocumentPicker = await import('expo-document-picker');
+    const res = await DocumentPicker.getDocumentAsync({ type: ['text/csv', 'application/x-ofx', 'application/vnd.intu.qbo', 'application/x-qfx', 'application/octet-stream', '*/*'], copyToCacheDirectory: true, multiple: false });
+    if (res.canceled || !res.assets?.length) { setBusy(false); return; }
+    const asset = res.assets[0];
+    const form = new FormData();
+    if (Platform.OS === 'web') {
+      const blob = await (await fetch(asset.uri)).blob();
+      form.append('file', new File([blob], asset.name, { type: asset.mimeType || 'text/csv' }));
+    } else {
+      // @ts-ignore RN FormData
+      form.append('file', { uri: asset.uri, name: asset.name, type: asset.mimeType || 'application/octet-stream' });
+    }
+    const headers: any = { 'Authorization': `Bearer ${token}` };
+    const url = `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}/api/accounts/import`;
+    const httpRes = await fetch(url, { method: 'POST', headers, body: form as any });
+    const body = await httpRes.json();
+    if (!httpRes.ok) throw new Error(body?.detail || 'Import failed');
+    onDone(`Imported ${body.inserted} tx (${body.duplicates} duplicates skipped).`);
+  } catch (e: any) { onError(e?.message || 'Import failed.'); }
+  finally { setBusy(false); }
+}
+
 /* ---------------- Transactions ---------------- */
 const TransactionsScreen = ({ transactions, setTransactions, categories, incomeSources }: any) => {
   const t = useThemed();
+  const { token } = useAuth();
   const [filter, setFilter] = useState('All');
   const [editing, setEditing] = useState<any>(null);
   const [toast, setToast] = useState('');
-  const shown = transactions.filter((t: Tx) => filter === 'All' || (filter === 'Income' ? t.type === 'income' : t.type === 'expense'));
+  const [importing, setImporting] = useState(false);
+  const shown = transactions.filter((tx: Tx) => filter === 'All' || (filter === 'Income' ? tx.type === 'income' : tx.type === 'expense'));
   const save = (t: any) => {
     setTransactions((xs: Tx[]) => xs.some(x => x.id === t.id) ? xs.map(x => x.id === t.id ? t : x) : [{ ...t, id: `manual-${Date.now()}`, origin: 'Manual', period: 'July' }, ...xs]);
     setEditing(null); setToast('Transaction saved and totals refreshed.');
   };
   const remove = (id: string) => { setTransactions((xs: Tx[]) => xs.filter(x => x.id !== id)); setEditing(null); setToast('Transaction deleted.'); };
+  const importFile = () => pickAndImport(token, (msg) => setToast(msg), (err) => setToast(err), setImporting);
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Transactions" subtitle="Synced automatically. Editable anytime." action={
-        <CircleBtn testID="tx-add" onPress={() => setEditing({ type: 'expense', name: '', amount: '', date: 'Jul 15', groupId: 'steward', detailId: 'housing' })}>
-          <Ionicons name="add" size={19} color={C.ink3} />
-        </CircleBtn>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <CircleBtn testID="tx-import" onPress={importFile}><Ionicons name={importing ? 'hourglass-outline' : 'cloud-upload-outline'} size={18} color={t.dark ? D.text : C.ink3} /></CircleBtn>
+          <CircleBtn testID="tx-add" onPress={() => setEditing({ type: 'expense', name: '', amount: '', date: 'Jul 15', groupId: 'steward', detailId: 'housing' })}>
+            <Ionicons name="add" size={19} color={t.dark ? D.text : C.ink3} />
+          </CircleBtn>
+        </View>
       } />
       <View style={s.syncBanner}>
         <View style={s.syncIcon}><Ionicons name="link" size={18} color="#50715b" /></View>
@@ -994,43 +1026,52 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
   const [message, setMessage] = useState('');
   const [institution, setInstitution] = useState('');
   const [notes, setNotes] = useState('');
-  useEffect(() => { if (visible) { setMode('menu'); setSetupToken(''); setError(''); setMessage(''); setInstitution(''); setNotes(''); setBusy(false); } }, [visible]);
+  const [existing, setExisting] = useState<any[] | null>(null);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const refresh = async () => {
+    if (!token) return;
+    try {
+      const data = await apiCall('/api/accounts/all', { method: 'GET' }, token);
+      setExisting(Array.isArray(data?.accounts) ? data.accounts : []);
+    } catch { setExisting([]); }
+  };
+  useEffect(() => { if (visible) { setMode('menu'); setSetupToken(''); setError(''); setMessage(''); setInstitution(''); setNotes(''); setBusy(false); refresh(); } }, [visible]);
+  const syncOne = async (link_id: string) => {
+    if (!link_id) return;
+    setSyncingId(link_id); setError('');
+    try {
+      const data = await apiCall(`/api/accounts/link/${link_id}/sync`, { method: 'POST' }, token);
+      setMessage(`Refreshed. ${data?.synced ?? 0} new transactions.`);
+      await refresh();
+    } catch (e: any) { setError(e?.message || 'Sync failed.'); }
+    finally { setSyncingId(null); }
+  };
+  const unlink = async (link_id: string, provider: string) => {
+    if (!link_id) return;
+    setSyncingId(link_id); setError('');
+    try {
+      const path = provider === 'file' ? `/api/accounts/link/${link_id}` : `/api/accounts/link/${link_id}`;
+      // Both providers use the same DELETE path in this backend.
+      await apiCall(path, { method: 'DELETE' }, token);
+      setMessage('Account removed.');
+      await refresh();
+      onConfirm([]);
+    } catch (e: any) { setError(e?.message || 'Unlink failed.'); }
+    finally { setSyncingId(null); }
+  };
   const submitSimpleFin = async () => {
     if (!setupToken.trim()) { setError('Paste your SimpleFIN Setup Token.'); return; }
     setError(''); setBusy(true);
     try {
       const data = await apiCall('/api/accounts/simplefin/link', { method: 'POST', body: JSON.stringify({ setup_token: setupToken.trim() }) }, token);
       onConfirm(data?.accounts || []);
+      await refresh();
+      setMode('menu');
+      setMessage(`Linked ${data?.linked_count || 0} accounts.`);
     } catch (e: any) { setError(e?.message || 'Could not link SimpleFIN.'); }
     finally { setBusy(false); }
   };
-  const submitFile = async () => {
-    setError(''); setBusy(true);
-    try {
-      const DocumentPicker = await import('expo-document-picker');
-      const res = await DocumentPicker.getDocumentAsync({ type: ['text/csv', 'application/x-ofx', 'application/vnd.intu.qbo', 'application/x-qfx', 'application/octet-stream', '*/*'], copyToCacheDirectory: true, multiple: false });
-      if (res.canceled || !res.assets?.length) { setBusy(false); return; }
-      const asset = res.assets[0];
-      const form = new FormData();
-      const uri = asset.uri;
-      // React Native FormData supports a URI-form file object; on web we need a Blob.
-      if (Platform.OS === 'web') {
-        const blob = await (await fetch(uri)).blob();
-        form.append('file', new File([blob], asset.name, { type: asset.mimeType || 'text/csv' }));
-      } else {
-        // @ts-ignore RN FormData file
-        form.append('file', { uri, name: asset.name, type: asset.mimeType || 'application/octet-stream' });
-      }
-      const headers: any = { 'Authorization': `Bearer ${token}` };
-      const url = `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}/api/accounts/import`;
-      const httpRes = await fetch(url, { method: 'POST', headers, body: form as any });
-      const body = await httpRes.json();
-      if (!httpRes.ok) throw new Error(body?.detail || 'Import failed');
-      setMessage(`Imported ${body.inserted} tx (${body.duplicates} duplicates skipped). Detected columns: ${Object.keys(body.detected_columns || {}).join(', ') || '—'}`);
-      onConfirm([{ link_id: body.link_id, name: body.account_name, balance: body.balance, provider: 'file' }]);
-    } catch (e: any) { setError(e?.message || 'Import failed.'); }
-    finally { setBusy(false); }
-  };
+  const submitFile = async () => pickAndImport(token, async (msg) => { setMessage(msg); await refresh(); onConfirm([]); setMode('menu'); }, (err) => setError(err), setBusy);
   const submitRequest = async () => {
     if (!institution.trim()) { setError('Enter an institution name.'); return; }
     setError(''); setBusy(true);
@@ -1042,9 +1083,42 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
     finally { setBusy(false); }
   };
   return (
-    <Sheet visible={visible} close={close} title={mode === 'menu' ? 'Add an account' : mode === 'simplefin' ? 'SimpleFIN' : mode === 'file' ? 'Upload statement' : 'Request an institution'} subtitle={mode === 'menu' ? 'Choose how to add a financial account.' : ''}>
+    <Sheet visible={visible} close={close} title={mode === 'menu' ? 'Linked accounts' : mode === 'simplefin' ? 'SimpleFIN' : mode === 'file' ? 'Upload statement' : 'Request an institution'} subtitle={mode === 'menu' ? 'Refresh, remove, or add a new account.' : ''}>
       {mode === 'menu' && (
         <View style={{ gap: 10 }}>
+          {existing && existing.length > 0 && (
+            <View style={{ marginBottom: 6 }}>
+              <Text style={{ fontSize: 9, fontWeight: '700', color: C.muted, letterSpacing: 1.2, marginBottom: 6 }}>YOUR ACCOUNTS ({existing.length})</Text>
+              {existing.map((row: any, i: number) => {
+                const key = row.link_id || `${row.provider}-${i}`;
+                const isSyncing = syncingId === row.link_id;
+                const canSync = row.provider === 'simplefin' && !!row.link_id;
+                return (
+                  <View key={key} style={s.linkedRow}>
+                    <View style={s.linkedIcon}><Ionicons name={row.provider === 'file' ? 'document-attach-outline' : row.provider === 'snaptrade' ? 'trending-up' : 'card-outline'} size={16} color={C.goldEyebrow} /></View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: C.ink }}>{row.name || row.account_name || 'Account'}</Text>
+                      <Text style={{ fontSize: 8, color: C.muted2 }}>{row.org_name || (row.provider === 'file' ? 'Imported' : row.provider === 'snaptrade' ? 'SnapTrade' : 'Linked')}{row.balance !== undefined ? ` · ${MONEY(row.balance)}` : ''}</Text>
+                      {row.error ? <Text style={{ fontSize: 8, color: C.danger }}>{row.error}</Text> : null}
+                    </View>
+                    {canSync && (
+                      <Pressable testID={`link-sync-${row.link_id}`} onPress={() => syncOne(row.link_id)} disabled={isSyncing} style={s.linkedBtn}>
+                        <Ionicons name={isSyncing ? 'hourglass-outline' : 'refresh-outline'} size={16} color={C.ink3} />
+                      </Pressable>
+                    )}
+                    {row.link_id && (
+                      <Pressable testID={`link-remove-${row.link_id}`} onPress={() => unlink(row.link_id, row.provider)} disabled={isSyncing} style={s.linkedBtn}>
+                        <Ionicons name="trash-outline" size={16} color={C.danger} />
+                      </Pressable>
+                    )}
+                  </View>
+                );
+              })}
+              {message ? <Text testID="link-message" style={{ color: C.green, fontSize: 11, marginTop: 6 }}>{message}</Text> : null}
+              {error ? <Text testID="link-error" style={s.formError}>{error}</Text> : null}
+            </View>
+          )}
+          <Text style={{ fontSize: 9, fontWeight: '700', color: C.muted, letterSpacing: 1.2, marginTop: 4 }}>ADD AN ACCOUNT</Text>
           {[
             { id: 'simplefin', icon: 'link' as const, label: 'Connect a bank via SimpleFIN', sub: 'Checking, savings, credit cards, loans.' },
             { id: 'file', icon: 'document-attach-outline' as const, label: 'Upload CSV / OFX / QFX / QBO', sub: 'For banks SimpleFIN can\u2019t reach.' },
@@ -1154,6 +1228,20 @@ function MainApp() {
     if (!hydrated) return;
     storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts })).catch(() => {});
   }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts]);
+
+  // Listen for SnapTrade OAuth callback deep link (jaleter://snaptrade-callback).
+  useEffect(() => {
+    if (!auth.token) return;
+    const handleUrl = (url: string) => {
+      if (!url) return;
+      if (url.includes('snaptrade-callback')) {
+        apiCall('/api/accounts/snaptrade/callback', { method: 'POST' }, auth.token).catch(() => {});
+      }
+    };
+    Linking.getInitialURL().then((url) => { if (url) handleUrl(url); });
+    const sub = Linking.addEventListener('url', ({ url }) => handleUrl(url));
+    return () => { sub.remove(); };
+  }, [auth.token]);
 
   // When Login/Google flow completes, jump straight to the app.
   // Signup flow stays on 'connect'/'paywall' cosmetic screens (handled by onCreated).
@@ -1349,6 +1437,9 @@ const s = StyleSheet.create({
   toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#fff' },
   logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 14, borderWidth: 1, borderColor: '#ebd9d4', borderRadius: 16, backgroundColor: '#fff9f7', marginTop: 12 },
   formError: { color: C.danger, fontSize: 11, marginTop: 10, marginBottom: -4 },
+  linkedRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderWidth: 1, borderColor: C.border, borderRadius: 14, backgroundColor: C.creamAlt, marginBottom: 8 },
+  linkedIcon: { width: 32, height: 32, borderRadius: 10, backgroundColor: '#f2ece2', alignItems: 'center', justifyContent: 'center' },
+  linkedBtn: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#f2ece2', alignItems: 'center', justifyContent: 'center' },
   orDivider: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, marginBottom: 12 },
   orLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: '#d8d2c7' },
   orText: { fontSize: 10, color: C.muted2, letterSpacing: 1.5 },

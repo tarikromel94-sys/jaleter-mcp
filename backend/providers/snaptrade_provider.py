@@ -64,7 +64,7 @@ class SnapTradeProvider(Provider):
         if not self.is_configured():
             raise ProviderError('SnapTrade not configured — SNAPTRADE_CLIENT_ID and SNAPTRADE_CONSUMER_KEY are missing.')
         snap_user_id, snap_secret = await self._ensure_user(user_id)
-        custom_redirect = payload.get('custom_redirect') or 'https://app.jaleter.com/snaptrade/callback'
+        custom_redirect = payload.get('custom_redirect') or 'jaleter://snaptrade-callback'
         try:
             resp = self._client.authentication.login_snap_trade_user(  # type: ignore
                 user_id=snap_user_id, user_secret=snap_secret,
