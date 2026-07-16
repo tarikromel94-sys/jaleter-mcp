@@ -10,8 +10,8 @@ LogBox.ignoreAllLogs(true);
 SplashScreen.preventAutoHideAsync();
 
 // Load Playfair Display from Google Fonts CDN for the Jaleter serif brand type.
-const PLAYFAIR_500 = "https://fonts.gstatic.com/s/playfairdisplay/v37/nuFvD-vYSZviVYUb_rj3ij__anPXJzDwcbmjWBN2PKdFvXDXbtM.ttf";
-const PLAYFAIR_600 = "https://fonts.gstatic.com/s/playfairdisplay/v37/nuFvD-vYSZviVYUb_rj3ij__anPXJzDwcbmjWBN2PKdFvUDXbtM.ttf";
+const PLAYFAIR_500 = "https://fonts.gstatic.com/s/playfairdisplay/v40/nuFvD-vYSZviVYUb_rj3ij__anPXJzDwcbmjWBN2PKd3vUDQ.ttf";
+const PLAYFAIR_600 = "https://fonts.gstatic.com/s/playfairdisplay/v40/nuFvD-vYSZviVYUb_rj3ij__anPXJzDwcbmjWBN2PKebukDQ.ttf";
 
 export default function RootLayout() {
   const [iconsLoaded, iconsError] = useIconFonts();
