@@ -32,6 +32,8 @@ from simplefin_service import (
     fetch_accounts as sf_fetch_accounts,
     map_transaction as sf_map_transaction,
 )
+from providers import ProviderError, build_registry, catalog as provider_catalog
+from fastapi import File, UploadFile, Form
 
 MONGO_URL = os.environ['MONGO_URL']
 DB_NAME = os.environ['DB_NAME']
@@ -103,6 +105,16 @@ class ResetPasswordRequest(BaseModel):
 
 class SimpleFinLinkRequest(BaseModel):
     setup_token: str
+
+
+class SupportRequest(BaseModel):
+    institution: str = Field(min_length=1, max_length=120)
+    notes: Optional[str] = Field(default=None, max_length=2000)
+
+
+class ProviderLinkRequest(BaseModel):
+    provider: str
+    payload: dict = Field(default_factory=dict)
 
 
 # ------- Helpers -------
@@ -493,6 +505,112 @@ async def list_bank_transactions(current_user: dict = Depends(get_current_user),
         {'_id': 0, 'user_id': 0, 'raw': 0},
     ).sort('date', -1).limit(min(max(limit, 1), 200))
     return {'transactions': [{**t, 'date': t['date'].isoformat() if isinstance(t.get('date'), datetime) else t.get('date')} async for t in cursor]}
+
+
+# ------- Modular Provider Layer -------
+_provider_registry = build_registry(db)
+
+
+@api_router.get('/providers')
+async def list_providers():
+    return {'providers': provider_catalog(_provider_registry)}
+
+
+@api_router.post('/accounts/link')
+async def provider_link(payload: ProviderLinkRequest, current_user: dict = Depends(get_current_user)):
+    """Modular link endpoint. Currently delegates SimpleFIN to its existing route.
+    For 'snaptrade' returns a redirect_uri (or 503 if not configured)."""
+    if payload.provider == 'simplefin':
+        setup_token = (payload.payload or {}).get('setup_token')
+        if not setup_token:
+            raise HTTPException(status_code=400, detail='setup_token required for SimpleFIN')
+        return await simplefin_link(SimpleFinLinkRequest(setup_token=setup_token), request=None, current_user=current_user)  # type: ignore[arg-type]
+    if payload.provider not in _provider_registry:
+        raise HTTPException(status_code=400, detail=f'Unknown provider: {payload.provider}')
+    provider = _provider_registry[payload.provider]
+    if not provider.is_configured():
+        raise HTTPException(status_code=503, detail=f'{provider.label} is not yet configured.')
+    try:
+        return await provider.link(current_user['user_id'], payload.payload or {})
+    except ProviderError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@api_router.post('/accounts/import')
+async def import_transactions(
+    file: UploadFile = File(...),
+    account_name: Optional[str] = Form(default=None),
+    current_user: dict = Depends(get_current_user),
+):
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail='Uploaded file is empty')
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail='File larger than 5MB')
+    provider = _provider_registry['file']
+    try:
+        result = await provider.import_file(current_user['user_id'], file.filename or 'upload', file.content_type, raw, account_name)  # type: ignore[attr-defined]
+        return result
+    except ProviderError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@api_router.get('/accounts/all')
+async def list_all_accounts(current_user: dict = Depends(get_current_user)):
+    """Combines SimpleFIN, SnapTrade, and File-import balances into one list.
+    Never raises on provider failures — returns per-source error entries instead."""
+    combined: list[dict] = []
+    # SimpleFIN via existing endpoint helper
+    try:
+        sf_data = await list_accounts(current_user)  # type: ignore[func-returns-value]
+        for row in sf_data.get('accounts', []):
+            combined.append({**row, 'provider': 'simplefin', 'kind': 'bank'})
+    except Exception as e:  # noqa: BLE001
+        combined.append({'provider': 'simplefin', 'error': str(e)})
+    # File & SnapTrade providers
+    for pid in ('file', 'snaptrade'):
+        p = _provider_registry.get(pid)
+        if not p or not p.is_configured():
+            continue
+        try:
+            rows = await p.list_accounts(current_user['user_id'])
+            for row in rows:
+                combined.append({**row, 'provider': pid, 'kind': 'investment' if pid == 'snaptrade' else 'file'})
+        except Exception as e:  # noqa: BLE001
+            combined.append({'provider': pid, 'error': str(e)})
+    return {'accounts': combined}
+
+
+# ------- Unsupported-institution requests -------
+@api_router.post('/support/requests')
+async def submit_support_request(payload: SupportRequest, current_user: dict = Depends(get_current_user)):
+    doc = {
+        'user_id': current_user['user_id'], 'user_email': current_user.get('email'),
+        'institution': payload.institution.strip(),
+        'notes': (payload.notes or '').strip(),
+        'created_at': datetime.now(timezone.utc), 'status': 'open',
+    }
+    result = await db.support_requests.insert_one(doc)
+    if sendgrid_ready():
+        admin_email = os.getenv('SUPPORT_ADMIN_EMAIL') or _sender_admin_fallback()
+        if admin_email:
+            subject = f'[Jaleter] Institution request: {doc["institution"]}'
+            text = f"User: {doc['user_email']}\nInstitution: {doc['institution']}\nNotes: {doc['notes'] or '(none)'}"
+            html = f"<p>User: <strong>{doc['user_email']}</strong></p><p>Institution: <strong>{doc['institution']}</strong></p><p>Notes: {doc['notes'] or '(none)'}</p>"
+            send_email(admin_email, subject, html, text)
+    return {'ok': True, 'request_id': str(result.inserted_id)}
+
+
+def _sender_admin_fallback() -> Optional[str]:
+    from_email = os.getenv('SENDGRID_FROM_EMAIL', '').strip()
+    return from_email or None
+
+
+@api_router.get('/support/requests')
+async def list_support_requests(current_user: dict = Depends(get_current_user)):
+    # Users see only their own requests. Admin dashboard would filter differently.
+    cursor = db.support_requests.find({'user_id': current_user['user_id']}, {'_id': 0, 'user_id': 0}).sort('created_at', -1)
+    return {'requests': [{**r, 'created_at': r['created_at'].isoformat() if isinstance(r.get('created_at'), datetime) else r.get('created_at')} async for r in cursor]}
 
 
 app.include_router(api_router)

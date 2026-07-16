@@ -696,6 +696,14 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
 /* ---------------- Net Worth ---------------- */
 const NetWorthScreen = ({ assets, liabilities }: any) => {
   const t = useThemed();
+  const { token } = useAuth();
+  const [linkedRows, setLinkedRows] = useState<any[]>([]);
+  useEffect(() => {
+    if (!token) return;
+    apiCall('/api/accounts/all', { method: 'GET' }, token)
+      .then((data: any) => setLinkedRows(Array.isArray(data?.accounts) ? data.accounts : []))
+      .catch(() => setLinkedRows([]));
+  }, [token]);
   const [period, setPeriod] = useState('Quarter');
   const [visible, setVisible] = useState(true);
   const ta = assets.reduce((sum: number, x: Asset) => sum + x.value, 0);
@@ -729,7 +737,16 @@ const NetWorthScreen = ({ assets, liabilities }: any) => {
         <Text style={{ color: '#b99a6c' }}>=</Text>
         <View style={[{ flex: 1.2 }, s.cpAvailable]}><Text style={[s.cpSmall, { color: '#c8b494' }]}>AVAILABLE</Text><Text style={[s.cpStrong, { color: '#f3dfbd' }]}>{MONEY(Math.max(0, cash - 5050))}</Text></View>
       </View>
-      <WorthCard title="Assets" total={ta} rows={assets} hidden={!visible} />
+      <WorthCard title="Assets" total={ta + linkedRows.filter((r:any) => (r.balance || 0) > 0 && !r.error).reduce((sum:number,r:any) => sum + (r.balance || 0), 0)} rows={[
+        ...assets,
+        ...linkedRows.filter((r: any) => !r.error).map((r: any) => ({
+          id: r.link_id ? `${r.link_id}-${r.account_id || r.id || 'acct'}` : `${r.provider}-${r.account_name}`,
+          name: r.name || r.account_name || 'Linked Account',
+          value: r.balance || 0,
+          source: r.provider === 'simplefin' ? (r.org_name || 'SimpleFIN') : r.provider === 'file' ? 'Imported' : r.provider === 'snaptrade' ? 'SnapTrade' : 'Linked',
+          icon: r.provider === 'file' ? 'document-attach-outline' : r.provider === 'snaptrade' ? 'trending-up' : 'card-outline',
+        })),
+      ]} hidden={!visible} />
       <WorthCard title="Liabilities" total={tl} rows={liabilities} hidden={!visible} />
     </ScrollView>
   );
@@ -970,43 +987,121 @@ const NotificationsSheet = ({ visible, close, onSave }: any) => {
 };
 const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
   const { token } = useAuth();
+  const [mode, setMode] = useState<'menu' | 'simplefin' | 'file' | 'request'>('menu');
   const [setupToken, setSetupToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  useEffect(() => { if (visible) { setSetupToken(''); setError(''); setBusy(false); } }, [visible]);
-  const submit = async () => {
+  const [message, setMessage] = useState('');
+  const [institution, setInstitution] = useState('');
+  const [notes, setNotes] = useState('');
+  useEffect(() => { if (visible) { setMode('menu'); setSetupToken(''); setError(''); setMessage(''); setInstitution(''); setNotes(''); setBusy(false); } }, [visible]);
+  const submitSimpleFin = async () => {
     if (!setupToken.trim()) { setError('Paste your SimpleFIN Setup Token.'); return; }
     setError(''); setBusy(true);
     try {
-      const data = await apiCall('/api/accounts/simplefin/link', {
-        method: 'POST',
-        body: JSON.stringify({ setup_token: setupToken.trim() }),
-      }, token);
+      const data = await apiCall('/api/accounts/simplefin/link', { method: 'POST', body: JSON.stringify({ setup_token: setupToken.trim() }) }, token);
       onConfirm(data?.accounts || []);
     } catch (e: any) { setError(e?.message || 'Could not link SimpleFIN.'); }
     finally { setBusy(false); }
   };
+  const submitFile = async () => {
+    setError(''); setBusy(true);
+    try {
+      const DocumentPicker = await import('expo-document-picker');
+      const res = await DocumentPicker.getDocumentAsync({ type: ['text/csv', 'application/x-ofx', 'application/vnd.intu.qbo', 'application/x-qfx', 'application/octet-stream', '*/*'], copyToCacheDirectory: true, multiple: false });
+      if (res.canceled || !res.assets?.length) { setBusy(false); return; }
+      const asset = res.assets[0];
+      const form = new FormData();
+      const uri = asset.uri;
+      // React Native FormData supports a URI-form file object; on web we need a Blob.
+      if (Platform.OS === 'web') {
+        const blob = await (await fetch(uri)).blob();
+        form.append('file', new File([blob], asset.name, { type: asset.mimeType || 'text/csv' }));
+      } else {
+        // @ts-ignore RN FormData file
+        form.append('file', { uri, name: asset.name, type: asset.mimeType || 'application/octet-stream' });
+      }
+      const headers: any = { 'Authorization': `Bearer ${token}` };
+      const url = `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}/api/accounts/import`;
+      const httpRes = await fetch(url, { method: 'POST', headers, body: form as any });
+      const body = await httpRes.json();
+      if (!httpRes.ok) throw new Error(body?.detail || 'Import failed');
+      setMessage(`Imported ${body.inserted} tx (${body.duplicates} duplicates skipped). Detected columns: ${Object.keys(body.detected_columns || {}).join(', ') || '—'}`);
+      onConfirm([{ link_id: body.link_id, name: body.account_name, balance: body.balance, provider: 'file' }]);
+    } catch (e: any) { setError(e?.message || 'Import failed.'); }
+    finally { setBusy(false); }
+  };
+  const submitRequest = async () => {
+    if (!institution.trim()) { setError('Enter an institution name.'); return; }
+    setError(''); setBusy(true);
+    try {
+      await apiCall('/api/support/requests', { method: 'POST', body: JSON.stringify({ institution: institution.trim(), notes: notes.trim() }) }, token);
+      setMessage(`Thanks — we've logged your request for ${institution.trim()}.`);
+      setInstitution(''); setNotes('');
+    } catch (e: any) { setError(e?.message || 'Could not send request.'); }
+    finally { setBusy(false); }
+  };
   return (
-    <Sheet visible={visible} close={close} title="Connect with SimpleFIN" subtitle="Paste the Setup Token from beta-bridge.simplefin.org">
-      <Text style={{ color: '#817b72', fontSize: 11, marginBottom: 10, lineHeight: 16 }}>
-        Visit <Text style={{ fontWeight: '700', color: C.goldEyebrow }}>beta-bridge.simplefin.org</Text>, log in, tap <Text style={{ fontWeight: '700' }}>Create Setup Token</Text>, and paste it below.
-      </Text>
-      <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 380 }}>
-      <TextInput
-        testID="link-setup-token"
-        style={[s.input, { minHeight: 90 }]}
-        value={setupToken}
-        onChangeText={setSetupToken}
-        multiline
-        autoCapitalize="none"
-        autoCorrect={false}
-        placeholder="Paste your Setup Token here…"
-      />
-      {error ? <Text testID="link-error" style={s.formError}>{error}</Text> : null}
-      <View style={{ marginTop: 14, marginBottom: 24 }}>
-        <GoldButton label={busy ? 'Linking…' : 'Link account'} onPress={submit} disabled={busy || !setupToken.trim()} testID="link-submit" />
-      </View>
-      </ScrollView>
+    <Sheet visible={visible} close={close} title={mode === 'menu' ? 'Add an account' : mode === 'simplefin' ? 'SimpleFIN' : mode === 'file' ? 'Upload statement' : 'Request an institution'} subtitle={mode === 'menu' ? 'Choose how to add a financial account.' : ''}>
+      {mode === 'menu' && (
+        <View style={{ gap: 10 }}>
+          {[
+            { id: 'simplefin', icon: 'link' as const, label: 'Connect a bank via SimpleFIN', sub: 'Checking, savings, credit cards, loans.' },
+            { id: 'file', icon: 'document-attach-outline' as const, label: 'Upload CSV / OFX / QFX / QBO', sub: 'For banks SimpleFIN can\u2019t reach.' },
+            { id: 'request', icon: 'help-circle-outline' as const, label: 'Request an unsupported institution', sub: 'Tell us who to add next.' },
+          ].map((row) => (
+            <Pressable key={row.id} testID={`link-mode-${row.id}`} onPress={() => setMode(row.id as any)} style={s.moreGridBtn}>
+              <View style={s.moreGridIcon}><Ionicons name={row.icon} size={20} color={C.goldEyebrow} /></View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 12, fontWeight: '700' }}>{row.label}</Text>
+                <Text style={{ fontSize: 9, color: C.muted2 }}>{row.sub}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#aaa39a" />
+            </Pressable>
+          ))}
+        </View>
+      )}
+      {mode === 'simplefin' && (
+        <View>
+          <Text style={{ color: '#817b72', fontSize: 11, marginBottom: 10, lineHeight: 16 }}>
+            Visit <Text style={{ fontWeight: '700', color: C.goldEyebrow }}>beta-bridge.simplefin.org</Text>, tap <Text style={{ fontWeight: '700' }}>Create Setup Token</Text>, and paste it below.
+          </Text>
+          <TextInput testID="link-setup-token" style={[s.input, { minHeight: 90 }]} value={setupToken} onChangeText={setSetupToken} multiline autoCapitalize="none" autoCorrect={false} placeholder="Paste your Setup Token here…" />
+          {error ? <Text testID="link-error" style={s.formError}>{error}</Text> : null}
+          <View style={{ marginTop: 14 }}>
+            <GoldButton label={busy ? 'Linking…' : 'Link account'} onPress={submitSimpleFin} disabled={busy || !setupToken.trim()} testID="link-submit" />
+          </View>
+        </View>
+      )}
+      {mode === 'file' && (
+        <View>
+          <Text style={{ color: '#817b72', fontSize: 11, marginBottom: 12, lineHeight: 16 }}>
+            Choose a CSV export or an OFX/QFX/QBO statement from your bank. We&apos;ll detect columns, dedupe transactions and update balances automatically.
+          </Text>
+          {error ? <Text testID="import-error" style={s.formError}>{error}</Text> : null}
+          {message ? <Text style={{ color: C.green, fontSize: 11 }}>{message}</Text> : null}
+          <View style={{ marginTop: 14 }}>
+            <GoldButton label={busy ? 'Uploading…' : 'Choose file'} onPress={submitFile} disabled={busy} testID="import-choose" />
+          </View>
+        </View>
+      )}
+      {mode === 'request' && (
+        <View>
+          <Text style={{ color: '#817b72', fontSize: 11, marginBottom: 8 }}>Tell us which bank / credit union / brokerage you&apos;d like Jaleter to support.</Text>
+          <TextInput testID="request-institution" style={s.input} value={institution} onChangeText={setInstitution} placeholder="e.g. Chime, PenFed, Robinhood" />
+          <TextInput testID="request-notes" style={[s.input, { minHeight: 80, marginTop: 8 }]} value={notes} onChangeText={setNotes} multiline placeholder="Anything else we should know? (optional)" />
+          {error ? <Text testID="request-error" style={s.formError}>{error}</Text> : null}
+          {message ? <Text style={{ color: C.green, fontSize: 11, marginTop: 8 }}>{message}</Text> : null}
+          <View style={{ marginTop: 14 }}>
+            <GoldButton label={busy ? 'Sending…' : 'Send request'} onPress={submitRequest} disabled={busy || !institution.trim()} testID="request-submit" />
+          </View>
+        </View>
+      )}
+      {mode !== 'menu' && (
+        <Pressable testID="link-back-to-menu" onPress={() => { setMode('menu'); setError(''); setMessage(''); }} style={{ alignItems: 'center', marginTop: 14 }}>
+          <Text style={{ fontSize: 11, color: C.goldEyebrow, fontWeight: '600' }}>← Back to add-account menu</Text>
+        </Pressable>
+      )}
     </Sheet>
   );
 };

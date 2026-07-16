@@ -1,0 +1,60 @@
+{
+  "summary": "Modular provider layer tested end-to-end (backend + frontend). Backend pytest 14/16 passed. Two failures uncovered real bugs — see backend_issues.critical. All frontend flows passed on 390x844: login as alex+test1@jaleter.app/password123 → Net Worth shows seeded Cash/Investments/Real Estate/Vehicles with Assets total $295,034 (no crash, currency renders); More → Settings → settings-accounts opens AccountLinkSheet showing THREE options (link-mode-simplefin, link-mode-file, link-mode-request); simplefin form (link-setup-token/link-submit/link-back-to-menu) surfaces backend 'Invalid Setup Token format' inline via link-error; file mode renders import-choose button; request mode submits {institution:'Chime'} → shows green 'Thanks — we've logged your request for Chime.' and clears the institution field. Password preserved as password123 (verified via /api/auth/login=200 at end). Test artifacts (file-provider linked_accounts, bank_transactions, TEST_Chime/Chime support_requests) cleaned up so /api/accounts stopped returning 500.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/accounts (and POST /api/accounts/sync)",
+        "issue": "server.py:434-450 queries db.linked_accounts.find({'user_id': ...}) WITHOUT filtering by provider. When a user has any file-imported account (provider='file'), the doc has no 'access_url_encrypted' key → KeyError → uncaught 500. Reproduce: POST /api/accounts/import a CSV, then GET /api/accounts. Backend log: `KeyError: 'access_url_encrypted'`. Same bug likely affects POST /api/accounts/sync (server.py:453) and will surface once file-provider rows exist. Fix: add {'provider': {'$in': ['simplefin', None]}} (or explicit provider='simplefin', preserving legacy docs that predate the provider field) to both cursors.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "POST /api/accounts/import (dedup across uploads)",
+        "issue": "file_provider.import_file() generates a fresh link_id (`file-{uuid}`) per upload and scopes dedup by (user_id, account_id=link_id, external_id). Re-uploading the SAME CSV therefore inserts all rows again with duplicates=0, violating the spec's assertion 'Re-uploading the SAME CSV returns inserted=0 duplicates>=3'. Observed: inserted=3, duplicates=0 on second upload. Fix: dedup on (user_id, external_id) only, OR match an existing file-provider linked_account by (user_id, source_file, format) and reuse its link_id so account_id is stable.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {"endpoint": "POST /api/accounts/import (413 semantics)", "issue": "5MB limit is enforced by reading the whole body then measuring len(raw). A hostile client could still stream a 5GB body before the check — consider Content-Length pre-check or a streaming size guard."},
+      {"endpoint": "POST /api/accounts/link (simplefin)", "issue": "server.py:527 calls simplefin_link(SimpleFinLinkRequest(...), request=None, ...) — passing request=None side-steps SlowAPI's rate limiter. If someone starts hitting /api/accounts/link with provider='simplefin' they bypass the 5/min limit that /api/accounts/simplefin/link enforces."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AccountLinkSheet (link-submit) on 390x844", "issue": "Same regression noted in iteration_6 — Sheet content is tall enough that link-submit falls below fold; Playwright needed scroll_into_view_if_needed before tap. Real thumb users must scroll inside the sheet body.", "testID": "link-submit", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "NetWorth Assets → GET /api/accounts/all", "issue": "Because /api/accounts (SimpleFIN branch) throws 500 when file-provider rows exist, /api/accounts/all falls back to inserting {provider:'simplefin', error:'…'} — that means the SimpleFIN accounts row is not surfaced in Assets whenever the user has ANY file import. Depends on backend bug #1.", "affected_testIDs": ["nav-networth"]}
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_providers.py",
+    "/app/test_reports/pytest/providers_results.xml"
+  ],
+  "action_items": [
+    "Fix GET /api/accounts and POST /api/accounts/sync to filter linked_accounts by provider (or skip docs missing 'access_url_encrypted'). This is a hard 500 whenever a file account exists.",
+    "Fix file-provider dedup so re-uploading the same CSV returns inserted=0/duplicates>=3 (scope external_id uniqueness by user_id only, or reuse a single file-provider link_id per (user_id, source_file)).",
+    "Wire /api/accounts/link (provider='simplefin') through the SimpleFIN rate limiter — currently passing request=None bypasses SlowAPI.",
+    "Optional UX: make AccountLinkSheet scrollable inside so link-submit is always reachable on 390px height."
+  ],
+  "critical_code_review_comments": [
+    "server.py list_accounts (line 434-450): no provider filter → KeyError on file-provider rows. Must be scoped.",
+    "server.py provider_link (line 519-536): 'simplefin' branch calls simplefin_link with request=None, bypassing rate limiter and any request-scoped logic in that handler.",
+    "file_provider.import_file: creates a NEW linked_accounts row + new link_id per upload → dedup key is per-link, so cross-upload dedup can never fire. Consequence: user re-uploading a monthly CSV would double-count all transactions.",
+    "file_provider._parse_ofx wraps ALL exceptions as 'Could not parse OFX/QFX/QBO file' — good UX. Verified via the small sample OFX (parsed successfully, format='ofx').",
+    "/api/accounts/all correctly catches per-provider exceptions and yields error entries; that made the front end resilient to the /api/accounts 500 bug above.",
+    "SupportRequest: POST returns {ok:true, request_id:str(inserted_id)} — request_id is a Mongo ObjectId string but never exposed via GET (which strips _id). Consider generating a uuid4 request_id and storing it in the doc so clients get stable references."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_providers.py (created)",
+    "/app/test_reports/pytest/providers_results.xml (generated)",
+    "MongoDB: cleaned up test artifacts (linked_accounts, bank_transactions, support_requests) for alex+test1@jaleter.app so /api/accounts stops returning 500"
+  ],
+  "success_rate": {"backend": "87.5% (14/16)", "frontend": "100% (Net Worth render + 3-option AccountLinkSheet + link-error surfacing + request success)"},
+  "seed_data_creation": "Deleted 4 file-provider linked_accounts, 11 file-provider bank_transactions, and 4 TEST_Chime/Chime support_requests for alex+test1@jaleter.app to leave the /api/accounts SimpleFIN endpoint functional (it 500s otherwise — see backend_issues.critical). Password confirmed 'password123' via /api/auth/login → 200 at end of run.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend bug #1 is a landmine: as soon as any file-import runs for a user, GET /api/accounts returns 500 (KeyError 'access_url_encrypted') because server.py:436 does not filter linked_accounts by provider. After fixing, re-run pytest tests/test_providers.py — test_simplefin_accounts_still_works currently fails because of leftover state but a clean run against a fresh user should pass once the filter is added. Bug #2 (dedup scoping) requires either changing the unique key on bank_transactions to (user_id, external_id) plus dropping the account_id from the upsert filter, OR reusing a single file link_id per (user_id, source_file). Frontend testIDs are all correct — no changes needed there.",
+  "rca_of_issue": "Bug #1: server.py adds the modular provider layer (build_registry(db), /accounts/link, /accounts/import) which inserts documents into `linked_accounts` with only {user_id, provider, link_id, account_name, source_file, format, balance, currency, created_at, last_sync_at} — no access_url_encrypted. The pre-existing list_accounts endpoint at server.py:434 was not updated for this new schema; it still assumes every linked_accounts row belongs to SimpleFIN and reads doc['access_url_encrypted']. First KeyError → 500. Confirmed in /var/log/supervisor/backend.err.log: `access_url = sf_decrypt(doc['access_url_encrypted'])  KeyError: 'access_url_encrypted'`. Bug #2: In file_provider.py:163 a new link_id is minted per upload, then rows are upserted at file_provider.py:190 with filter {user_id, account_id: link_id, external_id}. Because account_id differs per upload, the filter never matches historic uploads, so all rows are freshly inserted."
+}
