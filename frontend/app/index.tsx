@@ -11,7 +11,9 @@ import { AuthProvider, useAuth, apiCall } from '@/src/AuthContext';
 import { C, D, F } from '@/src/jaleterTheme';
 import { dailyQuote, MONEY, EXACT, QuoteType } from '@/src/quoteLibrary';
 
-const STORAGE_KEY = 'jaleter-state-v1';
+const STORAGE_KEY = 'jaleter-state-v2';
+// One-time migration: any legacy v1 cache (which was seeded with mock $ figures) must be discarded.
+const LEGACY_STORAGE_KEYS = ['jaleter-state-v1'];
 
 // Dark theme context
 const ThemeCtx = createContext<{ dark: boolean }>({ dark: false });
@@ -1307,10 +1309,11 @@ const MoreScreen = ({ navigate, linkedCount }: any) => {
     </ScrollView>
   );
 };
-const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, alerts, setAlerts, onLogout, back, linkedAccounts, addLinked }: any) => {
+const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, alerts, setAlerts, onLogout, back, linkedAccounts, addLinked, onResetAppData }: any) => {
   const t = useThemed();
   const [sheet, setSheet] = useState<string | null>(null);
   const [toast, setToast] = useState('');
+  const [confirmReset, setConfirmReset] = useState(false);
   const rows: [string, string, string, any][] = [
     ['accounts', 'Linked Accounts', `${linkedAccounts.length} connected`, 'link-outline'],
     ['notifications', 'Notification Details', 'Manage every reminder', 'notifications-outline'],
@@ -1347,10 +1350,32 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
           </Pressable>
         ))}
       </View>
+      <Pressable onPress={() => setConfirmReset(true)} style={[s.logoutBtn, { marginTop: 10, borderColor: '#b28a4c' }]} testID="settings-reset">
+        <Ionicons name="refresh-outline" size={17} color="#b28a4c" />
+        <Text style={{ color: '#b28a4c', fontSize: 12, fontWeight: '700' }}>Reset App Data</Text>
+      </Pressable>
       <Pressable onPress={onLogout} style={s.logoutBtn} testID="settings-logout">
         <Ionicons name="log-out-outline" size={17} color={C.danger} />
         <Text style={{ color: C.danger, fontSize: 12, fontWeight: '700' }}>Log Out</Text>
       </Pressable>
+      <Modal transparent visible={confirmReset} animationType="fade" onRequestClose={() => setConfirmReset(false)}>
+        <View style={{ flex: 1, backgroundColor: '#00000099', justifyContent: 'center', padding: 24 }}>
+          <View style={[{ borderRadius: 22, padding: 22 }, { backgroundColor: t.dark ? D.surface : '#fff' }]}>
+            <Text style={[{ fontSize: 18, fontFamily: F.serif, fontWeight: '600' }, t.textInk]}>Reset app data?</Text>
+            <Text style={[{ fontSize: 12, marginTop: 8, lineHeight: 18 }, t.textMuted]}>
+              This clears every locally cached transaction, budget adjustment, and preference in this browser. Your account, bookings, and membership are safe — they live on the server.
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
+              <Pressable onPress={() => setConfirmReset(false)} style={{ flex: 1, padding: 14, borderRadius: 14, borderWidth: 1, borderColor: t.dark ? D.border : '#e5decf', alignItems: 'center' }} testID="reset-cancel">
+                <Text style={[{ fontWeight: '700', fontSize: 12 }, t.textInk]}>Cancel</Text>
+              </Pressable>
+              <Pressable onPress={async () => { setConfirmReset(false); await onResetAppData?.(); setToast('App data reset. Fresh start.'); }} style={{ flex: 1, padding: 14, borderRadius: 14, backgroundColor: '#b28a4c', alignItems: 'center' }} testID="reset-confirm">
+                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12 }}>Reset</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
       <LegalSheet visible={sheet === 'terms'} close={() => setSheet(null)} type="Terms of Use" />
       <LegalSheet visible={sheet === 'privacy'} close={() => setSheet(null)} type="Privacy Policy" />
       <NotificationsSheet visible={sheet === 'notifications'} close={() => setSheet(null)} onSave={(m: string) => { setSheet(null); setToast(m); }} />
@@ -1612,6 +1637,10 @@ function MainApp() {
   useEffect(() => {
     (async () => {
       try {
+        // Clear any legacy caches from previous versions (they contained seeded mock $ figures).
+        for (const k of LEGACY_STORAGE_KEYS) {
+          try { await storage.removeItem(k); } catch {}
+        }
         const raw = await storage.getItem(STORAGE_KEY, '' as string);
         if (raw) {
           const data = JSON.parse(raw);
@@ -1720,7 +1749,15 @@ function MainApp() {
           {active === 'legacy' && <LegacyScreen startingNetWorth={netWorth} back={() => nav('more')} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}
-          {active === 'settings' && <SettingsScreen experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} />}
+          {active === 'settings' && <SettingsScreen experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} onResetAppData={async () => {
+            try { await storage.removeItem(STORAGE_KEY); } catch {}
+            for (const k of LEGACY_STORAGE_KEYS) { try { await storage.removeItem(k); } catch {} }
+            setTransactions([]);
+            setLinkedAccounts([]);
+            setExperience('Faith');
+            setAppearance('System');
+            setAlerts({ enabled: true, threshold: 80 });
+          }} />}
           <BottomNav active={active} setActive={(id: string) => { setActive(id); }} isDark={isDark} />
         </View>
       )}
