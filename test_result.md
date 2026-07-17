@@ -237,3 +237,159 @@ User reported 3 issues:
         6. More → Membership: shows "Not active"; tapping "Subscribe — $75 / year" opens a Stripe checkout URL.
 
       Test credentials in /app/memory/test_credentials.md.
+
+## user_problem_statement (Batch A):
+Client escalation — 5 CRITICAL data-integrity issues:
+1. Budget category rows are read-only at $0 — need tap-to-edit budget amount per subcategory
+2. Transactions banner says "SimpleFIN sync is current" even when no accounts linked — misleading, must reflect real state
+3. Net Worth "Cash" and "Investments" labels show source "Manual" — should auto-aggregate from linked SimpleFIN accounts
+4. Confirm Stripe payments actually work end-to-end
+5. Forgot-password flow must be tested (dev-fallback mode)
+
+## backend:
+  - task: "Existing endpoints (regression) — /api/auth/*, /api/accounts/*, /api/payments/*"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "No backend changes in this batch — verify no regressions. Auth, forgot-password (dev-fallback), SimpleFIN, payments should all still respond as before."
+
+## frontend:
+  - task: "Editable Budget subcategories — tap row → sheet → save amount"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          BudgetScreen now lifts categories to editable state (persisted to jaleter-state-v2).
+          Each subcategory row is pressable → opens a Sheet with monthly-amount input.
+          Save updates categories state, closes sheet, chevron appears on every row.
+          Empty amount shows "tap to set" hint in champagne-gold. Header caption changed
+          from "Budget vs. actual" to "Tap any row to set an amount".
+
+  - task: "Transactions sync banner reflects real state, not fake copy"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Banner queries /api/accounts/all on mount and switches copy:
+          - No links yet → orange "No accounts linked yet · Link a bank via Settings…"
+          - Errored links → amber "N account(s) need attention"
+          - OK links → green "N account(s) synced · Last sync Xm ago" with real timestamp
+          Empty state also added to the transaction list itself (icon + "No transactions yet").
+
+  - task: "Net Worth: Cash + Investments auto-aggregate from linked accounts"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Introduced isInvestmentAccount() heuristic (SnapTrade → investments; SimpleFIN
+          account name matching invest/brokerage/IRA/401k/roth/hsa/etc → investments;
+          everything else → cash). Cash and Investments rows now sum manual + linked and
+          show source label "SimpleFIN · <org name>" or "SimpleFIN · N accounts". Real
+          Estate and Vehicles rows stay Manual. Removed the previous "append linked rows
+          as separate items on top of manual rows" that was double-counting. Hero net worth
+          now also includes linkedAssetsTotal so Home + Net Worth agree.
+
+  - task: "Home netWorth reads from same live linked source"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          MainApp now fetches /api/accounts/all on token change and includes
+          linkedAssetsTotal in the netWorth calc used by HomeScreen. Single source of truth
+          across Home + Net Worth. If no linked accounts, both show $0 for a fresh user.
+
+## metadata:
+  test_sequence: 13
+  run_ui: false
+
+## test_plan:
+  current_focus:
+    - "Editable Budget subcategories — tap row → sheet → save amount"
+    - "Transactions sync banner reflects real state, not fake copy"
+    - "Net Worth: Cash + Investments auto-aggregate from linked accounts"
+    - "Home netWorth reads from same live linked source"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+## agent_communication:
+  - agent: "main"
+    message: |
+      Batch A of the client escalation. FIVE fixes (all P0):
+
+      FRONTEND TESTS (do all via Playwright web preview http://localhost:3000):
+      Login as alex+test1@jaleter.app / password123 (see /app/memory/test_credentials.md).
+
+      1) BUDGET EDITABLE — /Budget tab:
+         - Expand any group (e.g. Give). Each subcategory should be a Pressable with a chevron and (when budgeted=0) "tap to set" hint in gold.
+         - Tap Tithe → a bottom sheet opens titled "Set budget · Tithe".
+         - Enter 500 and press "Save amount". Sheet closes. Row now shows "$500 budgeted".
+         - Total Income cell should now read "of $0" for July (budget cell is expense-side). But the "Give" group card should show "of $500" and any bar/% math still works.
+         - Reload the page — the 500 must PERSIST (stored in jaleter-state-v2).
+
+      2) SYNC BANNER — /Transactions tab, freshly-empty account:
+         - Banner must NOT say "SimpleFIN sync is current".
+         - Should show "No accounts linked yet · Link a bank via Settings → Linked Accounts, or import a CSV." (amber-ish tint, chevron).
+         - Transaction list empty state should also read "No transactions yet."
+         - Simulate a link error (if easy, otherwise skip): banner should say "1 account needs attention".
+         - After a successful SimpleFIN demo link (POST /api/accounts/simplefin/link with demo token; see test_credentials.md instructions if needed) banner should switch to green "1 account synced · Last sync just now."
+
+      3) NET WORTH AGGREGATION — /Net Worth tab, freshly-empty account:
+         - Hero must read $0.
+         - Assets card must have exactly 4 rows: Cash, Investments, Real Estate, Vehicles.
+         - Cash and Investments source column must read "Manual" (not append individual linked accounts).
+         - Now link a demo SimpleFIN account (POST /api/accounts/simplefin/link). Refresh Net Worth.
+         - Cash row VALUE must equal the sum of linked bank-type accounts.
+         - Cash row SOURCE must show "SimpleFIN · <org name>" or "SimpleFIN · N accounts".
+         - There should NOT be extra per-account rows appended to the Assets list.
+         - Hero net worth must reflect this new balance.
+
+      4) HOME MATCHES NET WORTH:
+         - After linking, go to /Home. The Net Worth snapshot card must equal the Net Worth hero exactly.
+
+      5) PERSISTENCE:
+         - After editing a Budget amount and linking an account, tap Settings → "Reset App Data" → confirm.
+         - Budget amounts should return to $0. Linked accounts on the server remain (server-side); local UI cache is cleared. Verify no crash.
+
+      BACKEND SMOKE TESTS (only verifying regressions):
+      - POST /api/auth/login, GET /api/auth/me
+      - POST /api/auth/forgot-password (dev-fallback should still return reset_token in JSON since SENDGRID_API_KEY is empty)
+      - POST /api/auth/reset-password with that reset_token → new token issued, user logs in with new password
+      - POST /api/accounts/simplefin/link with demo token (get one from https://beta-bridge.simplefin.org/info/developers — refresh page each time)
+      - GET /api/accounts/all
+      - POST /api/payments/checkout for coaching_session and jaleter_premium — should still return real checkout.stripe.com URLs
+      - GET /api/payments/status/{sid}
+
+      STRIPE E2E is optional for this run (already verified in iteration 12). But if you have time, please re-run one $50 coaching purchase with 4242 4242 4242 4242 to confirm the CONFIRMED booking still appears.
+
+      Credentials in /app/memory/test_credentials.md. If test_credentials.md is empty, alert me and I'll rewrite it.

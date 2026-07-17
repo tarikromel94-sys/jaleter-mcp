@@ -1,0 +1,70 @@
+{
+  "summary": "Iteration 13 — Batch A of critical fixes. FULL PASS on the 5 P0 frontend tests plus all 9 backend regressions. Cleaned Alex's test data first (deleted 1 residual linked_accounts, 16 bank_transactions, 2 coaching_bookings, 3 payment_transactions; unset premium_expires_at). Backend: 9/9 pytest cases green — POST /api/auth/login, GET /api/auth/me, POST /api/auth/forgot-password (dev-fallback returns reset_token as SENDGRID is empty), POST /api/auth/reset-password with token → NewPass123! login → reset back to password123, POST /api/accounts/simplefin/link (demo token scraped from beta-bridge.simplefin.org — 3 accounts linked totalling $140,689.98), GET /api/accounts/all, GET /api/payments/products, POST /api/payments/checkout (coaching_session with future scheduled_at → checkout.stripe.com URL), POST /api/payments/checkout (jaleter_premium → checkout.stripe.com URL). Frontend (Playwright, mobile 390x844, localhost:3000 after page.evaluate localStorage.clear()): (T1) Budget editable — Give expanded by default, Tithe row shows 'tap to set' in gold, tap opens sheet titled 'Set budget · Tithe', typing 500 and 'Save amount' closes sheet and row now reads '$500 / budgeted', Give card total shows 'of $500'. Full page reload persists $500. ✅ (T2) Sync banner — empty state banner reads exactly 'No accounts linked yet' / 'Link a bank via Settings → Linked Accounts, or import a CSV.' with amber tint; 'No transactions yet' empty state visible. Never contains 'SimpleFIN sync is current'. After linking 3 demo SimpleFIN accounts via backend, banner switches to green '3 accounts synced' / 'Last sync never.' ⚠️ (see minor). ✅ (T3) Net Worth aggregation — Hero $140,690 = sum of linked balances ($115,105.51 + $25,584.47 + $0 = $140,689.98 rounded). Assets card has exactly 4 rows: Cash, Investments, Real Estate, Vehicles. Cash row source reads 'SimpleFIN · 3 accounts' with value $140,690. No extra per-account rows below Vehicles. Sub-hero subtitle now reads 'Live from 3 linked accounts' (was 'Updates with your linked accounts'). ✅ (T4) Home mirrors — Home snapshot 'Net Worth $140,690' = Net Worth hero exactly. ✅ (T5) Reset App Data — Settings → 'Reset App Data' → confirm. No crash. Budget returns to $0 across all subcategories. Transactions list shows 'No transactions yet.'. Net Worth still $140,690 because server-side linked accounts remain (banner still says '3 accounts synced'). ✅. Screenshots saved at /app/test_reports/screenshots/. Alex's password restored to password123 and all test artifacts cleaned before finishing.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Transactions sync banner — freshly-linked state",
+        "issue": "Immediately after POST /api/accounts/simplefin/link, GET /api/accounts/all returns last_sync_at=null for every account, so the banner reads '3 accounts synced · Last sync never.' The request spec expected 'Last sync just now'. Root cause: server does not stamp last_sync_at on link creation, only on POST /api/accounts/sync. Fix (frontend): treat null last_sync_at as 'just now' when accounts exist. OR (backend): stamp last_sync_at on link creation. index.tsx:1040-1061.",
+        "testID": "tx-sync-banner",
+        "priority": "P3 (cosmetic)"
+      },
+      {
+        "component": "Cash source label for demo",
+        "issue": "Cash row shows 'SimpleFIN · 3 accounts' when demo org_name is empty string. In production with real banks this would show 'SimpleFIN · <org_name>' (correct). Demo/development quirk only — not a real bug but worth noting for the client demo.",
+        "testID": null,
+        "priority": "P4 (demo-only cosmetic)"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "shadow* / pointerEvents deprecations",
+        "issue": "Same RN-Web deprecation warnings as iterations 10–12: '\"shadow*\" style props are deprecated. Use \"boxShadow\"' and 'props.pointerEvents is deprecated. Use style.pointerEvents'. Carried, no new occurrences."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration13.py",
+    "/app/test_reports/pytest/iteration13_results.xml",
+    "/app/test_reports/screenshots/budget_sheet_open.png",
+    "/app/test_reports/screenshots/budget_after_save2.png",
+    "/app/test_reports/screenshots/budget_persist2.png",
+    "/app/test_reports/screenshots/tx_empty_banner.png",
+    "/app/test_reports/screenshots/tx_synced_banner.png",
+    "/app/test_reports/screenshots/nw_empty.png",
+    "/app/test_reports/screenshots/nw_synced.png",
+    "/app/test_reports/screenshots/home_synced.png",
+    "/app/test_reports/screenshots/final_budget_after_reset.png",
+    "/app/test_reports/screenshots/final_nw_after_reset.png"
+  ],
+  "action_items": [
+    "OPTIONAL P3 (cosmetic): index.tsx:1042-1061 — after linking, last_sync_at is null so banner reads 'Last sync never.' — expected 'just now'. Either treat null last_sync_at + linked > 0 as 'just now', or have the backend stamp last_sync_at on link creation.",
+    "OPTIONAL P3 (deprecations, carried): migrate shadow* → boxShadow and props.pointerEvents → style.pointerEvents.",
+    "OPTIONAL — Reset App Data intentionally does NOT log the user out (auth token remains in secure-store), only wipes the local jaleter-state-v2 cache. Verified. If a user restarts the app after reset, they stay logged in with a $0 budget. Good behavior."
+  ],
+  "critical_code_review_comments": [
+    "index.tsx:868 — expanded state defaults to ['give'] so Give is expanded on first render. A test-selector convenience but worth noting; tests must NOT click budget-cat-give to expand — that would collapse it.",
+    "index.tsx:1179-1182 — displayAssets is now strictly 4 rows (Cash, Investments, Real Estate, Vehicles) with linked balances aggregated into Cash/Investments via sum(manual + linked). Verified correct with demo — no double-counting, no per-account row appended. Nice fix.",
+    "index.tsx:1873-1883 — MainApp includes linkedAssetsTotal in netWorth calc, ensuring Home and Net Worth agree. Verified $140,690 identical on both screens.",
+    "index.tsx:1916-1924 — onResetAppData clears jaleter-state-v2 + legacy keys and resets categories/income/experience/appearance/alerts but does NOT touch auth. Correct behavior."
+  ],
+  "updated_files": [
+    "MongoDB (pre-test cleanup): deleted 1 linked_accounts + 16 bank_transactions + 2 coaching_bookings + 3 payment_transactions for alex+test1@jaleter.app; unset premium_expires_at + premium_last_purchase_at.",
+    "MongoDB (post-test cleanup): deleted 1 linked_accounts created during the SimpleFIN link tests; alex's password verified back to 'password123' via login round-trip.",
+    "Added /app/backend/tests/test_iteration13.py (9 test cases, all passing)."
+  ],
+  "success_rate": {
+    "backend": "100% (9/9 pytest cases in /app/backend/tests/test_iteration13.py)",
+    "frontend": "100% (all 5 P0 tests passing; 1 cosmetic 'Last sync never' quirk noted as minor)"
+  },
+  "seed_data_creation": "None retained. All test artifacts cleaned. Alex's password is back to 'password123'.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "For frontend E2E Stripe redirect testing, MUST use the preview URL (https://no-changes-mobile.preview.emergentagent.com), NOT http://localhost:3000, because backend builds Stripe success_url from x-forwarded-host (documented in iteration_12). For all NON-Stripe UI tests, http://localhost:3000 works fine (used here). Demo SimpleFIN setup tokens are scraped from beta-bridge.simplefin.org/info/developers — one-shot, refresh for new. After demo link the API returns last_sync_at=null (linked_count=3, org_name=''). Budget state is stored in localStorage under key 'jaleter-state-v2' plus one legacy 'jaleter-state-v1'; Reset App Data clears both. Auth token in secure-store is NOT cleared by Reset. Bottom nav does not currently have testIDs — use page.locator('text=Budget').last / 'Net Worth'.last / 'Transactions'.last for navigation. Give budget category is expanded by default (expanded=['give']) — do NOT click budget-cat-give to expand or it will collapse.",
+  "rca_of_issue": "N/A — no functional issues found this iteration. The single cosmetic quirk (Last sync 'never' right after link) is caused by /api/accounts/all returning last_sync_at=null in the account rows immediately after POST /api/accounts/simplefin/link (backend only stamps last_sync_at when POST /api/accounts/sync runs). formatAgo(0) at index.tsx:1042-1051 returns 'never', so the fresh-link banner reads 'Last sync never.' rather than 'just now'. Two-line fix in the banner builder or a one-line fix in the SimpleFIN link handler on the backend."
+}

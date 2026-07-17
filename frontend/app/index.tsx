@@ -862,10 +862,12 @@ const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, na
 };
 
 /* ---------------- Budget ---------------- */
-const BudgetScreen = ({ categories, incomeSources, transactions, focusCategory, clearFocus }: any) => {
+const BudgetScreen = ({ categories, setCategories, incomeSources, transactions, focusCategory, clearFocus }: any) => {
   const t = useThemed();
   const [period, setPeriod] = useState('July');
   const [expanded, setExpanded] = useState<string[]>(['give']);
+  const [editing, setEditing] = useState<{ groupId: string; sub: any } | null>(null);
+  const [draft, setDraft] = useState('');
   const annual = period === 'Year';
   useEffect(() => { if (focusCategory) { setExpanded(x => x.includes(focusCategory) ? x : [...x, focusCategory]); clearFocus(); } }, [focusCategory]);
   const relevant = transactions.filter((t: Tx) => annual || t.period === period);
@@ -874,6 +876,18 @@ const BudgetScreen = ({ categories, incomeSources, transactions, focusCategory, 
   const plannedIncome = incomeSources.reduce((sum: number, x: any) => sum + x.budgeted, 0) * (annual ? 12 : 1);
   const spent = (id: string) => relevant.filter((t: Tx) => t.type === 'expense' && (t.detailId === id || t.groupId === id)).reduce((sum: number, t: Tx) => sum + t.amount, 0);
   const budgetFor = (subBudget: number) => subBudget * (annual ? 12 : 1);
+
+  const startEdit = (groupId: string, sub: any) => { setEditing({ groupId, sub }); setDraft(sub.budgeted ? String(sub.budgeted) : ''); };
+  const commitEdit = () => {
+    if (!editing) return;
+    const clean = Math.max(0, Math.round(Number(draft.replace(/[^0-9.]/g, '')) || 0));
+    setCategories((prev: any[]) => prev.map((c) => c.id !== editing.groupId ? c : {
+      ...c,
+      subcategories: c.subcategories.map((sc: any) => sc.id !== editing.sub.id ? sc : { ...sc, budgeted: clean }),
+    }));
+    setEditing(null);
+    setDraft('');
+  };
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Budget" subtitle="Give first. Steward wisely. Grow intentionally." />
@@ -883,7 +897,7 @@ const BudgetScreen = ({ categories, incomeSources, transactions, focusCategory, 
         <View style={s.budgetSumCell}><Text style={s.bsSmall}>Expenses</Text><Text style={s.bsStrong}>{MONEY(actualExpenses)}</Text><Text style={s.bsSmall}>actual</Text></View>
         <View style={s.budgetSumCell}><Text style={s.bsSmall}>Net</Text><Text style={s.bsStrong}>{MONEY(actualIncome - actualExpenses)}</Text><Text style={s.bsSmall}>remaining</Text></View>
       </View>
-      <View style={[s.sectionTitle]}><Text style={[s.sectionH3, t.textInk]}>Plan by Purpose</Text><Text style={[s.sectionCap, t.textMuted]}>Budget vs. actual</Text></View>
+      <View style={[s.sectionTitle]}><Text style={[s.sectionH3, t.textInk]}>Plan by Purpose</Text><Text style={[s.sectionCap, t.textMuted]}>Tap any row to set an amount</Text></View>
       <View style={{ gap: 11 }}>
         {categories.map((c: any) => {
           const total = c.subcategories.reduce((sum: number, x: any) => sum + budgetFor(x.budgeted), 0);
@@ -913,10 +927,22 @@ const BudgetScreen = ({ categories, incomeSources, transactions, focusCategory, 
               {open && (
                 <View style={s.subcategoryList}>
                   {c.subcategories.map((sub: any) => (
-                    <View key={sub.id} style={s.subcategoryRow}>
-                      <View style={{ flex: 1 }}><Text style={{ fontSize: 10, fontWeight: '700' }}>{sub.name}</Text><Text style={{ fontSize: 8, color: C.muted2 }}>{MONEY(spent(sub.id))} actual</Text></View>
-                      <View style={{ alignItems: 'flex-end' }}><Text style={{ fontSize: 10, fontWeight: '700' }}>{MONEY(budgetFor(sub.budgeted))}</Text><Text style={{ fontSize: 8, color: C.muted2 }}>budgeted</Text></View>
-                    </View>
+                    <Pressable
+                      key={sub.id}
+                      onPress={() => startEdit(c.id, sub)}
+                      style={s.subcategoryRow}
+                      testID={`budget-sub-${sub.id}`}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{sub.name}</Text>
+                        <Text style={{ fontSize: 8, color: C.muted2 }}>{MONEY(spent(sub.id))} actual</Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{MONEY(budgetFor(sub.budgeted))}</Text>
+                        <Text style={{ fontSize: 8, color: sub.budgeted > 0 ? C.muted2 : '#c9a56c' }}>{sub.budgeted > 0 ? 'budgeted' : 'tap to set'}</Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#c1b9ac'} />
+                    </Pressable>
                   ))}
                 </View>
               )}
@@ -924,6 +950,33 @@ const BudgetScreen = ({ categories, incomeSources, transactions, focusCategory, 
           );
         })}
       </View>
+      <Sheet visible={!!editing} close={() => { setEditing(null); setDraft(''); }} title={editing ? `Set budget · ${editing.sub.name}` : ''} subtitle="Amount is budgeted per month. Year view multiplies by 12.">
+        {editing && (
+          <View>
+            <Text style={s.label}>Monthly amount</Text>
+            <View style={s.amountInput}>
+              <Text style={s.amountPrefix}>$</Text>
+              <TextInput
+                style={[s.input, { paddingLeft: 26 }]}
+                value={draft}
+                onChangeText={setDraft}
+                keyboardType="numeric"
+                placeholder="0"
+                autoFocus
+                testID="budget-edit-amount"
+              />
+            </View>
+            <View style={{ marginTop: 14 }}>
+              <GoldButton label="Save amount" onPress={commitEdit} testID="budget-edit-save" />
+            </View>
+            {editing.sub.budgeted > 0 && (
+              <Pressable onPress={() => { setDraft('0'); }} style={{ marginTop: 12, alignItems: 'center' }} testID="budget-edit-clear">
+                <Text style={{ color: C.muted2, fontSize: 11 }}>Clear this amount</Text>
+              </Pressable>
+            )}
+          </View>
+        )}
+      </Sheet>
     </ScrollView>
   );
 };
@@ -955,13 +1008,23 @@ async function pickAndImport(token: string | null, onDone: (msg: string) => void
 }
 
 /* ---------------- Transactions ---------------- */
-const TransactionsScreen = ({ transactions, setTransactions, categories, incomeSources }: any) => {
+const TransactionsScreen = ({ transactions, setTransactions, categories, incomeSources, openLinkSheet }: any) => {
   const t = useThemed();
   const { token } = useAuth();
   const [filter, setFilter] = useState('All');
   const [editing, setEditing] = useState<any>(null);
   const [toast, setToast] = useState('');
   const [importing, setImporting] = useState(false);
+  const [linkedRows, setLinkedRows] = useState<any[]>([]);
+  const [linkedLoaded, setLinkedLoaded] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    if (!token) { setLinkedRows([]); setLinkedLoaded(true); return; }
+    apiCall('/api/accounts/all', { method: 'GET' }, token)
+      .then((data: any) => { if (alive) { setLinkedRows(Array.isArray(data?.accounts) ? data.accounts : []); setLinkedLoaded(true); } })
+      .catch(() => { if (alive) { setLinkedRows([]); setLinkedLoaded(true); } });
+    return () => { alive = false; };
+  }, [token, transactions.length]);
   const shown = transactions.filter((tx: Tx) => filter === 'All' || (filter === 'Income' ? tx.type === 'income' : tx.type === 'expense'));
   const save = (t: any) => {
     setTransactions((xs: Tx[]) => xs.some(x => x.id === t.id) ? xs.map(x => x.id === t.id ? t : x) : [{ ...t, id: `manual-${Date.now()}`, origin: 'Manual', period: 'July' }, ...xs]);
@@ -969,6 +1032,37 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
   };
   const remove = (id: string) => { setTransactions((xs: Tx[]) => xs.filter(x => x.id !== id)); setEditing(null); setToast('Transaction deleted.'); };
   const importFile = () => pickAndImport(token, (msg) => setToast(msg), (err) => setToast(err), setImporting);
+
+  // Sync banner state — reflects the ACTUAL backend state, never fakes
+  const okLinks = linkedRows.filter((r: any) => !r.error);
+  const errLinks = linkedRows.filter((r: any) => r.error);
+  const totalLinks = linkedRows.length;
+  const timestamps = okLinks.map((r: any) => r.last_sync_at).filter(Boolean).map((v: string) => new Date(v).getTime()).filter((n: number) => !Number.isNaN(n));
+  const lastSyncMs = timestamps.length ? Math.max(...timestamps) : 0;
+  const formatAgo = (ms: number) => {
+    if (!ms) return 'never';
+    const diff = Math.max(0, Date.now() - ms);
+    const m = Math.floor(diff / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    return `${d}d ago`;
+  };
+  let banner: { icon: any; iconColor: string; title: string; sub: string; kind: 'empty' | 'ok' | 'warn' };
+  if (!linkedLoaded) {
+    banner = { icon: 'sync-outline', iconColor: '#7d8f92', title: 'Checking sync status…', sub: 'Refreshing linked accounts.', kind: 'empty' };
+  } else if (totalLinks === 0) {
+    banner = { icon: 'alert-circle-outline', iconColor: '#b28a4c', title: 'No accounts linked yet', sub: 'Link a bank via Settings → Linked Accounts, or import a CSV.', kind: 'empty' };
+  } else if (errLinks.length > 0) {
+    banner = { icon: 'warning-outline', iconColor: '#b46b41', title: `${errLinks.length} account${errLinks.length > 1 ? 's need' : ' needs'} attention`, sub: 'Re-link or refresh from Settings → Linked Accounts.', kind: 'warn' };
+  } else {
+    banner = { icon: 'link', iconColor: '#50715b', title: `${okLinks.length} account${okLinks.length > 1 ? 's' : ''} synced`, sub: `Last sync ${formatAgo(lastSyncMs)}.`, kind: 'ok' };
+  }
+  const bannerBg = banner.kind === 'empty' ? { backgroundColor: t.dark ? '#28241d' : '#f6efe1', borderColor: '#e5d5b3' }
+                 : banner.kind === 'warn' ? { backgroundColor: t.dark ? '#2d2118' : '#fbebe0', borderColor: '#e6b593' }
+                 : { backgroundColor: t.dark ? '#1e2d22' : '#eaf3ec', borderColor: '#c6dcc8' };
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Transactions" subtitle="Synced automatically. Editable anytime." action={
@@ -979,16 +1073,23 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
           </CircleBtn>
         </View>
       } />
-      <View style={s.syncBanner}>
-        <View style={s.syncIcon}><Ionicons name="link" size={18} color="#50715b" /></View>
+      <Pressable onPress={banner.kind === 'empty' ? openLinkSheet : undefined} style={[s.syncBanner, bannerBg]} testID="tx-sync-banner">
+        <View style={[s.syncIcon, { backgroundColor: t.dark ? '#00000033' : '#ffffffbb' }]}><Ionicons name={banner.icon} size={18} color={banner.iconColor} /></View>
         <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 10, fontWeight: '700', color: C.streakText }}>SimpleFIN sync is current</Text>
-          <Text style={{ fontSize: 8, color: '#829087' }}>Budget actuals and Net Worth cash update here.</Text>
+          <Text style={{ fontSize: 10, fontWeight: '700', color: t.dark ? D.text : '#3a3428' }}>{banner.title}</Text>
+          <Text style={{ fontSize: 8, color: t.dark ? D.textMuted : '#7a6f5c' }}>{banner.sub}</Text>
         </View>
-        <Ionicons name="checkmark" size={16} color="#50715b" />
-      </View>
+        <Ionicons name={banner.kind === 'empty' ? 'chevron-forward' : 'checkmark'} size={16} color={banner.iconColor} />
+      </Pressable>
       <PeriodPills values={['All','Income','Expenses']} value={filter} onChange={setFilter} testID="tx-filter" />
       <View style={[s.transactionList, t.cardBg]}>
+        {shown.length === 0 && (
+          <View style={{ padding: 30, alignItems: 'center' }}>
+            <Ionicons name="receipt-outline" size={28} color={t.dark ? D.textMuted : '#c1b9ac'} />
+            <Text style={[{ fontSize: 11, marginTop: 8 }, t.textMuted]}>No transactions yet.</Text>
+            <Text style={[{ fontSize: 9, marginTop: 3 }, t.textMuted]}>Link a bank, import a file, or add one manually.</Text>
+          </View>
+        )}
         {shown.map((tx: Tx) => (
           <Pressable key={tx.id} style={[s.transactionRow, t.dividerBorder]} onPress={() => setEditing(tx)} testID={`tx-${tx.id}`}>
             <View style={[s.txIcon, tx.type === 'income' && { backgroundColor: '#e7f0e8' }]}>
@@ -1035,7 +1136,12 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
 };
 
 /* ---------------- Net Worth ---------------- */
-const NetWorthScreen = ({ assets, liabilities }: any) => {
+const isInvestmentAccount = (r: any) => {
+  const hay = `${r.name || ''} ${r.account_name || ''} ${r.org_name || ''}`.toLowerCase();
+  if (r.provider === 'snaptrade') return true;
+  return /(invest|brokerage|ira|401k|403b|roth|hsa|mutual|advisor|wealth|portfolio|etrade|schwab|fidelity|vanguard|robinhood)/.test(hay);
+};
+const NetWorthScreen = ({ assets, liabilities, transactions }: any) => {
   const t = useThemed();
   const { token } = useAuth();
   const [linkedRows, setLinkedRows] = useState<any[]>([]);
@@ -1047,10 +1153,38 @@ const NetWorthScreen = ({ assets, liabilities }: any) => {
   }, [token]);
   const [period, setPeriod] = useState('Quarter');
   const [visible, setVisible] = useState(true);
-  const ta = assets.reduce((sum: number, x: Asset) => sum + x.value, 0);
+
+  // ---- Aggregate live-linked balances into the Cash / Investments buckets ----
+  const validLinks = linkedRows.filter((r: any) => !r.error);
+  const linkedCash = validLinks.filter((r: any) => !isInvestmentAccount(r)).reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
+  const linkedInvest = validLinks.filter(isInvestmentAccount).reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
+  const cashSources = validLinks.filter((r: any) => !isInvestmentAccount(r));
+  const investSources = validLinks.filter(isInvestmentAccount);
+  const sourceLabel = (rows: any[], fallback: string) => {
+    if (rows.length === 0) return fallback;
+    const providers = Array.from(new Set(rows.map((r: any) => r.provider)));
+    const orgs = Array.from(new Set(rows.map((r: any) => r.org_name).filter(Boolean)));
+    const providerName = providers.length === 1
+      ? (providers[0] === 'simplefin' ? 'SimpleFIN' : providers[0] === 'file' ? 'Imported' : providers[0] === 'snaptrade' ? 'SnapTrade' : 'Linked')
+      : 'Linked';
+    if (orgs.length === 1) return `${providerName} · ${orgs[0]}`;
+    return `${providerName} · ${rows.length} account${rows.length > 1 ? 's' : ''}`;
+  };
+
+  // ---- Build the display asset list: Cash & Investments are auto-computed. Real estate / vehicles stay manual. ----
+  const manualCash = assets.find((x: Asset) => x.id === 'cash')?.value || 0;
+  const manualInvest = assets.find((x: Asset) => x.id === 'investments')?.value || 0;
+  const manualOther = assets.filter((x: Asset) => x.id !== 'cash' && x.id !== 'investments');
+  const displayAssets: (Asset & { linked?: boolean })[] = [
+    { id: 'cash', name: 'Cash', value: manualCash + linkedCash, source: sourceLabel(cashSources, 'Manual'), icon: 'wallet-outline', linked: cashSources.length > 0 },
+    { id: 'investments', name: 'Investments', value: manualInvest + linkedInvest, source: sourceLabel(investSources, 'Manual'), icon: 'trending-up', linked: investSources.length > 0 },
+    ...manualOther,
+  ];
+
+  const ta = displayAssets.reduce((sum: number, x: any) => sum + (x.value || 0), 0);
   const tl = liabilities.reduce((sum: number, x: Asset) => sum + x.value, 0);
   const nw = ta - tl;
-  const cash = assets.find((x: Asset) => x.id === 'cash')?.value || 0;
+  const cash = displayAssets.find((x: any) => x.id === 'cash')?.value || 0;
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Net Worth" subtitle="Your full financial picture, in one place." action={
@@ -1061,9 +1195,8 @@ const NetWorthScreen = ({ assets, liabilities }: any) => {
         <Text style={s.nwHeroStrong}>{visible ? MONEY(nw) : '••••••'}</Text>
         <View style={{ flexDirection: 'row', gap: 4, alignItems: 'center' }}>
           <Ionicons name="trending-up" size={13} color="#7fac8d" />
-          <Text style={{ color: '#7fac8d', fontSize: 10 }}>Updates with your linked accounts</Text>
+          <Text style={{ color: '#7fac8d', fontSize: 10 }}>{validLinks.length > 0 ? `Live from ${validLinks.length} linked account${validLinks.length > 1 ? 's' : ''}` : 'Updates with your linked accounts'}</Text>
         </View>
-        {/* Ascending line chart placeholder (renders only when there is a positive net worth) */}
         {nw > 0 && (
           <View style={s.nwChart}>
             {[62, 55, 48, 42, 33, 24, 15, 9].map((top, i, arr) => (
@@ -1080,16 +1213,7 @@ const NetWorthScreen = ({ assets, liabilities }: any) => {
         <Text style={{ color: '#b99a6c' }}>=</Text>
         <View style={[{ flex: 1.2 }, s.cpAvailable]}><Text style={[s.cpSmall, { color: '#c8b494' }]}>AVAILABLE</Text><Text style={[s.cpStrong, { color: '#f3dfbd' }]}>{MONEY(Math.max(0, cash))}</Text></View>
       </View>
-      <WorthCard title="Assets" total={ta + linkedRows.filter((r:any) => (r.balance || 0) > 0 && !r.error).reduce((sum:number,r:any) => sum + (r.balance || 0), 0)} rows={[
-        ...assets,
-        ...linkedRows.filter((r: any) => !r.error).map((r: any) => ({
-          id: r.link_id ? `${r.link_id}-${r.account_id || r.id || 'acct'}` : `${r.provider}-${r.account_name}`,
-          name: r.name || r.account_name || 'Linked Account',
-          value: r.balance || 0,
-          source: r.provider === 'simplefin' ? (r.org_name || 'SimpleFIN') : r.provider === 'file' ? 'Imported' : r.provider === 'snaptrade' ? 'SnapTrade' : 'Linked',
-          icon: r.provider === 'file' ? 'document-attach-outline' : r.provider === 'snaptrade' ? 'trending-up' : 'card-outline',
-        })),
-      ]} hidden={!visible} />
+      <WorthCard title="Assets" total={ta} rows={displayAssets} hidden={!visible} />
       <WorthCard title="Liabilities" total={tl} rows={liabilities} hidden={!visible} />
     </ScrollView>
   );
@@ -1646,8 +1770,8 @@ function MainApp() {
   const [experience, setExperience] = useState('Both');
   const [appearance, setAppearance] = useState('Light');
   const [active, setActive] = useState('home');
-  const [categories] = useState(initialCategories);
-  const [incomeSources] = useState(initialIncome);
+  const [categories, setCategories] = useState(initialCategories);
+  const [incomeSources, setIncomeSources] = useState(initialIncome);
   const [transactions, setTransactions] = useState<Tx[]>(initialTx);
   const [assets] = useState<Asset[]>(initialAssets);
   const [liabilities] = useState<Asset[]>(initialLiabilities);
@@ -1671,6 +1795,8 @@ function MainApp() {
           if (data.transactions) setTransactions(data.transactions);
           if (data.linkedAccounts) setLinkedAccounts(data.linkedAccounts);
           if (data.alerts) setAlerts(data.alerts);
+          if (Array.isArray(data.categories) && data.categories.length > 0) setCategories(data.categories);
+          if (Array.isArray(data.incomeSources) && data.incomeSources.length > 0) setIncomeSources(data.incomeSources);
         }
       } catch {}
       setHydrated(true);
@@ -1679,8 +1805,8 @@ function MainApp() {
   // Persist on change (skip auth-managed fields)
   useEffect(() => {
     if (!hydrated) return;
-    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts })).catch(() => {});
-  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts]);
+    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources })).catch(() => {});
+  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources]);
 
   // Listen for SnapTrade OAuth callback deep link (jaleter://snaptrade-callback).
   useEffect(() => {
@@ -1734,12 +1860,27 @@ function MainApp() {
   }, [auth.token]);
 
   const isDark = appearance === 'Dark';
+  // Live-linked account balances — a single source of truth used by Home + Net Worth.
+  const [linkedAccountBalances, setLinkedAccountBalances] = useState<any[]>([]);
+  useEffect(() => {
+    if (!auth.token) { setLinkedAccountBalances([]); return; }
+    let alive = true;
+    apiCall('/api/accounts/all', { method: 'GET' }, auth.token)
+      .then((data: any) => { if (alive) setLinkedAccountBalances(Array.isArray(data?.accounts) ? data.accounts : []); })
+      .catch(() => { if (alive) setLinkedAccountBalances([]); });
+    return () => { alive = false; };
+  }, [auth.token, linkedAccounts.length]);
+  const linkedAssetsTotal = linkedAccountBalances
+    .filter((r: any) => !r.error)
+    .reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
+
   const income = transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
   const expense = transactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
   const openingCash = 0;
   const syncedCash = openingCash + income - expense;
   const syncedAssets = assets.map(x => x.id === 'cash' ? { ...x, value: syncedCash } : x);
-  const netWorth = syncedAssets.reduce((sum, x) => sum + x.value, 0) - liabilities.reduce((sum, x) => sum + x.value, 0);
+  const manualAssetsTotal = syncedAssets.reduce((sum, x) => sum + x.value, 0);
+  const netWorth = manualAssetsTotal + linkedAssetsTotal - liabilities.reduce((sum, x) => sum + x.value, 0);
   const monthlyBudget = categories.flatMap(c => c.subcategories).reduce((sum, x) => sum + x.budgeted, 0);
   const budgetUsage = monthlyBudget > 0 ? (expense / monthlyBudget) * 100 : 0;
   const nav = (screen: string, category: string | null = null) => { setActive(screen); if (category) setFocusCategory(category); };
@@ -1764,9 +1905,9 @@ function MainApp() {
       {auth.user && stage === 'app' && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
           {active === 'home' && <HomeScreen name={displayName} experience={experience} netWorth={netWorth} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
-          {active === 'budget' && <BudgetScreen categories={categories} incomeSources={incomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} />}
-          {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} />}
-          {active === 'networth' && <NetWorthScreen assets={syncedAssets} liabilities={liabilities} />}
+          {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} incomeSources={incomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} />}
+          {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} openLinkSheet={() => { setActive('settings'); }} />}
+          {active === 'networth' && <NetWorthScreen assets={syncedAssets} liabilities={liabilities} transactions={transactions} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={linkedAccounts.length} />}
           {active === 'legacy' && <LegacyScreen startingNetWorth={netWorth} back={() => nav('more')} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
@@ -1776,6 +1917,8 @@ function MainApp() {
             for (const k of LEGACY_STORAGE_KEYS) { try { await storage.removeItem(k); } catch {} }
             setTransactions([]);
             setLinkedAccounts([]);
+            setCategories(initialCategories);
+            setIncomeSources(initialIncome);
             setExperience('Faith');
             setAppearance('System');
             setAlerts({ enabled: true, threshold: 80 });
