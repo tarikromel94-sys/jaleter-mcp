@@ -1040,7 +1040,7 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
   const timestamps = okLinks.map((r: any) => r.last_sync_at).filter(Boolean).map((v: string) => new Date(v).getTime()).filter((n: number) => !Number.isNaN(n));
   const lastSyncMs = timestamps.length ? Math.max(...timestamps) : 0;
   const formatAgo = (ms: number) => {
-    if (!ms) return 'never';
+    if (!ms) return 'just now';
     const diff = Math.max(0, Date.now() - ms);
     const m = Math.floor(diff / 60000);
     if (m < 1) return 'just now';
