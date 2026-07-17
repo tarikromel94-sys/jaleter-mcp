@@ -783,12 +783,12 @@ const Paywall = ({ onContinue }: any) => {
 };
 
 /* ---------------- Home ---------------- */
-const HomeScreen = ({ name, initials, experience, netWorth, budgetUsage, alertsEnabled, navigate }: any) => {
+const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, budgetUsage, alertsEnabled, navigate }: any) => {
   const t = useThemed();
   const q = dailyQuote(experience as QuoteType, new Date());
-  // Project only what we can actually project: 33 years of compounding on the user's real net worth.
-  // No hidden assumed contributions — the deep Legacy screen has a slider for that.
-  const projected = netWorth > 0 ? Math.round(netWorth * Math.pow(1.08, 33)) : 0;
+  // Same math as the Legacy screen: compound the user's real investment total at 8% over 33 years.
+  // If they have no linked investments, show the "Start your legacy" CTA.
+  const projected = investmentTotal > 0 ? Math.round(investmentTotal * Math.pow(1.08, 33)) : 0;
   const hasProjection = projected > 0;
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
   return (
@@ -850,7 +850,7 @@ const HomeScreen = ({ name, initials, experience, netWorth, budgetUsage, alertsE
           <>
             <Text style={s.legacyStrong}>{MONEY(projected)}</Text>
             <Text style={{ color: '#aaa297', fontSize: 10, lineHeight: 15, marginBottom: 14 }}>
-              33-year compounding of your current net worth.
+              33-year compounding of your current investments.
             </Text>
             <View style={s.teaserBarsFlow}>
               {[28, 36, 44, 57, 70, 88].map((h, i) => (
@@ -2126,7 +2126,7 @@ function MainApp() {
       {auth.user && stage === 'paywall' && <Paywall onContinue={() => setStage('app')} />}
       {auth.user && stage === 'app' && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
-          {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
+          {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
           {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} />}
           {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} openLinkSheet={() => { setActive('settings'); }} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} liabilities={liabilities} transactions={transactions} restrictedCash={restrictedCash} setRestrictedCash={setRestrictedCash} />}
