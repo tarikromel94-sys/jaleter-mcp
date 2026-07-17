@@ -393,3 +393,190 @@ Client escalation — 5 CRITICAL data-integrity issues:
       STRIPE E2E is optional for this run (already verified in iteration 12). But if you have time, please re-run one $50 coaching purchase with 4242 4242 4242 4242 to confirm the CONFIRMED booking still appears.
 
       Credentials in /app/memory/test_credentials.md. If test_credentials.md is empty, alert me and I'll rewrite it.
+
+## user_problem_statement (Batch B):
+Client Batch B — 7 structural items:
+6. Legacy needs to be its own bottom-nav tab (not buried under More)
+7. Home + Net Worth + Legacy read from ONE data source
+8. Legacy "+ hypothetical amount" what-if input
+9. Legacy 1yr/2yr/3yr/5yr timeframes computed as cash + investments + monthly-net × months
+10. Rename "Income" → "Earn" + editable Earn categories + add-new-source
+11. Restricted Cash single manual field on Net Worth (subtracts from Available)
+20. Real user initials in profile pill (no more "AW" placeholder)
+
+## frontend:
+  - task: "Legacy as bottom-nav tab"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Bottom nav is now [Home, Budget, Transactions, Net Worth, Legacy].
+          Removed 'More' from the tab bar. The More screen is still routable via a new
+          profile-pill button in the Home header (top right, shows real initials).
+          More screen now has a back button that returns to Home.
+
+  - task: "Single source of truth: Home + Net Worth + Legacy"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          MainApp computes linkedCashTotal, linkedInvestmentTotal, investmentTotal,
+          totalCash, monthlyBudgetIncome, monthlyBudgetExpense, monthlyNet — passed
+          to HomeScreen, NetWorthScreen, and LegacyScreen. Legacy no longer receives
+          startingNetWorth as a black-box prop.
+
+  - task: "Legacy hypothetical amount modeling"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Tapping "Hypothetical Amount" opens a Sheet with a $ input. The amount is
+          stored in local screen state, added to investmentTotal for the projection,
+          and shown as a distinct "+ Hypothetical amount" row (champagne-gold) in
+          the "What we're projecting from" card — clearly separated from synced.
+
+  - task: "Legacy 1-5yr short-horizon timeframes"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Period pills now: 1yr/2yr/3yr/5yr/10yr/20yr/Retirement.
+          Short horizons (1-5yr) use: totalCash + totalInvestments + hypo + monthlyNet × 12 × years.
+          Long horizons (10yr+/Retirement) use compounding at 8% + optional monthly contribution.
+          Liabilities are NOT subtracted in short horizons (already baked into monthlyNet — per client spec).
+
+  - task: "Rename Income to Earn + editable Earn"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          BudgetScreen now shows an "Earn" group at the top (green E badge), mirroring
+          Give/Steward/Grow/Enjoy. Each income source is tappable → sheet to set monthly
+          expected amount. "+ Add Earn source" opens a Sheet to add a new named source.
+          Delete option in the edit sheet. Persisted to jaleter-state-v2.
+
+  - task: "Restricted Cash on Net Worth"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Cash Protection strip replaced the "COMMITTED" static $0 with a pressable
+          "RESTRICTED" cell. Tap → sheet with numeric input. Available =
+          max(0, cash − restricted). Persisted to jaleter-state-v2.
+
+  - task: "Real user initials in profile pill"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          initialsOf(name, email) helper: "Alex Ward" → "AW"; single-word name →
+          first 2 chars; falls back to email prefix. Home header pill shows these
+          initials. Settings header also uses the same computed initials.
+
+## metadata:
+  test_sequence: 14
+  run_ui: false
+
+## test_plan:
+  current_focus:
+    - "Legacy as bottom-nav tab"
+    - "Single source of truth: Home + Net Worth + Legacy"
+    - "Legacy hypothetical amount modeling"
+    - "Legacy 1-5yr short-horizon timeframes"
+    - "Rename Income to Earn + editable Earn"
+    - "Restricted Cash on Net Worth"
+    - "Real user initials in profile pill"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+## agent_communication:
+  - agent: "main"
+    message: |
+      Batch B (7 structural items). Frontend-only changes — NO backend touched, expect no regressions.
+      Test credentials: alex+test1@jaleter.app / password123 (may need Mongo cleanup — see prior iteration notes).
+      ALWAYS clear localStorage first: page.evaluate("() => localStorage.clear()").
+
+      TESTS (all frontend, Playwright, mobile 390x844):
+
+      1) BOTTOM NAV
+      - Log in. Bottom nav must be exactly [Home, Budget, Transactions, Net Worth, Legacy].
+      - "More" must NOT be in the bottom nav.
+      - Home header top-right must have a profile pill showing "AW" (initials of Alex Ward). Tap it → routes to More screen.
+      - More screen must have a back button that returns to Home.
+
+      2) SINGLE SOURCE OF TRUTH
+      - As a fresh user: Home Net Worth $0 = Net Worth hero $0.
+      - Link a demo SimpleFIN account (POST /api/accounts/simplefin/link). Refresh.
+      - Home Net Worth = Net Worth hero = SUM of linked balances.
+      - Net Worth Cash row source reads "SimpleFIN · N accounts" and value equals sum of non-investment linked accounts.
+
+      3) LEGACY (Legacy tab)
+      - Period pills must be exactly: 1yr, 2yr, 3yr, 5yr, 10yr, 20yr, Retirement.
+      - Retirement tab: "WHAT WE'RE PROJECTING FROM" shows "Current investments (synced) $X" where X matches Net Worth Investments row exactly.
+      - "Hypothetical Amount" card shows "+ Add". Tap → Sheet opens. Enter 50000 → Save. Card now shows $50,000. Projection increases.
+      - Switch to 3yr pill: card now also shows "Current cash (synced)" and "Monthly net (from Budget)".
+      - 3yr projection = totalCash + totalInvestments + hypothetical + monthlyNet × 36.
+      - Monthly Contribution card visible on 10yr/20yr/Retirement but HIDDEN on 1-5yr tabs.
+
+      4) BUDGET → EARN
+      - Budget tab: "Earn" section appears at top (green E icon), above "Plan by Purpose".
+      - Row W-2 Income shows "$0 · tap to set". Tap → sheet → enter 5000 → Save. Row now shows "$5,000 · expected". Total Income "of $X" updates.
+      - "+ Add Earn source" opens sheet. Enter name "Consulting" and amount 1500 → Save. New row appears.
+      - Tap it again → sheet has "Delete this source" (red) at bottom. Tap Delete → source disappears.
+      - Reload page → login again → new Earn source persists (unless deleted).
+
+      5) NET WORTH → RESTRICTED CASH
+      - Net Worth tab: Cash Protection strip should show TOTAL CASH − RESTRICTED = AVAILABLE.
+      - "RESTRICTED" cell shows $0 with "tap to set" hint. Tap → sheet → enter 200 → Save.
+      - RESTRICTED now shows $200. AVAILABLE = max(0, cash - 200).
+      - Persists across reload.
+
+      6) INITIALS
+      - Change alex's user record to name="Sarah" (via Mongo: db.users.update_one({email:"alex+test1@jaleter.app"}, {"$set": {"name": "Sarah"}})). Log out, log back in.
+      - Home pill should show "SA" (single word → first 2 chars uppercased).
+      - Change name back to "Alex Ward" — pill shows "AW".
+
+      NO backend changes were made. Please run existing backend regression tests to confirm nothing broke.

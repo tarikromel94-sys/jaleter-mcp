@@ -39,6 +39,17 @@ const useThemed = () => {
   };
 };
 
+function initialsOf(name?: string | null, email?: string | null): string {
+  const source = (name || '').trim();
+  if (source) {
+    const parts = source.split(/\s+/).filter(Boolean);
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+  if (email) return email.trim().slice(0, 2).toUpperCase();
+  return '—';
+}
+
 const MONTHS = ['July', 'Aug', 'Sep'];
 
 /* ---------------- Payments & Scheduling ---------------- */
@@ -772,7 +783,7 @@ const Paywall = ({ onContinue }: any) => {
 };
 
 /* ---------------- Home ---------------- */
-const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, navigate }: any) => {
+const HomeScreen = ({ name, initials, experience, netWorth, budgetUsage, alertsEnabled, navigate }: any) => {
   const t = useThemed();
   const q = dailyQuote(experience as QuoteType, new Date());
   // Project only what we can actually project: 33 years of compounding on the user's real net worth.
@@ -788,6 +799,9 @@ const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, na
           <Text style={[s.homeName, t.textInk]}>Good evening, {name}.</Text>
         </View>
         <CircleBtn onPress={() => navigate('settings')} testID="home-bell"><Ionicons name="notifications-outline" size={18} color={C.ink3} /></CircleBtn>
+        <Pressable onPress={() => navigate('more')} testID="home-profile" style={[s.avatar, { marginLeft: 8 }]}>
+          <Text style={{ color: C.goldText, fontSize: 11, fontWeight: '700' }}>{initials}</Text>
+        </Pressable>
       </View>
       <Pressable testID="home-inspiration" onPress={() => navigate('settings')} style={s.inspirationCard}>
         <Sparkle size={21} style={{ position: 'absolute', right: 20, top: 18, color: '#f0c77f' }} />
@@ -862,11 +876,15 @@ const HomeScreen = ({ name, experience, netWorth, budgetUsage, alertsEnabled, na
 };
 
 /* ---------------- Budget ---------------- */
-const BudgetScreen = ({ categories, setCategories, incomeSources, transactions, focusCategory, clearFocus }: any) => {
+const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSources, transactions, focusCategory, clearFocus }: any) => {
   const t = useThemed();
   const [period, setPeriod] = useState('July');
   const [expanded, setExpanded] = useState<string[]>(['give']);
+  const [earnExpanded, setEarnExpanded] = useState(true);
   const [editing, setEditing] = useState<{ groupId: string; sub: any } | null>(null);
+  const [editingEarn, setEditingEarn] = useState<any>(null);
+  const [addingEarn, setAddingEarn] = useState(false);
+  const [newEarnName, setNewEarnName] = useState('');
   const [draft, setDraft] = useState('');
   const annual = period === 'Year';
   useEffect(() => { if (focusCategory) { setExpanded(x => x.includes(focusCategory) ? x : [...x, focusCategory]); clearFocus(); } }, [focusCategory]);
@@ -897,6 +915,50 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, transactions, 
         <View style={s.budgetSumCell}><Text style={s.bsSmall}>Expenses</Text><Text style={s.bsStrong}>{MONEY(actualExpenses)}</Text><Text style={s.bsSmall}>actual</Text></View>
         <View style={s.budgetSumCell}><Text style={s.bsSmall}>Net</Text><Text style={s.bsStrong}>{MONEY(actualIncome - actualExpenses)}</Text><Text style={s.bsSmall}>remaining</Text></View>
       </View>
+      <View style={[s.sectionTitle]}><Text style={[s.sectionH3, t.textInk]}>Earn</Text><Text style={[s.sectionCap, t.textMuted]}>All the ways you make money</Text></View>
+      <View style={[s.budgetCategory, t.cardBg]}>
+        <Pressable style={s.categorySummary} onPress={() => setEarnExpanded((x: boolean) => !x)} testID="budget-earn">
+          <View style={[s.purposeIcon, { backgroundColor: '#dfead0' }]}><Text style={[s.purposeIconText, { color: '#4e765c' }]}>E</Text></View>
+          <View style={{ flex: 1 }}>
+            <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>Earn</Text>
+            <Text style={[{ fontSize: 9, color: C.muted2 }, t.textMuted]}>What comes in each month</Text>
+          </View>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{MONEY(actualIncome)}</Text>
+            <Text style={[{ fontSize: 8, color: C.muted2 }, t.textMuted]}>of {MONEY(plannedIncome)}</Text>
+          </View>
+          <Ionicons name={earnExpanded ? 'chevron-down' : 'chevron-forward'} size={17} color={t.dark ? D.textMuted : C.muted} />
+        </Pressable>
+        {earnExpanded && (
+          <View style={s.subcategoryList}>
+            {incomeSources.map((src: any) => (
+              <Pressable
+                key={src.id}
+                onPress={() => { setEditingEarn(src); setDraft(src.budgeted ? String(src.budgeted) : ''); }}
+                style={s.subcategoryRow}
+                testID={`budget-earn-${src.id}`}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{src.name}</Text>
+                  <Text style={{ fontSize: 8, color: C.muted2 }}>
+                    {MONEY(relevant.filter((tx: Tx) => tx.type === 'income' && tx.groupId === src.id).reduce((sum: number, tx: Tx) => sum + tx.amount, 0))} received
+                  </Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{MONEY(budgetFor(src.budgeted))}</Text>
+                  <Text style={{ fontSize: 8, color: src.budgeted > 0 ? C.muted2 : '#c9a56c' }}>{src.budgeted > 0 ? 'expected' : 'tap to set'}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#c1b9ac'} />
+              </Pressable>
+            ))}
+            <Pressable onPress={() => { setNewEarnName(''); setDraft(''); setAddingEarn(true); }} style={[s.subcategoryRow, { justifyContent: 'center' }]} testID="budget-earn-add">
+              <Ionicons name="add-circle-outline" size={16} color="#9a6d32" />
+              <Text style={{ color: '#9a6d32', fontSize: 11, fontWeight: '700', marginLeft: 6 }}>Add Earn source</Text>
+            </Pressable>
+          </View>
+        )}
+      </View>
+
       <View style={[s.sectionTitle]}><Text style={[s.sectionH3, t.textInk]}>Plan by Purpose</Text><Text style={[s.sectionCap, t.textMuted]}>Tap any row to set an amount</Text></View>
       <View style={{ gap: 11 }}>
         {categories.map((c: any) => {
@@ -976,6 +1038,51 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, transactions, 
             )}
           </View>
         )}
+      </Sheet>
+      <Sheet visible={!!editingEarn} close={() => { setEditingEarn(null); setDraft(''); }} title={editingEarn ? `Set expected · ${editingEarn.name}` : ''} subtitle="Amount is what you expect to earn per month.">
+        {editingEarn && (
+          <View>
+            <Text style={s.label}>Monthly amount</Text>
+            <View style={s.amountInput}>
+              <Text style={s.amountPrefix}>$</Text>
+              <TextInput style={[s.input, { paddingLeft: 26 }]} value={draft} onChangeText={setDraft} keyboardType="numeric" placeholder="0" autoFocus testID="earn-edit-amount" />
+            </View>
+            <View style={{ marginTop: 14 }}>
+              <GoldButton label="Save amount" onPress={() => {
+                const clean = Math.max(0, Math.round(Number((draft || '').replace(/[^0-9.]/g, '')) || 0));
+                setIncomeSources((prev: any[]) => prev.map((x) => x.id === editingEarn.id ? { ...x, budgeted: clean } : x));
+                setEditingEarn(null); setDraft('');
+              }} testID="earn-edit-save" />
+            </View>
+            <Pressable onPress={() => {
+              setIncomeSources((prev: any[]) => prev.filter((x) => x.id !== editingEarn.id));
+              setEditingEarn(null); setDraft('');
+            }} style={{ marginTop: 12, alignItems: 'center' }} testID="earn-edit-delete">
+              <Text style={{ color: C.danger, fontSize: 11, fontWeight: '700' }}>Delete this source</Text>
+            </Pressable>
+          </View>
+        )}
+      </Sheet>
+      <Sheet visible={addingEarn} close={() => { setAddingEarn(false); setNewEarnName(''); setDraft(''); }} title="Add Earn source" subtitle="Give it a short name (e.g., 'Side project') and the monthly amount you expect.">
+        <View>
+          <Text style={s.label}>Name</Text>
+          <TextInput style={s.input} value={newEarnName} onChangeText={setNewEarnName} placeholder="e.g., Freelance" testID="earn-add-name" />
+          <Text style={[s.label, { marginTop: 12 }]}>Monthly amount</Text>
+          <View style={s.amountInput}>
+            <Text style={s.amountPrefix}>$</Text>
+            <TextInput style={[s.input, { paddingLeft: 26 }]} value={draft} onChangeText={setDraft} keyboardType="numeric" placeholder="0" testID="earn-add-amount" />
+          </View>
+          <View style={{ marginTop: 14 }}>
+            <GoldButton label="Add source" onPress={() => {
+              const name = (newEarnName || '').trim();
+              if (!name) return;
+              const clean = Math.max(0, Math.round(Number((draft || '').replace(/[^0-9.]/g, '')) || 0));
+              const id = `earn-${Date.now().toString(36)}`;
+              setIncomeSources((prev: any[]) => [...prev, { id, name, budgeted: clean }]);
+              setAddingEarn(false); setNewEarnName(''); setDraft('');
+            }} testID="earn-add-save" />
+          </View>
+        </View>
       </Sheet>
     </ScrollView>
   );
@@ -1141,10 +1248,12 @@ const isInvestmentAccount = (r: any) => {
   if (r.provider === 'snaptrade') return true;
   return /(invest|brokerage|ira|401k|403b|roth|hsa|mutual|advisor|wealth|portfolio|etrade|schwab|fidelity|vanguard|robinhood)/.test(hay);
 };
-const NetWorthScreen = ({ assets, liabilities, transactions }: any) => {
+const NetWorthScreen = ({ assets, liabilities, transactions, restrictedCash, setRestrictedCash }: any) => {
   const t = useThemed();
   const { token } = useAuth();
   const [linkedRows, setLinkedRows] = useState<any[]>([]);
+  const [editingRestricted, setEditingRestricted] = useState(false);
+  const [restrictedDraft, setRestrictedDraft] = useState('');
   useEffect(() => {
     if (!token) return;
     apiCall('/api/accounts/all', { method: 'GET' }, token)
@@ -1209,10 +1318,30 @@ const NetWorthScreen = ({ assets, liabilities, transactions }: any) => {
       <View style={[s.cashProtection, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
         <View style={{ flex: 1 }}><Text style={[s.cpSmall, t.textMuted]}>TOTAL CASH</Text><Text style={[s.cpStrong, t.textInk]}>{MONEY(cash)}</Text></View>
         <Text style={{ color: '#b99a6c' }}>−</Text>
-        <View style={{ flex: 1 }}><Text style={[s.cpSmall, t.textMuted]}>COMMITTED</Text><Text style={[s.cpStrong, t.textInk]}>{MONEY(0)}</Text></View>
+        <Pressable onPress={() => { setRestrictedDraft(restrictedCash ? String(restrictedCash) : ''); setEditingRestricted(true); }} style={{ flex: 1 }} testID="nw-restricted">
+          <Text style={[s.cpSmall, t.textMuted]}>RESTRICTED</Text>
+          <Text style={[s.cpStrong, t.textInk]}>{MONEY(restrictedCash || 0)}</Text>
+          <Text style={{ color: '#c9a56c', fontSize: 8, marginTop: 2 }}>{restrictedCash > 0 ? 'tap to edit' : 'tap to set'}</Text>
+        </Pressable>
         <Text style={{ color: '#b99a6c' }}>=</Text>
-        <View style={[{ flex: 1.2 }, s.cpAvailable]}><Text style={[s.cpSmall, { color: '#c8b494' }]}>AVAILABLE</Text><Text style={[s.cpStrong, { color: '#f3dfbd' }]}>{MONEY(Math.max(0, cash))}</Text></View>
+        <View style={[{ flex: 1.2 }, s.cpAvailable]}><Text style={[s.cpSmall, { color: '#c8b494' }]}>AVAILABLE</Text><Text style={[s.cpStrong, { color: '#f3dfbd' }]}>{MONEY(Math.max(0, cash - (restrictedCash || 0)))}</Text></View>
       </View>
+      <Sheet visible={editingRestricted} close={() => { setEditingRestricted(false); setRestrictedDraft(''); }} title="Restricted Cash" subtitle="Money set aside for goals, taxes, or upcoming bills — subtracted from Available.">
+        <View>
+          <Text style={s.label}>Restricted amount</Text>
+          <View style={s.amountInput}>
+            <Text style={s.amountPrefix}>$</Text>
+            <TextInput style={[s.input, { paddingLeft: 26 }]} value={restrictedDraft} onChangeText={setRestrictedDraft} keyboardType="numeric" placeholder="0" autoFocus testID="nw-restricted-amount" />
+          </View>
+          <View style={{ marginTop: 14 }}>
+            <GoldButton label="Save" onPress={() => {
+              const clean = Math.max(0, Math.round(Number((restrictedDraft || '').replace(/[^0-9.]/g, '')) || 0));
+              setRestrictedCash(clean);
+              setEditingRestricted(false); setRestrictedDraft('');
+            }} testID="nw-restricted-save" />
+          </View>
+        </View>
+      </Sheet>
       <WorthCard title="Assets" total={ta} rows={displayAssets} hidden={!visible} />
       <WorthCard title="Liabilities" total={tl} rows={liabilities} hidden={!visible} />
     </ScrollView>
@@ -1238,37 +1367,116 @@ const WorthCard = ({ title, total, rows, hidden }: any) => {
 };
 
 /* ---------------- Legacy / Coaching / Membership / Settings / More ---------------- */
-const LegacyScreen = ({ startingNetWorth, back }: any) => {
+const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet }: any) => {
   const t = useThemed();
   const [timeframe, setTimeframe] = useState('Retirement');
-  const [contribution, setContribution] = useState(1250);
+  const [contribution, setContribution] = useState(0);
+  const [hypothetical, setHypothetical] = useState('');
+  const [editingHypo, setEditingHypo] = useState(false);
+  const [hypoDraft, setHypoDraft] = useState('');
   const rate = 8;
-  const years = timeframe === '5yr' ? 5 : timeframe === '10yr' ? 10 : timeframe === '20yr' ? 20 : 33;
-  const projection = Math.round(startingNetWorth * Math.pow(1 + rate / 100, years) + contribution * 12 * ((Math.pow(1 + rate / 100, years) - 1) / (rate / 100)));
+  const shortTimeframes: Record<string, number> = { '1yr': 1, '2yr': 2, '3yr': 3, '5yr': 5 };
+  const longTimeframes: Record<string, number> = { '10yr': 10, '20yr': 20, 'Retirement': 33 };
+  const isShort = timeframe in shortTimeframes;
+  const years = isShort ? shortTimeframes[timeframe] : longTimeframes[timeframe];
+  const hypoValue = Math.max(0, Number((hypothetical || '').replace(/[^0-9.]/g, '')) || 0);
+  const totalInvested = investmentTotal + hypoValue;
+
+  // Short-horizon (1-5yr): uses REAL cash + real monthly net income, no compounding assumed
+  // Long-horizon (10yr+/Retirement): compounding at 8% + optional recurring contribution
+  const projection = isShort
+    ? Math.round(totalCash + totalInvested + monthlyNet * 12 * years)
+    : Math.round(totalInvested * Math.pow(1 + rate / 100, years) + contribution * 12 * ((Math.pow(1 + rate / 100, years) - 1) / (rate / 100)));
+
+  const commitHypo = () => {
+    const clean = Math.max(0, Math.round(Number(hypoDraft.replace(/[^0-9.]/g, '')) || 0));
+    setHypothetical(clean > 0 ? String(clean) : '');
+    setEditingHypo(false);
+    setHypoDraft('');
+  };
+
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
-      <PageHeader title="Your Legacy" subtitle="See what consistent stewardship can become." back={back} />
-      <PeriodPills values={['5yr','10yr','20yr','Retirement']} value={timeframe} onChange={setTimeframe} testID="legacy-period" />
+      <PageHeader title="Your Legacy" subtitle="See what consistent stewardship can become." />
+      <PeriodPills values={['1yr','2yr','3yr','5yr','10yr','20yr','Retirement']} value={timeframe} onChange={setTimeframe} testID="legacy-period" />
       <View style={s.projectionCard}>
-        <Text style={{ color: '#caa465', fontSize: 9, letterSpacing: 1.3, textAlign: 'center' }}>PROJECTED TOTAL</Text>
+        <Text style={{ color: '#caa465', fontSize: 9, letterSpacing: 1.3, textAlign: 'center' }}>PROJECTED TOTAL ({timeframe})</Text>
         <Text style={s.projectionStrong}>{MONEY(projection)}</Text>
-        <Text style={{ color: '#b4ada3', fontSize: 12, textAlign: 'center', maxWidth: 270, alignSelf: 'center' }}>What you build faithfully can support generations you may never meet.</Text>
+        <Text style={{ color: '#b4ada3', fontSize: 12, textAlign: 'center', maxWidth: 270, alignSelf: 'center' }}>
+          {isShort
+            ? 'Current cash + investments + your budgeted monthly net over the period.'
+            : 'What you build faithfully can support generations you may never meet.'}
+        </Text>
         <View style={s.growthChart}>
-          {[.16,.24,.34,.48,.66,.84,1].map((f, i) => (
+          {(isShort ? [.30,.42,.56,.72,.86,1] : [.16,.24,.34,.48,.66,.84,1]).map((f, i) => (
             <LinearGradient key={i} colors={['#e8c98f','#8b6437']} style={[s.growthBar, { height: `${Math.max(18, f * 100)}%` }]} />
           ))}
         </View>
       </View>
+
       <View style={[s.assumptionsCard, t.cardBg]}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          <View><Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Monthly Contribution</Text><Text style={[{ fontSize: 8, color: '#999289' }, t.textMuted]}>Adjust consistent investment</Text></View>
-          <Text style={{ fontSize: 18, fontWeight: '700', color: '#9a6d32' }}>{MONEY(contribution)}</Text>
-        </View>
-        <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-          <Pressable onPress={() => setContribution(Math.max(100, contribution - 250))} style={[s.stepBtn, t.dark && { backgroundColor: D.surfaceAlt }]} testID="contrib-minus"><Text style={t.textInk}>-</Text></Pressable>
-          <Pressable onPress={() => setContribution(Math.min(5000, contribution + 250))} style={[s.stepBtn, t.dark && { backgroundColor: D.surfaceAlt }]} testID="contrib-plus"><Text style={t.textInk}>+</Text></Pressable>
+        <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 0.4 }, t.textInk]}>WHAT WE'RE PROJECTING FROM</Text>
+        <View style={{ marginTop: 8, gap: 6 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <Text style={[{ fontSize: 10 }, t.textMuted]}>Current investments (synced)</Text>
+            <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{MONEY(investmentTotal)}</Text>
+          </View>
+          {isShort && (
+            <>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={[{ fontSize: 10 }, t.textMuted]}>Current cash (synced)</Text>
+                <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{MONEY(totalCash)}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={[{ fontSize: 10 }, t.textMuted]}>Monthly net (from Budget)</Text>
+                <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{MONEY(monthlyNet)}</Text>
+              </View>
+            </>
+          )}
+          {hypoValue > 0 && (
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+              <Text style={{ color: '#c9a56c', fontSize: 10 }}>+ Hypothetical amount</Text>
+              <Text style={{ color: '#c9a56c', fontSize: 10, fontWeight: '700' }}>{MONEY(hypoValue)}</Text>
+            </View>
+          )}
         </View>
       </View>
+
+      <Pressable onPress={() => { setHypoDraft(hypothetical || ''); setEditingHypo(true); }} style={[s.assumptionsCard, t.cardBg]} testID="legacy-hypo-open">
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <View style={{ flex: 1 }}>
+            <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Hypothetical Amount</Text>
+            <Text style={[{ fontSize: 9, marginTop: 2 }, t.textMuted]}>Model a windfall or extra investment — kept separate from your synced number.</Text>
+          </View>
+          <Text style={{ fontSize: 18, fontWeight: '700', color: '#9a6d32', marginLeft: 12 }}>{hypoValue > 0 ? MONEY(hypoValue) : '+ Add'}</Text>
+        </View>
+      </Pressable>
+
+      {!isShort && (
+        <View style={[s.assumptionsCard, t.cardBg]}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <View><Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Monthly Contribution</Text><Text style={[{ fontSize: 8, color: '#999289' }, t.textMuted]}>Extra amount you plan to invest each month</Text></View>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: '#9a6d32' }}>{MONEY(contribution)}</Text>
+          </View>
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+            <Pressable onPress={() => setContribution(Math.max(0, contribution - 250))} style={[s.stepBtn, t.dark && { backgroundColor: D.surfaceAlt }]} testID="contrib-minus"><Text style={t.textInk}>−</Text></Pressable>
+            <Pressable onPress={() => setContribution(Math.min(10000, contribution + 250))} style={[s.stepBtn, t.dark && { backgroundColor: D.surfaceAlt }]} testID="contrib-plus"><Text style={t.textInk}>+</Text></Pressable>
+          </View>
+        </View>
+      )}
+
+      <Sheet visible={editingHypo} close={() => { setEditingHypo(false); setHypoDraft(''); }} title="Add hypothetical amount" subtitle="This is imaginary money — used only for what-if modeling on this screen.">
+        <View>
+          <Text style={s.label}>One-time amount</Text>
+          <View style={s.amountInput}>
+            <Text style={s.amountPrefix}>$</Text>
+            <TextInput style={[s.input, { paddingLeft: 26 }]} value={hypoDraft} onChangeText={setHypoDraft} keyboardType="numeric" placeholder="0" autoFocus testID="legacy-hypo-amount" />
+          </View>
+          <View style={{ marginTop: 14 }}>
+            <GoldButton label={hypoValue > 0 && Number(hypoDraft.replace(/[^0-9.]/g, '') || 0) === 0 ? 'Remove hypothetical' : 'Save'} onPress={commitHypo} testID="legacy-hypo-save" />
+          </View>
+        </View>
+      </Sheet>
     </ScrollView>
   );
 };
@@ -1425,11 +1633,11 @@ const MembershipScreen = ({ back }: any) => {
     </ScrollView>
   );
 };
-const MoreScreen = ({ navigate, linkedCount }: any) => {
+const MoreScreen = ({ navigate, linkedCount, onBack }: any) => {
   const t = useThemed();
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
-      <PageHeader title="More" subtitle="Your legacy, membership, and preferences." />
+      <PageHeader title="More" subtitle="Your legacy, membership, and preferences." back={onBack} />
       <View style={s.moreHero}>
         <Sparkle size={22} color="#d7ad6b" />
         <Text style={s.moreHeroH2}>Build with purpose.</Text>
@@ -1437,7 +1645,6 @@ const MoreScreen = ({ navigate, linkedCount }: any) => {
       </View>
       <View style={{ gap: 10 }}>
         {[
-          ['legacy','Your Legacy','Projection synced to Net Worth','trending-up-outline'],
           ['coaching','Book Coaching','$50 per hour','chatbubble-outline'],
           ['membership','Membership','$75 per year','sparkles-outline'],
           ['settings','Settings',`${linkedCount} linked accounts`,'settings-outline'],
@@ -1455,7 +1662,7 @@ const MoreScreen = ({ navigate, linkedCount }: any) => {
     </ScrollView>
   );
 };
-const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, alerts, setAlerts, onLogout, back, linkedAccounts, addLinked, onResetAppData }: any) => {
+const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, alerts, setAlerts, onLogout, back, linkedAccounts, addLinked, onResetAppData, initials }: any) => {
   const t = useThemed();
   const [sheet, setSheet] = useState<string | null>(null);
   const [toast, setToast] = useState('');
@@ -1468,7 +1675,7 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
   ];
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
-      <PageHeader title="Settings" subtitle="Make Jaleter work your way." back={back} action={<View style={s.avatar}><Text style={{ color: C.goldText, fontSize: 11, fontWeight: '700' }}>AW</Text></View>} />
+      <PageHeader title="Settings" subtitle="Make Jaleter work your way." back={back} action={<View style={s.avatar}><Text style={{ color: C.goldText, fontSize: 11, fontWeight: '700' }}>{initials || '—'}</Text></View>} />
       <View style={[s.settingsSection, t.cardBg]}>
         <Text style={[s.settingsH3, t.textInk]}>Your Experience</Text>
         <Text style={[s.settingsSub, t.textMuted]}>100 approved messages. No generated scripture.</Text>
@@ -1537,7 +1744,7 @@ const navItems = [
   { id: 'budget', label: 'Budget', icon: 'menu-outline' as const },
   { id: 'transactions', label: 'Transactions', icon: 'receipt-outline' as const },
   { id: 'networth', label: 'Net Worth', icon: 'wallet-outline' as const },
-  { id: 'more', label: 'More', icon: 'ellipsis-horizontal' as const },
+  { id: 'legacy', label: 'Legacy', icon: 'trophy-outline' as const },
 ];
 const BottomNav = ({ active, setActive, isDark }: any) => (
   <View style={[s.bottomNav, isDark && { backgroundColor: '#151411ed', borderTopColor: '#2c2924' }]}>
@@ -1772,6 +1979,7 @@ function MainApp() {
   const [active, setActive] = useState('home');
   const [categories, setCategories] = useState(initialCategories);
   const [incomeSources, setIncomeSources] = useState(initialIncome);
+  const [restrictedCash, setRestrictedCash] = useState(0);
   const [transactions, setTransactions] = useState<Tx[]>(initialTx);
   const [assets] = useState<Asset[]>(initialAssets);
   const [liabilities] = useState<Asset[]>(initialLiabilities);
@@ -1797,6 +2005,7 @@ function MainApp() {
           if (data.alerts) setAlerts(data.alerts);
           if (Array.isArray(data.categories) && data.categories.length > 0) setCategories(data.categories);
           if (Array.isArray(data.incomeSources) && data.incomeSources.length > 0) setIncomeSources(data.incomeSources);
+          if (typeof data.restrictedCash === 'number') setRestrictedCash(data.restrictedCash);
         }
       } catch {}
       setHydrated(true);
@@ -1805,8 +2014,8 @@ function MainApp() {
   // Persist on change (skip auth-managed fields)
   useEffect(() => {
     if (!hydrated) return;
-    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources })).catch(() => {});
-  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources]);
+    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedCash })).catch(() => {});
+  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedCash]);
 
   // Listen for SnapTrade OAuth callback deep link (jaleter://snaptrade-callback).
   useEffect(() => {
@@ -1873,6 +2082,12 @@ function MainApp() {
   const linkedAssetsTotal = linkedAccountBalances
     .filter((r: any) => !r.error)
     .reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
+  const linkedInvestmentTotal = linkedAccountBalances
+    .filter((r: any) => !r.error && isInvestmentAccount(r))
+    .reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
+  const linkedCashTotal = linkedAccountBalances
+    .filter((r: any) => !r.error && !isInvestmentAccount(r))
+    .reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
 
   const income = transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
   const expense = transactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
@@ -1880,8 +2095,14 @@ function MainApp() {
   const syncedCash = openingCash + income - expense;
   const syncedAssets = assets.map(x => x.id === 'cash' ? { ...x, value: syncedCash } : x);
   const manualAssetsTotal = syncedAssets.reduce((sum, x) => sum + x.value, 0);
+  const manualInvestments = syncedAssets.find((x: any) => x.id === 'investments')?.value || 0;
+  const investmentTotal = manualInvestments + linkedInvestmentTotal;
+  const totalCash = syncedCash + linkedCashTotal; // manual (synced) + linked cash
   const netWorth = manualAssetsTotal + linkedAssetsTotal - liabilities.reduce((sum, x) => sum + x.value, 0);
-  const monthlyBudget = categories.flatMap(c => c.subcategories).reduce((sum, x) => sum + x.budgeted, 0);
+  const monthlyBudgetIncome = incomeSources.reduce((sum, x) => sum + x.budgeted, 0);
+  const monthlyBudgetExpense = categories.flatMap(c => c.subcategories).reduce((sum, x) => sum + x.budgeted, 0);
+  const monthlyNet = monthlyBudgetIncome - monthlyBudgetExpense;
+  const monthlyBudget = monthlyBudgetExpense;
   const budgetUsage = monthlyBudget > 0 ? (expense / monthlyBudget) * 100 : 0;
   const nav = (screen: string, category: string | null = null) => { setActive(screen); if (category) setFocusCategory(category); };
 
@@ -1889,6 +2110,7 @@ function MainApp() {
 
   const bg = isDark ? D.bg : C.cream;
   const displayName = (auth.user?.name || 'Friend').split(' ')[0];
+  const displayInitials = initialsOf(auth.user?.name, auth.user?.email);
 
   return (
     <ThemeCtx.Provider value={{ dark: isDark }}>
@@ -1904,21 +2126,22 @@ function MainApp() {
       {auth.user && stage === 'paywall' && <Paywall onContinue={() => setStage('app')} />}
       {auth.user && stage === 'app' && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
-          {active === 'home' && <HomeScreen name={displayName} experience={experience} netWorth={netWorth} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
-          {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} incomeSources={incomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} />}
+          {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
+          {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} />}
           {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} openLinkSheet={() => { setActive('settings'); }} />}
-          {active === 'networth' && <NetWorthScreen assets={syncedAssets} liabilities={liabilities} transactions={transactions} />}
-          {active === 'more' && <MoreScreen navigate={nav} linkedCount={linkedAccounts.length} />}
-          {active === 'legacy' && <LegacyScreen startingNetWorth={netWorth} back={() => nav('more')} />}
+          {active === 'networth' && <NetWorthScreen assets={syncedAssets} liabilities={liabilities} transactions={transactions} restrictedCash={restrictedCash} setRestrictedCash={setRestrictedCash} />}
+          {active === 'more' && <MoreScreen navigate={nav} linkedCount={linkedAccounts.length} onBack={() => setActive('home')} />}
+          {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}
-          {active === 'settings' && <SettingsScreen experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} onResetAppData={async () => {
+          {active === 'settings' && <SettingsScreen initials={displayInitials} experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} onResetAppData={async () => {
             try { await storage.removeItem(STORAGE_KEY); } catch {}
             for (const k of LEGACY_STORAGE_KEYS) { try { await storage.removeItem(k); } catch {} }
             setTransactions([]);
             setLinkedAccounts([]);
             setCategories(initialCategories);
             setIncomeSources(initialIncome);
+            setRestrictedCash(0);
             setExperience('Faith');
             setAppearance('System');
             setAlerts({ enabled: true, threshold: 80 });

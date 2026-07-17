@@ -1,0 +1,66 @@
+{
+  "summary": "Iteration 14 — Batch B (7 structural items) FULL PASS. Backend 9/9 pytest cases green (login, /auth/me, /accounts/all, /accounts/simplefin/link with scraped demo token → 3 accounts, /payments/products, /payments/checkout coaching + membership both return checkout.stripe.com URLs, /coaching/bookings, /user/membership). Frontend (Playwright mobile 390x844, localhost:3000 after localStorage.clear on every session): (T1 Bottom-nav) [Home, Budget, Transactions, Net Worth, Legacy] exactly — nav-more NOT present. Home top-right profile pill shows 'AW' for Alex Ward; tap → More screen with Coaching / Membership / Settings tiles + working header-back chevron that returns to Home. (T2 Real initials) After Mongo update name='Sarah' → re-login → pill='SA' (single-word first 2 chars); after restore 'Alex Ward' → pill='AW'. (T3 Single source of truth) Fresh state: Home NW=$0, NW hero=$0, Legacy investmentTotal=$0 — identical. After linking demo SimpleFIN (3 accounts, $140,689.98 total): Home NW=$140,690 = NW hero=$140,690 (exact), Cash row source='SimpleFIN · 3 accounts' with value $140,690. (T4 Hypothetical) Card labeled 'Hypothetical Amount' with '+ Add' — sheet 'Add hypothetical amount' opens, enter 50000/Save → card shows '$50,000', 'What we're projecting from' adds champagne-gold '+ Hypothetical amount $50,000' row, Retirement projection jumps from $0 to $633,802. Reopen with 0 → button label reads 'Remove hypothetical' → tap → card back to '+ Add'. (T5 Short-horizon) Pills = exactly [1yr, 2yr, 3yr, 5yr, 10yr, 20yr, Retirement]. On 1yr with hypo=50k / cash=0 / invest=0 / monthlyNet=0: PROJECTED=$50,000, projecting-from card adds 'Current cash (synced) $0' + 'Monthly net (from Budget) $0' rows, Monthly Contribution card HIDDEN. Switching to 10yr: Monthly Contribution reappears, short-horizon rows disappear. Math verified. (T6 Earn) Budget top group 'Earn' with green E badge above 'Plan by Purpose'. Defaults: W-2 Income / Contract Income / Business Income all $0 'tap to set'. Tap W-2 → sheet 'Set expected · W-2 Income' → 5000/Save → row shows '$5,000 expected', Total Income summary 'of $5,000'. '+ Add Earn source' → enter Consulting/1500 → new row 'Consulting $1,500 expected'. Reopen Consulting → red 'Delete this source' → delete → row gone. Reload+login: W-2 still $5,000, Consulting still gone (persisted correctly). (T7 Restricted Cash) Cash Protection strip has 3 cells TOTAL CASH − RESTRICTED = AVAILABLE. RESTRICTED cell $0 'tap to set' champagne-gold. Tap → sheet 'Restricted Cash' → 200/Save → cell shows '$200 tap to edit', AVAILABLE = TOTAL CASH − $200 (verified $140,490 with linked, $0 with none). Post-test cleanup done: linked_accounts + bank_transactions + coaching_bookings + payment_transactions cleared, name reset to 'Alex Ward', password confirmed still 'password123' via login round-trip.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Home",
+        "issues": ["The Home 'RETIREMENT PROJECTION' teaser card computes 33-year compounding on TOTAL NET WORTH ($1,783,393 with $140,690 linked cash), while the Legacy screen Retirement projection uses INVESTMENTS ONLY (shows $0 in same state). Two screens display different retirement numbers based on the same underlying data. Consider aligning the Home teaser to match Legacy's investments-only model, or documenting the intentional difference. index.tsx (HomeScreen legacy teaser vs LegacyScreen). Not a functional break — outside T1-T7 scope."]
+      }
+    ],
+    "react_native_issues": [
+      {
+        "component": "shadow* / pointerEvents deprecations",
+        "issue": "Carried from iterations 10-13: RN-Web console warnings '\"shadow*\" style props are deprecated. Use \"boxShadow\"' and 'props.pointerEvents is deprecated. Use style.pointerEvents'. No new occurrences. Reference: index.tsx (StyleSheet blocks throughout)."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration14.py",
+    "/app/test_reports/pytest/iteration14_results.xml",
+    "/app/test_reports/screenshots/iter14/t1_home_nav.png",
+    "/app/test_reports/screenshots/iter14/t1_more.png",
+    "/app/test_reports/screenshots/iter14/t2_sarah.png",
+    "/app/test_reports/screenshots/iter14/t3_networth_zero.png",
+    "/app/test_reports/screenshots/iter14/t3_home_linked.png",
+    "/app/test_reports/screenshots/iter14/t3_networth_linked.png",
+    "/app/test_reports/screenshots/iter14/t4_hypo50k.png",
+    "/app/test_reports/screenshots/iter14/t5_1yr.png",
+    "/app/test_reports/screenshots/iter14/t6_budget_earn.png",
+    "/app/test_reports/screenshots/iter14/t6_earn_added.png",
+    "/app/test_reports/screenshots/iter14/t7_restricted_200.png"
+  ],
+  "action_items": [
+    "OPTIONAL (design consistency, out-of-scope for Batch B): Home 'RETIREMENT PROJECTION' teaser uses net worth × 8% ^ 33 while Legacy Retirement tab uses investmentTotal only. Client may want these aligned so the Home teaser matches what user sees when they tap through to Legacy.",
+    "OPTIONAL (carried from prior iterations): migrate shadow* style props → boxShadow and props.pointerEvents → style.pointerEvents to silence RN-Web deprecation warnings."
+  ],
+  "critical_code_review_comments": [
+    "index.tsx:1742-1748 — navItems array is exactly 5 items [Home, Budget, Transactions, Net Worth, Legacy]. 'more' correctly removed from bottom nav; still routable via home-profile pill (line 802).",
+    "index.tsx:42 — initialsOf() correctly returns 'AW' for 'Alex Ward' and 'SA' for single-word 'Sarah'. Falls back to email prefix if name missing. Confirmed live for both cases.",
+    "index.tsx:1321-1343 — RESTRICTED cell Pressable + Sheet input flow works; restrictedCash lifted to MainApp (line 1982), persisted in jaleter-state-v2 (line 2008). AVAILABLE = max(0, totalCash - restrictedCash).",
+    "index.tsx:1374-1483 — Legacy screen: hypothetical local state added to investmentTotal for projection; PeriodPills values are exactly [1yr,2yr,3yr,5yr,10yr,20yr,Retirement]; short-horizon (≤5yr) uses cash+invest+hypo+monthlyNet*12*yrs formula and hides Monthly Contribution card; long-horizon uses compound + optional contribution. Verified.",
+    "index.tsx:918-1085 — Earn section is a first-class group above 'Plan by Purpose'; incomeSources array persisted to jaleter-state-v2 with add/edit/delete flows; deletion sheet has red 'Delete this source' at bottom (line 1057-1063).",
+    "index.tsx:2008 — jaleter-state-v2 restore/persist wiring covers categories, incomeSources, restrictedCash, hypothetical (as local screen state — expected).",
+    "Backend was NOT touched this iteration; all 9 regression endpoints pass identical to iteration 13."
+  ],
+  "updated_files": [
+    "Added /app/backend/tests/test_iteration14.py (9 pytest cases, all passing).",
+    "MongoDB pre-test: cleaned alex's linked_accounts/bank_transactions/coaching_bookings/payment_transactions, unset premium_expires_at, name→'Alex Ward'.",
+    "MongoDB during T2: temporarily set name='Sarah', verified 'SA' pill, restored to 'Alex Ward'.",
+    "MongoDB post-test: cleaned 1 linked_accounts + 1 coaching_bookings + 2 payment_transactions created during T3+backend tests; password confirmed still 'password123' via login roundtrip."
+  ],
+  "success_rate": {
+    "backend": "100% (9/9 pytest cases in /app/backend/tests/test_iteration14.py)",
+    "frontend": "100% (all 7 T# tests T1-T7 passing)"
+  },
+  "seed_data_creation": "None retained. All test artifacts cleaned. Alex Ward's name + password back to defaults.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Bottom-nav testIDs are now nav-home / nav-budget / nav-transactions / nav-networth / nav-legacy (no nav-more). More screen is accessed via [data-testid=home-profile] on Home header top-right; More screen has [data-testid=header-back]. New testIDs added in this iteration: legacy-period-{1yr|2yr|3yr|5yr|10yr|20yr|Retirement}, legacy-hypo-open, legacy-hypo-amount, legacy-hypo-save, nw-restricted, nw-restricted-amount, nw-restricted-save, budget-earn (summary row), budget-earn-{w2|contract|business|<generated-id>}, budget-earn-add, earn-edit-amount, earn-edit-save, earn-edit-delete, earn-add-name, earn-add-amount, earn-add-save. localStorage key is still 'jaleter-state-v2' and now stores restrictedCash + incomeSources array; hypothetical is transient local state on LegacyScreen only (does NOT persist across reload). Demo SimpleFIN token still scraped from beta-bridge.simplefin.org/info/developers — one-shot, refresh for new. Give category still expands by default (['give']) — don't click budget-cat-give to expand it.",
+  "rca_of_issue": "N/A — no functional bugs found. All 7 T# test cases and all 9 backend regressions passed."
+}
