@@ -580,3 +580,240 @@ Client Batch B — 7 structural items:
       - Change name back to "Alex Ward" — pill shows "AW".
 
       NO backend changes were made. Please run existing backend regression tests to confirm nothing broke.
+
+## user_problem_statement (Batch C + D):
+Client Batch C + D — 9 items:
+12. Budget: 12 months + annual auto-split with per-month override
+13. Face ID + PIN app lock (biometric-optional)
+14. Coaching: calendar-style booking view (not slot list)
+15. Per-category alerts at 50 / 80 / exceeded (three toggle chips per subcategory)
+16. Budgeted + actual side-by-side (no more tap-in-to-see)
+17. Add Category + Export to Excel buttons
+18. Redesign Budget cards (less repetitive, scannable)
+19. Grid / Annual spreadsheet view (categories × 12 months)
+
+## frontend:
+  - task: "Budget 12-month tabs + annual auto-split with override"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          MONTHS is now all 12 months. Period pill scrolls horizontally. Data model:
+          each sub has `budgeted` (monthly default) + optional `months: {[mIdx]: number}` for
+          per-month overrides. `monthlyAmount(sub, mIdx) = months?.[mIdx] ?? budgeted`;
+          `annualAmount = sum(monthly, 0..11)`. Edit modal aware of period:
+          - Year selected → sets `budgeted = annual/12`, clears all overrides
+          - Specific month → writes to `months[mIdx]` only
+          - Override shown with • marker, includes "Reset {month} to auto-split" button.
+
+  - task: "Budget: Add Category + Export to Excel + Add Subcategory + delete via long-press"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Two action buttons under summary: "Add Category" and "Export to Excel".
+          - Add Category → sheet with name + tagline
+          - Add Subcategory → per-category "+ Add subcategory" row inside expanded group
+          - Export to Excel → generates CSV, downloads on web via Blob URL, on native saves
+            to cache + opens share sheet via expo-file-system + expo-sharing.
+          Long-press a category or subcategory to delete.
+
+  - task: "Budget: Cards redesign — budgeted + actual side by side"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Row layout now shows "actual / budgeted" together on the right side of each row.
+          Category-level shows "actual / total" plus % used inline. Removed the separate
+          "% used / remaining" meta row for cleaner scanning.
+
+  - task: "Budget Grid view (annual spreadsheet)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          View toggle in header (Cards / Grid). Grid: fixed left column (subcategory name),
+          horizontal scroll for Jan..Dec + Year column. Each cell shows monthly amount and,
+          if there's an actual, secondary line. Over-budget cells highlighted amber. Tap
+          any cell to open edit sheet for that subcategory.
+
+  - task: "Per-category alerts at 50 / 80 / exceeded"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Data model: alerts.perCategory = { [subId]: { p50, p80, exceeded } }.
+          Settings screen shows a "Budget Alerts" section: master toggle + per-subcategory
+          row with three toggle chips (50%, 80%, 100%+). Enabled chips are champagne-gold.
+          In Budget Cards view, when actual crosses an enabled threshold for a sub, a
+          coloured badge ("50%", "80%", "OVER") appears next to its name.
+
+  - task: "Face ID + PIN app lock"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          expo-local-authentication + expo-secure-store. Settings section "App Lock" —
+          tapping opens configure sheet: enter PIN twice, optional biometrics toggle
+          (only shown if hasHardware + isEnrolled). PIN stored in SecureStore under
+          `jaleter_app_lock_pin`.
+          On MainApp mount, loads lock state; if pin exists → `locked: true`. Renders
+          `<AppLockGate />` full-screen instead of app content until unlocked.
+          Gate: 6-dot indicator + numeric pad; supports 4-6 digit PINs; auto-attempts
+          biometrics on mount if enabled; wrong-PIN shake + reset.
+          NOTE: biometrics only work in a native build — not in Expo Go/web preview.
+
+  - task: "Coaching: calendar-style booking view"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Replaced slot list with a proper month calendar (7-col grid). Header shows
+          month/year with prev/next arrows. Days: past/weekends disabled, today
+          highlighted, selected day filled bronze. Selecting a day reveals time chips
+          (10am / 2pm / 4pm) — user picks a time, then Book & Pay $50 opens Stripe.
+          Existing payment + confirmation flow untouched.
+
+## metadata:
+  test_sequence: 15
+  run_ui: false
+
+## test_plan:
+  current_focus:
+    - "Budget 12-month tabs + annual auto-split with override"
+    - "Budget: Add Category + Export to Excel + Add Subcategory + delete via long-press"
+    - "Budget: Cards redesign — budgeted + actual side by side"
+    - "Budget Grid view (annual spreadsheet)"
+    - "Per-category alerts at 50 / 80 / exceeded"
+    - "Face ID + PIN app lock"
+    - "Coaching: calendar-style booking view"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+## agent_communication:
+  - agent: "main"
+    message: |
+      Batch C + D (9 items). ALL frontend. Backend untouched — expect no regressions.
+      Cleanup + login flow same as prior iterations.
+
+      T1 — 12-MONTH BUDGET + ANNUAL AUTO-SPLIT (item 12):
+      - Budget tab: PeriodPills horizontally scroll through Jan..Dec + Year.
+      - Default period = the CURRENT month name (Jul at present).
+      - Expand Give. Tap Tithe. Sheet says "Set Jul · Tithe" or similar. Enter 500. Save.
+        Row shows $500 (actual) / $500 (budgeted) — actually just $0 actual since no transactions.
+      - Switch to Year pill. Tap Tithe. Sheet now says "Set annual · Tithe". Enter 6000 → Save.
+      - Switch to Jan pill. Tithe should now show $500 (=6000/12) auto-split.
+      - Tap Tithe in Jan → enter 900 → Save. Jan now shows $900, small • marker next to name (override).
+        Sheet has "Reset Jan to auto-split" button — tap → row returns to $500.
+
+      T2 — ADD CATEGORY / SUBCATEGORY / EXPORT (item 17):
+      - Under summary strip, verify buttons "Add Category" + "Export to Excel".
+      - Add Category → sheet → name "Health" + tagline "Care for the body" → Create.
+      - New "Health" category appears at the bottom of the list.
+      - Expand it → "+ Add subcategory" row.
+      - Tap → sheet → name "Gym" + amount 45 → Add. Row appears.
+      - Long-press Gym → subcategory deletes (toast).
+      - Long-press "Health" card → whole category deletes.
+      - Tap "Export to Excel" → on web, a CSV file with today's date must download. Check
+        headers: Type, Category, Subcategory, Jan..Dec, Annual Total. Check that Give/Tithe
+        row's July value = $500 (or whatever you set).
+
+      T3 — GRID VIEW (item 19):
+      - Top right: two icon pills (Cards / Grid). Tap Grid.
+      - Grid view: fixed Category column on left, Jan..Dec header scrolls horizontally.
+      - Give/Tithe row: Jan $500, Feb $500, ..., Jul $900 (the override), rest $500.
+        Year column shows sum = $6,400 approx.
+      - Tap a cell → same edit sheet opens.
+      - Toggle back to Cards.
+
+      T4 — PER-CATEGORY ALERTS (item 15):
+      - Settings tab: "Budget Alerts" section. Master toggle ON.
+      - Per subcategory: three chips 50% / 80% / 100%+. Default: 80 + exceeded ON, 50 OFF.
+      - Turn on 50% for Tithe.
+      - Add a manual expense transaction: $300 tithe (Category Give / Detail Tithe / July).
+      - Go to Budget → expand Give → Tithe. Since $300/$900 = 33%, no badge.
+      - Add another $300 tithe → $600/$900 = 66% → badge "50%" (champagne-gold) appears next to Tithe name.
+      - Add $400 more → over $900 → badge "OVER" (red).
+
+      T5 — APP LOCK (item 13):
+      - Settings tab: "App Lock" section. Row says "Not set · Tap to set a PIN".
+      - Tap → sheet "Set a PIN". Type 1 2 3 4 → dots fill → Tap Continue.
+      - "Enter your PIN again to confirm". Type 1 2 3 4 → tap Save PIN.
+      - Sheet closes. Row now says "Enabled · PIN only" with a lock icon.
+      - Fully reload the browser page (page.reload()). App re-mounts.
+      - AppLockGate must appear: black gate with "Jaleter" logo + "Enter your PIN to unlock" + PIN pad.
+      - Type 1 2 3 4 → gate dismisses → normal Home shown.
+      - Type wrong PIN 9 9 9 9 → "Incorrect PIN" flashes red, resets to 0 dots.
+      - Reopen Settings → tap App Lock row → sheet → "Turn off App Lock" button at bottom. Tap it.
+      - Reload page again — no gate; Home loads directly.
+      - Biometrics: only test if `LocalAuthentication.hasHardwareAsync()` returns true in the browser
+        (it won't in web) — skip that assertion on web.
+
+      T6 — CALENDAR BOOKING (item 14):
+      - Home profile pill → More → Book Coaching.
+      - Verify a proper month calendar view (not a slot list).
+        Header shows current month/year, prev/next arrows, weekday labels S M T W T F S.
+      - Past days must be visually dimmed (opacity ~30%).
+      - Weekends dimmed too. Weekdays enabled (bold + full opacity).
+      - Tap next arrow → month advances to Aug.
+      - Tap prev arrow → back to current month.
+      - Tap a future weekday (e.g. next Tuesday). Day becomes bronze/selected.
+      - Below calendar, "PICK A TIME · [day]" heading + time chips (10:00 AM, 2:00 PM, 4:00 PM).
+      - Tap 2:00 PM → chip becomes bronze/selected.
+      - Tap Book & Pay $50 → POST /api/payments/checkout → opens checkout.stripe.com URL. Do NOT complete the payment.
+
+      T7 — CROSS-SCREEN REGRESSIONS:
+      - Home netWorth still == Net Worth hero (linked accounts).
+      - Legacy still works, 1-5yr / 10yr / Retirement pills still there.
+      - Earn section still editable.
+      - Restricted Cash still works.
+      - Profile initials still correct.
+      - No JS errors in console.
+
+      BACKEND — run smoke check on /api/auth/*, /api/accounts/*, /api/payments/*, /api/coaching/bookings.
+
+      Please write results to /app/test_reports/iteration_15.json.
+      DO NOT modify payments_service.py or checkout logic.

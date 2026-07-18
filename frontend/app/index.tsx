@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect, useCallback, createContext, useCon
 import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, StatusBar as RNStatusBar, Platform, Linking, Dimensions } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import * as ExpoLinking from 'expo-linking';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -50,7 +51,141 @@ function initialsOf(name?: string | null, email?: string | null): string {
   return '—';
 }
 
-const MONTHS = ['July', 'Aug', 'Sep'];
+/* ---------------- App Lock (PIN + Biometrics) ---------------- */
+const APP_LOCK_KEY = 'jaleter_app_lock_pin';
+const APP_LOCK_BIO_KEY = 'jaleter_app_lock_bio';
+async function loadAppLock() {
+  const pin = await storage.secureGet<string>(APP_LOCK_KEY, '' as string);
+  const bio = await storage.secureGet<string>(APP_LOCK_BIO_KEY, '' as string);
+  let biometricsAvailable = false;
+  try {
+    const hw = await LocalAuthentication.hasHardwareAsync();
+    const enrolled = await LocalAuthentication.isEnrolledAsync();
+    biometricsAvailable = hw && enrolled;
+  } catch { /* web */ }
+  return { pin: pin || '', biometricsEnabled: bio === '1', biometricsAvailable };
+}
+async function saveAppLockPin(pin: string) { await storage.secureSet(APP_LOCK_KEY, pin); }
+async function saveAppLockBio(enabled: boolean) { await storage.secureSet(APP_LOCK_BIO_KEY, enabled ? '1' : '0'); }
+async function clearAppLock() { await storage.secureRemove(APP_LOCK_KEY); await storage.secureRemove(APP_LOCK_BIO_KEY); }
+
+const AppLockGate = ({ storedPin, biometricsEnabled, biometricsAvailable, onUnlock }: any) => {
+  const [entered, setEntered] = useState('');
+  const [error, setError] = useState('');
+  const [tryingBio, setTryingBio] = useState(false);
+  useEffect(() => {
+    if (!biometricsEnabled || !biometricsAvailable) return;
+    (async () => {
+      setTryingBio(true);
+      try {
+        const r = await LocalAuthentication.authenticateAsync({ promptMessage: 'Unlock Jaleter', disableDeviceFallback: false, cancelLabel: 'Use PIN' });
+        if (r.success) onUnlock();
+      } catch { /* ignore */ } finally { setTryingBio(false); }
+    })();
+  }, [biometricsEnabled, biometricsAvailable]);
+  const push = (d: string) => setEntered((e: string) => (e + d).slice(0, 6));
+  const back = () => setEntered((e: string) => e.slice(0, -1));
+  useEffect(() => {
+    if (entered.length < 4) return;
+    if (entered === storedPin) { onUnlock(); return; }
+    if (entered.length >= storedPin.length) { setError('Incorrect PIN'); setTimeout(() => { setEntered(''); setError(''); }, 900); }
+  }, [entered, storedPin]);
+  const dots = Array.from({ length: 6 }, (_, i) => i < entered.length);
+  return (
+    <View style={s.gate}>
+      <Sparkle size={30} color="#e2b96f" />
+      <Text style={s.gateTitle}>Jaleter</Text>
+      <Text style={s.gateSub}>Enter your PIN to unlock</Text>
+      <View style={s.pinDots}>
+        {dots.map((filled, i) => <View key={i} style={[s.pinDot, filled && s.pinDotFilled]} />)}
+      </View>
+      {error ? <Text style={s.pinErr}>{error}</Text> : <View style={{ height: 14 }} />}
+      <View style={s.pinPad}>
+        {[1,2,3,4,5,6,7,8,9].map(n => (
+          <Pressable key={n} onPress={() => push(String(n))} style={s.pinBtn} testID={`pin-${n}`}><Text style={s.pinBtnText}>{n}</Text></Pressable>
+        ))}
+        <View style={s.pinBtn} />
+        <Pressable onPress={() => push('0')} style={s.pinBtn} testID="pin-0"><Text style={s.pinBtnText}>0</Text></Pressable>
+        <Pressable onPress={back} style={s.pinBtn} testID="pin-back"><Ionicons name="backspace-outline" size={20} color="#eee" /></Pressable>
+      </View>
+      {biometricsEnabled && biometricsAvailable && (
+        <Pressable onPress={async () => {
+          setTryingBio(true);
+          try {
+            const r = await LocalAuthentication.authenticateAsync({ promptMessage: 'Unlock Jaleter' });
+            if (r.success) onUnlock();
+          } catch {} finally { setTryingBio(false); }
+        }} style={s.bioBtn} testID="pin-bio">
+          <Ionicons name="scan-outline" size={20} color="#e2b96f" />
+          <Text style={{ color: '#e2b96f', fontSize: 12, fontWeight: '700', marginLeft: 8 }}>{tryingBio ? 'Waiting for biometrics…' : 'Use Face ID / Touch ID'}</Text>
+        </Pressable>
+      )}
+    </View>
+  );
+};
+
+const AppLockConfigure = ({ close, currentPin, biometricsAvailable, biometricsEnabled, onSaved }: any) => {
+  const [step, setStep] = useState<'enter' | 'confirm'>('enter');
+  const [first, setFirst] = useState('');
+  const [second, setSecond] = useState('');
+  const [err, setErr] = useState('');
+  const [useBio, setUseBio] = useState(biometricsEnabled);
+  const draft = step === 'enter' ? first : second;
+  const setDraft = step === 'enter' ? setFirst : setSecond;
+  useEffect(() => {
+    if (step === 'enter' && first.length >= 4 && first.length <= 6) {
+      // wait for user to tap confirm
+    }
+  }, [first, step]);
+  const push = (d: string) => setDraft((v: string) => (v + d).slice(0, 6));
+  const back = () => setDraft((v: string) => v.slice(0, -1));
+  const advance = async () => {
+    if (step === 'enter') {
+      if (first.length < 4) { setErr('PIN must be at least 4 digits'); return; }
+      setErr(''); setStep('confirm');
+      return;
+    }
+    if (second !== first) { setErr('PINs did not match. Try again.'); setSecond(''); setStep('enter'); setFirst(''); return; }
+    await saveAppLockPin(first);
+    await saveAppLockBio(!!useBio && biometricsAvailable);
+    onSaved({ enabled: true, biometricsEnabled: !!useBio && biometricsAvailable, biometricsAvailable });
+    close();
+  };
+  const disable = async () => { await clearAppLock(); onSaved({ enabled: false, biometricsEnabled: false, biometricsAvailable }); close(); };
+  const dots = Array.from({ length: 6 }, (_, i) => i < draft.length);
+  return (
+    <View>
+      <Text style={{ color: '#a97c39', fontSize: 10, fontWeight: '800', letterSpacing: 0.8, marginBottom: 6 }}>{currentPin ? 'CHANGE PIN' : 'SET A PIN'}</Text>
+      <Text style={{ color: '#615b52', fontSize: 11, marginBottom: 12 }}>{step === 'enter' ? 'Enter a 4–6 digit PIN.' : 'Enter your PIN again to confirm.'}</Text>
+      <View style={[s.pinDots, { alignSelf: 'center' }]}>{dots.map((filled, i) => <View key={i} style={[s.pinDot, filled && s.pinDotFilled, { borderColor: '#c8b494', backgroundColor: filled ? '#8a6d3a' : 'transparent' }]} />)}</View>
+      {err ? <Text style={[s.pinErr, { color: C.danger, alignSelf: 'center' }]}>{err}</Text> : <View style={{ height: 14 }} />}
+      <View style={[s.pinPad, { paddingHorizontal: 0 }]}>
+        {[1,2,3,4,5,6,7,8,9].map(n => (
+          <Pressable key={n} onPress={() => push(String(n))} style={[s.pinBtn, { backgroundColor: '#f5efdf' }]} testID={`cfg-pin-${n}`}><Text style={[s.pinBtnText, { color: '#3a3428' }]}>{n}</Text></Pressable>
+        ))}
+        <View style={s.pinBtn} />
+        <Pressable onPress={() => push('0')} style={[s.pinBtn, { backgroundColor: '#f5efdf' }]} testID="cfg-pin-0"><Text style={[s.pinBtnText, { color: '#3a3428' }]}>0</Text></Pressable>
+        <Pressable onPress={back} style={[s.pinBtn, { backgroundColor: '#f5efdf' }]} testID="cfg-pin-back"><Ionicons name="backspace-outline" size={20} color="#3a3428" /></Pressable>
+      </View>
+      {biometricsAvailable && (
+        <Pressable onPress={() => setUseBio((v: boolean) => !v)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10 }} testID="cfg-bio-toggle">
+          <View style={[s.toggle, useBio && s.toggleOn]}><View style={[s.toggleKnob, useBio && { transform: [{ translateX: 14 }] }]} /></View>
+          <Text style={{ marginLeft: 10, fontSize: 11, fontWeight: '700', color: '#3a3428' }}>Also allow Face ID / Touch ID</Text>
+        </Pressable>
+      )}
+      <GoldButton label={step === 'enter' ? 'Continue' : 'Save PIN'} onPress={advance} testID="cfg-pin-continue" />
+      {currentPin && (
+        <Pressable onPress={disable} style={{ marginTop: 10, alignItems: 'center' }} testID="cfg-pin-disable">
+          <Text style={{ color: C.danger, fontSize: 11, fontWeight: '700' }}>Turn off App Lock</Text>
+        </Pressable>
+      )}
+    </View>
+  );
+};
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const monthIndex = (name: string) => MONTHS.indexOf(name);
+const currentMonth = () => MONTHS[new Date().getMonth()];
 
 /* ---------------- Payments & Scheduling ---------------- */
 // Generates upcoming coaching slots: next N business days at 10am, 2pm, 4pm (local time).
@@ -876,169 +1011,323 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, bud
 };
 
 /* ---------------- Budget ---------------- */
-const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSources, transactions, focusCategory, clearFocus }: any) => {
+/* ---------------- Budget helpers ---------------- */
+type Subcategory = { id: string; name: string; budgeted: number; months?: Record<number, number> };
+type Category = { id: string; name: string; tagline: string; subcategories: Subcategory[] };
+const monthlyAmount = (sub: Subcategory, mIdx: number) => sub.months?.[mIdx] ?? sub.budgeted;
+const annualAmount = (sub: Subcategory) => { let sum = 0; for (let i = 0; i < 12; i++) sum += monthlyAmount(sub, i); return sum; };
+function toCsv(rows: (string | number)[][]): string {
+  const esc = (v: any) => {
+    const s = String(v ?? '');
+    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  return rows.map(r => r.map(esc).join(',')).join('\n');
+}
+async function exportBudgetCsv(categories: Category[], incomeSources: any[], transactions: any[], onToast: (m: string) => void) {
+  const header = ['Type', 'Category', 'Subcategory', ...MONTHS, 'Annual Total'];
+  const rows: (string | number)[][] = [header];
+  incomeSources.forEach((src: any) => {
+    const monthly = src.budgeted;
+    const monthActuals = MONTHS.map((m: string) => transactions.filter((t: Tx) => t.type === 'income' && t.groupId === src.id && t.period === m).reduce((s: number, t: Tx) => s + t.amount, 0));
+    rows.push(['Earn', 'Earn', src.name, ...MONTHS.map(() => monthly), monthly * 12]);
+    rows.push(['Actual', 'Earn', src.name, ...monthActuals, monthActuals.reduce((s, x) => s + x, 0)]);
+  });
+  categories.forEach((c: Category) => {
+    c.subcategories.forEach((sub: Subcategory) => {
+      const perMonth = MONTHS.map((_: string, i: number) => monthlyAmount(sub, i));
+      const perMonthActual = MONTHS.map((m: string) => transactions.filter((t: Tx) => t.type === 'expense' && (t.detailId === sub.id) && t.period === m).reduce((s: number, t: Tx) => s + t.amount, 0));
+      rows.push(['Budget', c.name, sub.name, ...perMonth, annualAmount(sub)]);
+      rows.push(['Actual', c.name, sub.name, ...perMonthActual, perMonthActual.reduce((s, x) => s + x, 0)]);
+    });
+  });
+  const csv = toCsv(rows);
+  const filename = `Jaleter_Budget_${new Date().toISOString().slice(0, 10)}.csv`;
+  try {
+    if (Platform.OS === 'web') {
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+      onToast('Downloaded budget CSV.');
+    } else {
+      const FileSystem = await import('expo-file-system');
+      const Sharing = await import('expo-sharing');
+      const uri = `${FileSystem.cacheDirectory}${filename}`;
+      await FileSystem.writeAsStringAsync(uri, csv, { encoding: FileSystem.EncodingType.UTF8 });
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) { await Sharing.shareAsync(uri, { mimeType: 'text/csv', dialogTitle: 'Export Budget' }); onToast('Ready to share.'); }
+      else { onToast('Saved to app cache.'); }
+    }
+  } catch (e: any) { onToast(e?.message || 'Export failed.'); }
+}
+
+/* ---------------- Budget Screen ---------------- */
+const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSources, transactions, focusCategory, clearFocus, alerts }: any) => {
   const t = useThemed();
-  const [period, setPeriod] = useState('July');
+  const [period, setPeriod] = useState<string>(currentMonth());
+  const [view, setView] = useState<'cards' | 'grid'>('cards');
   const [expanded, setExpanded] = useState<string[]>(['give']);
   const [earnExpanded, setEarnExpanded] = useState(true);
-  const [editing, setEditing] = useState<{ groupId: string; sub: any } | null>(null);
+  const [editing, setEditing] = useState<{ groupId: string; sub: Subcategory } | null>(null);
   const [editingEarn, setEditingEarn] = useState<any>(null);
   const [addingEarn, setAddingEarn] = useState(false);
+  const [addingCategory, setAddingCategory] = useState(false);
   const [newEarnName, setNewEarnName] = useState('');
+  const [newCatName, setNewCatName] = useState('');
+  const [newCatTagline, setNewCatTagline] = useState('');
+  const [addingSubTo, setAddingSubTo] = useState<string | null>(null);
+  const [newSubName, setNewSubName] = useState('');
   const [draft, setDraft] = useState('');
+  const [toast, setToast] = useState('');
   const annual = period === 'Year';
+  const mIdx = annual ? -1 : monthIndex(period);
   useEffect(() => { if (focusCategory) { setExpanded(x => x.includes(focusCategory) ? x : [...x, focusCategory]); clearFocus(); } }, [focusCategory]);
+
   const relevant = transactions.filter((t: Tx) => annual || t.period === period);
   const actualIncome = relevant.filter((t: Tx) => t.type === 'income').reduce((sum: number, t: Tx) => sum + t.amount, 0);
   const actualExpenses = relevant.filter((t: Tx) => t.type === 'expense').reduce((sum: number, t: Tx) => sum + t.amount, 0);
   const plannedIncome = incomeSources.reduce((sum: number, x: any) => sum + x.budgeted, 0) * (annual ? 12 : 1);
-  const spent = (id: string) => relevant.filter((t: Tx) => t.type === 'expense' && (t.detailId === id || t.groupId === id)).reduce((sum: number, t: Tx) => sum + t.amount, 0);
-  const budgetFor = (subBudget: number) => subBudget * (annual ? 12 : 1);
+  const spentInSub = (subId: string) => relevant.filter((tx: Tx) => tx.type === 'expense' && tx.detailId === subId).reduce((s: number, tx: Tx) => s + tx.amount, 0);
+  const spentInGroup = (gId: string) => relevant.filter((tx: Tx) => tx.type === 'expense' && (tx.groupId === gId)).reduce((s: number, tx: Tx) => s + tx.amount, 0);
+  const budgetFor = (sub: Subcategory) => annual ? annualAmount(sub) : monthlyAmount(sub, mIdx);
+  const groupTotal = (c: Category) => c.subcategories.reduce((s: number, x: Subcategory) => s + budgetFor(x), 0);
 
-  const startEdit = (groupId: string, sub: any) => { setEditing({ groupId, sub }); setDraft(sub.budgeted ? String(sub.budgeted) : ''); };
+  const startEdit = (groupId: string, sub: Subcategory) => { setEditing({ groupId, sub }); setDraft(String(budgetFor(sub) || '')); };
   const commitEdit = () => {
     if (!editing) return;
-    const clean = Math.max(0, Math.round(Number(draft.replace(/[^0-9.]/g, '')) || 0));
-    setCategories((prev: any[]) => prev.map((c) => c.id !== editing.groupId ? c : {
+    const clean = Math.max(0, Math.round(Number((draft || '').replace(/[^0-9.]/g, '')) || 0));
+    setCategories((prev: Category[]) => prev.map((c) => c.id !== editing.groupId ? c : {
       ...c,
-      subcategories: c.subcategories.map((sc: any) => sc.id !== editing.sub.id ? sc : { ...sc, budgeted: clean }),
+      subcategories: c.subcategories.map((sc: Subcategory) => {
+        if (sc.id !== editing.sub.id) return sc;
+        if (annual) {
+          // Setting annual → uniform monthly budget of clean/12; clear all overrides.
+          return { ...sc, budgeted: Math.round(clean / 12), months: undefined };
+        }
+        // Setting for a specific month → override that month only.
+        const months = { ...(sc.months || {}), [mIdx]: clean };
+        return { ...sc, months };
+      }),
     }));
     setEditing(null);
     setDraft('');
   };
+  const resetOverride = () => {
+    if (!editing || annual) return;
+    setCategories((prev: Category[]) => prev.map((c) => c.id !== editing.groupId ? c : {
+      ...c,
+      subcategories: c.subcategories.map((sc: Subcategory) => {
+        if (sc.id !== editing.sub.id) return sc;
+        const nextMonths = { ...(sc.months || {}) };
+        delete nextMonths[mIdx];
+        return { ...sc, months: Object.keys(nextMonths).length ? nextMonths : undefined };
+      }),
+    }));
+    setEditing(null); setDraft('');
+  };
+
+  const addCategory = () => {
+    const name = (newCatName || '').trim();
+    if (!name) return;
+    const id = `cat-${Date.now().toString(36)}`;
+    setCategories((prev: Category[]) => [...prev, { id, name, tagline: (newCatTagline || '').trim(), subcategories: [] }]);
+    setExpanded((xs: string[]) => xs.includes(id) ? xs : [...xs, id]);
+    setAddingCategory(false); setNewCatName(''); setNewCatTagline('');
+    setToast(`Added "${name}".`);
+  };
+  const addSubcategory = (groupId: string) => {
+    const name = (newSubName || '').trim();
+    if (!name) return;
+    const clean = Math.max(0, Math.round(Number((draft || '').replace(/[^0-9.]/g, '')) || 0));
+    const sid = `sub-${Date.now().toString(36)}`;
+    setCategories((prev: Category[]) => prev.map((c) => c.id !== groupId ? c : { ...c, subcategories: [...c.subcategories, { id: sid, name, budgeted: clean }] }));
+    setAddingSubTo(null); setNewSubName(''); setDraft('');
+    setToast(`Added "${name}".`);
+  };
+  const removeCategory = (id: string) => {
+    setCategories((prev: Category[]) => prev.filter((c) => c.id !== id));
+    setToast('Category removed.');
+  };
+  const removeSubcategory = (groupId: string, subId: string) => {
+    setCategories((prev: Category[]) => prev.map((c) => c.id !== groupId ? c : { ...c, subcategories: c.subcategories.filter((x) => x.id !== subId) }));
+    setToast('Subcategory removed.');
+  };
+
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
-      <PageHeader title="Budget" subtitle="Give first. Steward wisely. Grow intentionally." />
+      <PageHeader title="Budget" subtitle="Give first. Steward wisely. Grow intentionally." action={
+        <View style={s.viewToggle}>
+          <Pressable onPress={() => setView('cards')} style={[s.viewTogglePill, view === 'cards' && s.viewTogglePillActive]} testID="budget-view-cards"><Ionicons name="albums-outline" size={13} color={view === 'cards' ? C.goldEyebrow : (t.dark ? D.textMuted : C.muted2)} /></Pressable>
+          <Pressable onPress={() => setView('grid')} style={[s.viewTogglePill, view === 'grid' && s.viewTogglePillActive]} testID="budget-view-grid"><Ionicons name="grid-outline" size={13} color={view === 'grid' ? C.goldEyebrow : (t.dark ? D.textMuted : C.muted2)} /></Pressable>
+        </View>
+      } />
       <PeriodPills values={[...MONTHS, 'Year']} value={period} onChange={setPeriod} testID="budget-period" />
       <View style={s.budgetSummary}>
         <View style={s.budgetSumCell}><Text style={s.bsSmall}>Total Income</Text><Text style={s.bsStrong}>{MONEY(actualIncome)}</Text><Text style={s.bsSmall}>of {MONEY(plannedIncome)}</Text></View>
         <View style={s.budgetSumCell}><Text style={s.bsSmall}>Expenses</Text><Text style={s.bsStrong}>{MONEY(actualExpenses)}</Text><Text style={s.bsSmall}>actual</Text></View>
         <View style={s.budgetSumCell}><Text style={s.bsSmall}>Net</Text><Text style={s.bsStrong}>{MONEY(actualIncome - actualExpenses)}</Text><Text style={s.bsSmall}>remaining</Text></View>
       </View>
-      <View style={[s.sectionTitle]}><Text style={[s.sectionH3, t.textInk]}>Earn</Text><Text style={[s.sectionCap, t.textMuted]}>All the ways you make money</Text></View>
-      <View style={[s.budgetCategory, t.cardBg]}>
-        <Pressable style={s.categorySummary} onPress={() => setEarnExpanded((x: boolean) => !x)} testID="budget-earn">
-          <View style={[s.purposeIcon, { backgroundColor: '#dfead0' }]}><Text style={[s.purposeIconText, { color: '#4e765c' }]}>E</Text></View>
-          <View style={{ flex: 1 }}>
-            <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>Earn</Text>
-            <Text style={[{ fontSize: 9, color: C.muted2 }, t.textMuted]}>What comes in each month</Text>
-          </View>
-          <View style={{ alignItems: 'flex-end' }}>
-            <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{MONEY(actualIncome)}</Text>
-            <Text style={[{ fontSize: 8, color: C.muted2 }, t.textMuted]}>of {MONEY(plannedIncome)}</Text>
-          </View>
-          <Ionicons name={earnExpanded ? 'chevron-down' : 'chevron-forward'} size={17} color={t.dark ? D.textMuted : C.muted} />
+      <View style={s.budgetActions}>
+        <Pressable style={s.budgetActionBtn} onPress={() => { setNewCatName(''); setNewCatTagline(''); setAddingCategory(true); }} testID="budget-add-category">
+          <Ionicons name="add-circle-outline" size={15} color="#9a6d32" />
+          <Text style={s.budgetActionText}>Add Category</Text>
         </Pressable>
-        {earnExpanded && (
-          <View style={s.subcategoryList}>
-            {incomeSources.map((src: any) => (
-              <Pressable
-                key={src.id}
-                onPress={() => { setEditingEarn(src); setDraft(src.budgeted ? String(src.budgeted) : ''); }}
-                style={s.subcategoryRow}
-                testID={`budget-earn-${src.id}`}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{src.name}</Text>
-                  <Text style={{ fontSize: 8, color: C.muted2 }}>
-                    {MONEY(relevant.filter((tx: Tx) => tx.type === 'income' && tx.groupId === src.id).reduce((sum: number, tx: Tx) => sum + tx.amount, 0))} received
-                  </Text>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{MONEY(budgetFor(src.budgeted))}</Text>
-                  <Text style={{ fontSize: 8, color: src.budgeted > 0 ? C.muted2 : '#c9a56c' }}>{src.budgeted > 0 ? 'expected' : 'tap to set'}</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#c1b9ac'} />
-              </Pressable>
-            ))}
-            <Pressable onPress={() => { setNewEarnName(''); setDraft(''); setAddingEarn(true); }} style={[s.subcategoryRow, { justifyContent: 'center' }]} testID="budget-earn-add">
-              <Ionicons name="add-circle-outline" size={16} color="#9a6d32" />
-              <Text style={{ color: '#9a6d32', fontSize: 11, fontWeight: '700', marginLeft: 6 }}>Add Earn source</Text>
-            </Pressable>
-          </View>
-        )}
+        <Pressable style={s.budgetActionBtn} onPress={() => exportBudgetCsv(categories, incomeSources, transactions, setToast)} testID="budget-export">
+          <Ionicons name="download-outline" size={15} color="#9a6d32" />
+          <Text style={s.budgetActionText}>Export to Excel</Text>
+        </Pressable>
       </View>
 
-      <View style={[s.sectionTitle]}><Text style={[s.sectionH3, t.textInk]}>Plan by Purpose</Text><Text style={[s.sectionCap, t.textMuted]}>Tap any row to set an amount</Text></View>
-      <View style={{ gap: 11 }}>
-        {categories.map((c: any) => {
-          const total = c.subcategories.reduce((sum: number, x: any) => sum + budgetFor(x.budgeted), 0);
-          const actual = spent(c.id);
-          const pct = total ? actual / total * 100 : 0;
-          const open = expanded.includes(c.id);
-          const barColor = pct >= 100 ? C.red : pct >= 80 ? C.amber : C.green;
-          return (
-            <View key={c.id} style={[s.budgetCategory, t.cardBg, open && { borderColor: '#ddc7a6' }]}>
-              <Pressable style={s.categorySummary} onPress={() => setExpanded(xs => xs.includes(c.id) ? xs.filter(x => x !== c.id) : [...xs, c.id])} testID={`budget-cat-${c.id}`}>
-                <View style={s.purposeIcon}><Text style={s.purposeIconText}>{c.name[0]}</Text></View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[{ fontSize: 12, fontWeight: '700', color: C.ink }, t.textInk]}>{c.name}</Text>
-                  <Text style={[{ fontSize: 9, color: C.muted2 }, t.textMuted]}>{c.tagline}</Text>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={[{ fontSize: 11, fontWeight: '700', color: C.ink }, t.textInk]}>{MONEY(actual)}</Text>
-                  <Text style={[{ fontSize: 8, color: C.muted2 }, t.textMuted]}>of {MONEY(total)}</Text>
-                </View>
-                <Ionicons name={open ? 'chevron-down' : 'chevron-forward'} size={17} color={t.dark ? D.textMuted : C.muted} />
-              </Pressable>
-              <View style={s.categoryProgress}><View style={[s.categoryProgressBar, { width: `${Math.min(pct, 100)}%`, backgroundColor: barColor }]} /></View>
-              <View style={s.categoryMeta}>
-                <Text style={{ color: '#999289', fontSize: 8 }}>{Math.round(pct)}% used</Text>
-                <Text style={{ color: '#999289', fontSize: 8 }}>{MONEY(total - actual)} remaining</Text>
+      {view === 'cards' ? (
+        <>
+          <View style={[s.sectionTitle]}><Text style={[s.sectionH3, t.textInk]}>Earn</Text><Text style={[s.sectionCap, t.textMuted]}>All the ways you make money</Text></View>
+          <View style={[s.budgetCategory, t.cardBg]}>
+            <Pressable style={s.categorySummary} onPress={() => setEarnExpanded((x: boolean) => !x)} testID="budget-earn">
+              <View style={[s.purposeIcon, { backgroundColor: '#dfead0' }]}><Text style={[s.purposeIconText, { color: '#4e765c' }]}>E</Text></View>
+              <View style={{ flex: 1 }}>
+                <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>Earn</Text>
+                <Text style={[{ fontSize: 9, color: C.muted2 }, t.textMuted]}>What comes in each month</Text>
               </View>
-              {open && (
-                <View style={s.subcategoryList}>
-                  {c.subcategories.map((sub: any) => (
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{MONEY(actualIncome)}</Text>
+                <Text style={[{ fontSize: 8, color: C.muted2 }, t.textMuted]}>of {MONEY(plannedIncome)}</Text>
+              </View>
+              <Ionicons name={earnExpanded ? 'chevron-down' : 'chevron-forward'} size={17} color={t.dark ? D.textMuted : C.muted} />
+            </Pressable>
+            {earnExpanded && (
+              <View style={s.subcategoryList}>
+                {incomeSources.map((src: any) => {
+                  const rec = relevant.filter((tx: Tx) => tx.type === 'income' && tx.groupId === src.id).reduce((sum: number, tx: Tx) => sum + tx.amount, 0);
+                  const target = src.budgeted * (annual ? 12 : 1);
+                  return (
                     <Pressable
-                      key={sub.id}
-                      onPress={() => startEdit(c.id, sub)}
+                      key={src.id}
+                      onPress={() => { setEditingEarn(src); setDraft(src.budgeted ? String(src.budgeted) : ''); }}
                       style={s.subcategoryRow}
-                      testID={`budget-sub-${sub.id}`}
+                      testID={`budget-earn-${src.id}`}
                     >
                       <View style={{ flex: 1 }}>
-                        <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{sub.name}</Text>
-                        <Text style={{ fontSize: 8, color: C.muted2 }}>{MONEY(spent(sub.id))} actual</Text>
+                        <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{src.name}</Text>
+                        <Text style={{ fontSize: 8, color: C.muted2 }}>received / expected</Text>
                       </View>
                       <View style={{ alignItems: 'flex-end' }}>
-                        <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{MONEY(budgetFor(sub.budgeted))}</Text>
-                        <Text style={{ fontSize: 8, color: sub.budgeted > 0 ? C.muted2 : '#c9a56c' }}>{sub.budgeted > 0 ? 'budgeted' : 'tap to set'}</Text>
+                        <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{MONEY(rec)} <Text style={{ color: '#c1b9ac', fontWeight: '400' }}>/ {MONEY(target)}</Text></Text>
+                        <Text style={{ fontSize: 8, color: src.budgeted > 0 ? C.muted2 : '#c9a56c' }}>{src.budgeted > 0 ? '' : 'tap to set'}</Text>
                       </View>
                       <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#c1b9ac'} />
                     </Pressable>
-                  ))}
+                  );
+                })}
+                <Pressable onPress={() => { setNewEarnName(''); setDraft(''); setAddingEarn(true); }} style={[s.subcategoryRow, { justifyContent: 'center' }]} testID="budget-earn-add">
+                  <Ionicons name="add-circle-outline" size={16} color="#9a6d32" />
+                  <Text style={{ color: '#9a6d32', fontSize: 11, fontWeight: '700', marginLeft: 6 }}>Add Earn source</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+
+          <View style={[s.sectionTitle]}><Text style={[s.sectionH3, t.textInk]}>Plan by Purpose</Text><Text style={[s.sectionCap, t.textMuted]}>{annual ? 'Year total per category — tap to set' : `${period} · tap to set an amount`}</Text></View>
+          <View style={{ gap: 11 }}>
+            {categories.map((c: Category) => {
+              const total = groupTotal(c);
+              const actual = spentInGroup(c.id);
+              const pct = total ? actual / total * 100 : 0;
+              const open = expanded.includes(c.id);
+              const barColor = pct >= 100 ? C.red : pct >= 80 ? C.amber : C.green;
+              return (
+                <View key={c.id} style={[s.budgetCategory, t.cardBg, open && { borderColor: '#ddc7a6' }]}>
+                  <Pressable style={s.categorySummary} onPress={() => setExpanded(xs => xs.includes(c.id) ? xs.filter(x => x !== c.id) : [...xs, c.id])} onLongPress={() => removeCategory(c.id)} testID={`budget-cat-${c.id}`}>
+                    <View style={s.purposeIcon}><Text style={s.purposeIconText}>{c.name[0]}</Text></View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[{ fontSize: 12, fontWeight: '700', color: C.ink }, t.textInk]}>{c.name}</Text>
+                      <Text style={[{ fontSize: 9, color: C.muted2 }, t.textMuted]} numberOfLines={1}>{c.tagline}</Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={[{ fontSize: 11, fontWeight: '700', color: C.ink }, t.textInk]}>{MONEY(actual)} <Text style={{ color: '#c1b9ac', fontWeight: '400' }}>/ {MONEY(total)}</Text></Text>
+                      <Text style={[{ fontSize: 8, color: C.muted2 }, t.textMuted]}>{Math.round(pct)}% used</Text>
+                    </View>
+                    <Ionicons name={open ? 'chevron-down' : 'chevron-forward'} size={17} color={t.dark ? D.textMuted : C.muted} />
+                  </Pressable>
+                  <View style={s.categoryProgress}><View style={[s.categoryProgressBar, { width: `${Math.min(pct, 100)}%`, backgroundColor: barColor }]} /></View>
+                  {open && (
+                    <View style={s.subcategoryList}>
+                      {c.subcategories.map((sub: Subcategory) => {
+                        const b = budgetFor(sub);
+                        const a = spentInSub(sub.id);
+                        const overridden = !annual && sub.months && sub.months[mIdx] !== undefined;
+                        const spct = b > 0 ? a / b * 100 : 0;
+                        const conf = (alerts?.perCategory && alerts.perCategory[sub.id]) || { p50: false, p80: true, exceeded: true };
+                        let alertLevel: 'p50' | 'p80' | 'exceeded' | null = null;
+                        if (alerts?.enabled) {
+                          if (conf.exceeded && spct >= 100) alertLevel = 'exceeded';
+                          else if (conf.p80 && spct >= 80) alertLevel = 'p80';
+                          else if (conf.p50 && spct >= 50) alertLevel = 'p50';
+                        }
+                        const alertColor = alertLevel === 'exceeded' ? C.red : alertLevel === 'p80' ? C.amber : alertLevel === 'p50' ? '#c9a56c' : null;
+                        return (
+                          <Pressable
+                            key={sub.id}
+                            onPress={() => startEdit(c.id, sub)}
+                            onLongPress={() => removeSubcategory(c.id, sub.id)}
+                            style={s.subcategoryRow}
+                            testID={`budget-sub-${sub.id}`}
+                          >
+                            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                              <View style={{ flex: 1 }}>
+                                <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{sub.name}{overridden ? ' •' : ''}</Text>
+                                <Text style={{ fontSize: 8, color: C.muted2 }}>actual / budgeted</Text>
+                              </View>
+                              {alertColor && (
+                                <View style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, backgroundColor: alertColor + '22', borderWidth: 1, borderColor: alertColor }}>
+                                  <Text style={{ color: alertColor, fontSize: 8, fontWeight: '800' }}>{alertLevel === 'exceeded' ? 'OVER' : alertLevel === 'p80' ? '80%' : '50%'}</Text>
+                                </View>
+                              )}
+                            </View>
+                            <View style={{ alignItems: 'flex-end' }}>
+                              <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{MONEY(a)} <Text style={{ color: '#c1b9ac', fontWeight: '400' }}>/ {MONEY(b)}</Text></Text>
+                              <Text style={{ fontSize: 8, color: b > 0 ? C.muted2 : '#c9a56c' }}>{b > 0 ? '' : 'tap to set'}</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#c1b9ac'} />
+                          </Pressable>
+                        );
+                      })}
+                      <Pressable onPress={() => { setAddingSubTo(c.id); setNewSubName(''); setDraft(''); }} style={[s.subcategoryRow, { justifyContent: 'center' }]} testID={`budget-sub-add-${c.id}`}>
+                        <Ionicons name="add-circle-outline" size={15} color="#9a6d32" />
+                        <Text style={{ color: '#9a6d32', fontSize: 10, fontWeight: '700', marginLeft: 6 }}>Add subcategory</Text>
+                      </Pressable>
+                    </View>
+                  )}
                 </View>
-              )}
-            </View>
-          );
-        })}
-      </View>
-      <Sheet visible={!!editing} close={() => { setEditing(null); setDraft(''); }} title={editing ? `Set budget · ${editing.sub.name}` : ''} subtitle="Amount is budgeted per month. Year view multiplies by 12.">
+              );
+            })}
+          </View>
+        </>
+      ) : (
+        <BudgetGrid categories={categories} spentInSub={(id: string, mi: number) => transactions.filter((t: Tx) => t.type === 'expense' && t.detailId === id && t.period === MONTHS[mi]).reduce((s: number, t: Tx) => s + t.amount, 0)} onEdit={startEdit} tDark={t.dark} />
+      )}
+
+      <Sheet visible={!!editing} close={() => { setEditing(null); setDraft(''); }} title={editing ? `${annual ? 'Set annual' : `Set ${period}`} · ${editing.sub.name}` : ''} subtitle={annual ? 'Annual amount auto-splits evenly across 12 months (existing month overrides will be cleared).' : `Amount is for ${period} only. Other months keep their auto-split.`}>
         {editing && (
           <View>
-            <Text style={s.label}>Monthly amount</Text>
+            <Text style={s.label}>{annual ? 'Annual amount' : 'Monthly amount'}</Text>
             <View style={s.amountInput}>
               <Text style={s.amountPrefix}>$</Text>
-              <TextInput
-                style={[s.input, { paddingLeft: 26 }]}
-                value={draft}
-                onChangeText={setDraft}
-                keyboardType="numeric"
-                placeholder="0"
-                autoFocus
-                testID="budget-edit-amount"
-              />
+              <TextInput style={[s.input, { paddingLeft: 26 }]} value={draft} onChangeText={setDraft} keyboardType="numeric" placeholder="0" autoFocus testID="budget-edit-amount" />
             </View>
             <View style={{ marginTop: 14 }}>
               <GoldButton label="Save amount" onPress={commitEdit} testID="budget-edit-save" />
             </View>
-            {editing.sub.budgeted > 0 && (
-              <Pressable onPress={() => { setDraft('0'); }} style={{ marginTop: 12, alignItems: 'center' }} testID="budget-edit-clear">
-                <Text style={{ color: C.muted2, fontSize: 11 }}>Clear this amount</Text>
+            {!annual && editing.sub.months && editing.sub.months[mIdx] !== undefined && (
+              <Pressable onPress={resetOverride} style={{ marginTop: 12, alignItems: 'center' }} testID="budget-edit-reset">
+                <Text style={{ color: '#9a6d32', fontSize: 11, fontWeight: '700' }}>Reset {period} to auto-split</Text>
               </Pressable>
             )}
           </View>
         )}
       </Sheet>
+
       <Sheet visible={!!editingEarn} close={() => { setEditingEarn(null); setDraft(''); }} title={editingEarn ? `Set expected · ${editingEarn.name}` : ''} subtitle="Amount is what you expect to earn per month.">
         {editingEarn && (
           <View>
@@ -1063,7 +1352,8 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
           </View>
         )}
       </Sheet>
-      <Sheet visible={addingEarn} close={() => { setAddingEarn(false); setNewEarnName(''); setDraft(''); }} title="Add Earn source" subtitle="Give it a short name (e.g., 'Side project') and the monthly amount you expect.">
+
+      <Sheet visible={addingEarn} close={() => { setAddingEarn(false); setNewEarnName(''); setDraft(''); }} title="Add Earn source" subtitle="Name it and set the monthly amount you expect.">
         <View>
           <Text style={s.label}>Name</Text>
           <TextInput style={s.input} value={newEarnName} onChangeText={setNewEarnName} placeholder="e.g., Freelance" testID="earn-add-name" />
@@ -1084,7 +1374,91 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
           </View>
         </View>
       </Sheet>
+
+      <Sheet visible={addingCategory} close={() => { setAddingCategory(false); setNewCatName(''); setNewCatTagline(''); }} title="Add Category" subtitle="Create a new spending purpose. You can add subcategories after.">
+        <View>
+          <Text style={s.label}>Name</Text>
+          <TextInput style={s.input} value={newCatName} onChangeText={setNewCatName} placeholder="e.g., Health" testID="cat-add-name" />
+          <Text style={[s.label, { marginTop: 12 }]}>Short tagline (optional)</Text>
+          <TextInput style={s.input} value={newCatTagline} onChangeText={setNewCatTagline} placeholder="e.g., Care for the body you're given" testID="cat-add-tagline" />
+          <View style={{ marginTop: 14 }}>
+            <GoldButton label="Create Category" onPress={addCategory} testID="cat-add-save" />
+          </View>
+        </View>
+      </Sheet>
+
+      <Sheet visible={!!addingSubTo} close={() => { setAddingSubTo(null); setNewSubName(''); setDraft(''); }} title="Add Subcategory" subtitle="Name it and (optionally) set the monthly amount.">
+        <View>
+          <Text style={s.label}>Name</Text>
+          <TextInput style={s.input} value={newSubName} onChangeText={setNewSubName} placeholder="e.g., Gym" testID="sub-add-name" />
+          <Text style={[s.label, { marginTop: 12 }]}>Monthly amount</Text>
+          <View style={s.amountInput}>
+            <Text style={s.amountPrefix}>$</Text>
+            <TextInput style={[s.input, { paddingLeft: 26 }]} value={draft} onChangeText={setDraft} keyboardType="numeric" placeholder="0" testID="sub-add-amount" />
+          </View>
+          <View style={{ marginTop: 14 }}>
+            <GoldButton label="Add" onPress={() => addingSubTo && addSubcategory(addingSubTo)} testID="sub-add-save" />
+          </View>
+        </View>
+      </Sheet>
+
+      {toast ? <Toast message={toast} onHide={() => setToast('')} /> : null}
     </ScrollView>
+  );
+};
+
+/* ---------------- Budget Grid (annual spreadsheet view) ---------------- */
+const BudgetGrid = ({ categories, spentInSub, onEdit, tDark }: any) => {
+  const cellW = 60;
+  const nameW = 130;
+  return (
+    <View style={{ marginTop: 8 }}>
+      <View style={[s.gridHeader, tDark && { backgroundColor: D.surface, borderColor: D.border }]}>
+        <View style={{ width: nameW }}><Text style={[s.gridHeaderText, tDark && { color: D.text }]}>Category</Text></View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          {MONTHS.map((m: string) => (
+            <View key={m} style={{ width: cellW, alignItems: 'center' }}>
+              <Text style={[s.gridHeaderText, tDark && { color: D.text }]}>{m}</Text>
+            </View>
+          ))}
+          <View style={{ width: cellW + 10, alignItems: 'center' }}><Text style={[s.gridHeaderText, tDark && { color: D.text }]}>Year</Text></View>
+        </ScrollView>
+      </View>
+      {categories.map((c: Category) => (
+        <View key={c.id} style={{ marginBottom: 6 }}>
+          <View style={[s.gridGroupRow, tDark && { backgroundColor: D.surfaceAlt }]}><Text style={[s.gridGroupText, tDark && { color: D.text }]}>{c.name}</Text></View>
+          {c.subcategories.map((sub: Subcategory) => {
+            const annualTotal = annualAmount(sub);
+            return (
+              <View key={sub.id} style={[s.gridRow, tDark && { borderColor: D.border }]}>
+                <View style={{ width: nameW, paddingRight: 6 }}><Text style={[s.gridSubText, tDark && { color: D.text }]} numberOfLines={1}>{sub.name}</Text></View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  {MONTHS.map((_: string, i: number) => {
+                    const b = monthlyAmount(sub, i);
+                    const a = spentInSub(sub.id, i);
+                    const over = a > b && b > 0;
+                    return (
+                      <Pressable
+                        key={i}
+                        onPress={() => onEdit(c.id, sub)}
+                        style={{ width: cellW, alignItems: 'center', paddingVertical: 6, backgroundColor: over ? '#fbecd8' : 'transparent' }}
+                        testID={`grid-cell-${sub.id}-${i}`}
+                      >
+                        <Text style={[{ fontSize: 10, fontWeight: '700' }, tDark && { color: D.text }]}>{b > 0 ? `$${Math.round(b)}` : '—'}</Text>
+                        {a > 0 && <Text style={{ fontSize: 8, color: over ? '#b46b41' : '#8b9a80' }}>${Math.round(a)}</Text>}
+                      </Pressable>
+                    );
+                  })}
+                  <View style={{ width: cellW + 10, alignItems: 'center', paddingVertical: 6 }}>
+                    <Text style={[{ fontSize: 10, fontWeight: '800', color: '#9a6d32' }]}>${Math.round(annualTotal)}</Text>
+                  </View>
+                </ScrollView>
+              </View>
+            );
+          })}
+        </View>
+      ))}
+    </View>
   );
 };
 
@@ -1134,7 +1508,7 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
   }, [token, transactions.length]);
   const shown = transactions.filter((tx: Tx) => filter === 'All' || (filter === 'Income' ? tx.type === 'income' : tx.type === 'expense'));
   const save = (t: any) => {
-    setTransactions((xs: Tx[]) => xs.some(x => x.id === t.id) ? xs.map(x => x.id === t.id ? t : x) : [{ ...t, id: `manual-${Date.now()}`, origin: 'Manual', period: 'July' }, ...xs]);
+    setTransactions((xs: Tx[]) => xs.some(x => x.id === t.id) ? xs.map(x => x.id === t.id ? t : x) : [{ ...t, id: `manual-${Date.now()}`, origin: 'Manual', period: currentMonth() }, ...xs]);
     setEditing(null); setToast('Transaction saved and totals refreshed.');
   };
   const remove = (id: string) => { setTransactions((xs: Tx[]) => xs.filter(x => x.id !== id)); setEditing(null); setToast('Transaction deleted.'); };
@@ -1484,7 +1858,9 @@ const CoachingScreen = ({ back }: any) => {
   const t = useThemed();
   const { token } = useAuth();
   const { start } = usePayment();
-  const [slots] = useState(() => upcomingCoachingSlots(10));
+  const now = new Date();
+  const [cursor, setCursor] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
+  const [selectedDay, setSelectedDay] = useState<Date | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -1507,7 +1883,7 @@ const CoachingScreen = ({ back }: any) => {
     setBusy(false);
     if (res.paid) {
       const iso = selected;
-      setSelected(null);
+      setSelected(null); setSelectedDay(null);
       setToast(`Session confirmed for ${formatBookingDate(iso)}.`);
       refreshBookings();
     } else if (res.canceled) {
@@ -1523,6 +1899,31 @@ const CoachingScreen = ({ back }: any) => {
   const upcoming = bookings
     .filter((b) => b.status === 'confirmed' && new Date(b.scheduled_at).getTime() > Date.now())
     .slice(0, 3);
+
+  // Calendar grid — 7 columns, week-starts-Sunday
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth();
+  const firstOfMonth = new Date(year, month, 1);
+  const startWeekday = firstOfMonth.getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells: (Date | null)[] = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(year, month, d));
+  while (cells.length % 7 !== 0) cells.push(null);
+  const monthLabel = firstOfMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const isPast = (d: Date) => d.getFullYear() < now.getFullYear() ||
+    (d.getFullYear() === now.getFullYear() && d.getMonth() < now.getMonth()) ||
+    (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() < now.getDate());
+  const isWeekend = (d: Date) => d.getDay() === 0 || d.getDay() === 6;
+  const sameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  const canBook = (d: Date) => !isPast(d) && !isWeekend(d);
+
+  // Time slots for the selected day
+  const hours = [10, 14, 16];
+  const timeSlots = selectedDay ? hours.map((h) => {
+    const slot = new Date(selectedDay.getFullYear(), selectedDay.getMonth(), selectedDay.getDate(), h, 0);
+    return { iso: slot.toISOString(), label: slot.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) };
+  }).filter((slot) => new Date(slot.iso).getTime() > Date.now() + 30 * 60 * 1000) : [];
 
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
@@ -1548,22 +1949,56 @@ const CoachingScreen = ({ back }: any) => {
       )}
 
       <View style={{ marginTop: 18 }}>
-        <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 }, t.textInk]}>PICK A TIME</Text>
-        {slots.map((slot) => {
-          const active = selected === slot.iso;
-          return (
-            <Pressable
-              key={slot.iso}
-              onPress={() => setSelected(slot.iso)}
-              style={[s.slotRow, { borderColor: active ? '#c9a56c' : (t.dark ? D.border : '#eae3d5'), backgroundColor: active ? (t.dark ? '#2a2521' : '#fff8ec') : (t.dark ? D.surface : '#fff') }]}
-              testID={`coaching-slot-${slot.iso}`}
-            >
-              <Ionicons name={active ? 'radio-button-on' : 'radio-button-off'} size={16} color={active ? '#c9a56c' : '#9b958c'} />
-              <Text style={[{ flex: 1, fontSize: 11, fontWeight: active ? '700' : '500' }, t.textInk]}>{slot.label}</Text>
-            </Pressable>
-          );
-        })}
+        <View style={s.calHeader}>
+          <Pressable onPress={() => setCursor(new Date(year, month - 1, 1))} testID="cal-prev" style={s.calNavBtn}><Ionicons name="chevron-back" size={16} color="#9a6d32" /></Pressable>
+          <Text style={[s.calMonth, t.textInk]}>{monthLabel}</Text>
+          <Pressable onPress={() => setCursor(new Date(year, month + 1, 1))} testID="cal-next" style={s.calNavBtn}><Ionicons name="chevron-forward" size={16} color="#9a6d32" /></Pressable>
+        </View>
+        <View style={s.calWeekRow}>
+          {['S','M','T','W','T','F','S'].map((d, i) => <Text key={i} style={[s.calWeekText, t.textMuted]}>{d}</Text>)}
+        </View>
+        <View style={s.calGrid}>
+          {cells.map((d, i) => {
+            if (!d) return <View key={i} style={s.calCell} />;
+            const disabled = !canBook(d);
+            const isToday = sameDay(d, now);
+            const isSelected = !!selectedDay && sameDay(d, selectedDay);
+            return (
+              <Pressable
+                key={i}
+                disabled={disabled}
+                onPress={() => { setSelectedDay(d); setSelected(null); }}
+                style={[s.calCell, { opacity: disabled ? 0.3 : 1 }, isSelected && s.calCellSelected]}
+                testID={`cal-day-${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`}
+              >
+                <Text style={[s.calCellText, t.textInk, isSelected && { color: '#fff' }, isToday && !isSelected && { color: '#9a6d32', fontWeight: '800' }]}>{d.getDate()}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
       </View>
+
+      {selectedDay && (
+        <View style={{ marginTop: 18 }}>
+          <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 }, t.textInk]}>PICK A TIME · {selectedDay.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</Text>
+          {timeSlots.length === 0 && <Text style={[{ fontSize: 10 }, t.textMuted]}>No slots left today. Try another day.</Text>}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {timeSlots.map((slot) => {
+              const active = selected === slot.iso;
+              return (
+                <Pressable
+                  key={slot.iso}
+                  onPress={() => setSelected(slot.iso)}
+                  style={[s.timeChip, active && s.timeChipActive, t.dark && { backgroundColor: D.surface, borderColor: active ? '#c9a56c' : D.border }]}
+                  testID={`coaching-slot-${slot.iso}`}
+                >
+                  <Text style={[s.timeChipText, active && { color: '#fff' }, t.dark && !active && { color: D.text }]}>{slot.label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      )}
 
       <View style={{ marginTop: 18 }}>
         <GoldButton label={busy ? 'Opening secure checkout…' : 'Book & Pay $50'} onPress={onBookAndPay} disabled={busy || !selected} testID="coaching-book" />
@@ -1662,7 +2097,7 @@ const MoreScreen = ({ navigate, linkedCount, onBack }: any) => {
     </ScrollView>
   );
 };
-const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, alerts, setAlerts, onLogout, back, linkedAccounts, addLinked, onResetAppData, initials }: any) => {
+const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, alerts, setAlerts, onLogout, back, linkedAccounts, addLinked, onResetAppData, initials, categories, appLock, setAppLock }: any) => {
   const t = useThemed();
   const [sheet, setSheet] = useState<string | null>(null);
   const [toast, setToast] = useState('');
@@ -1688,10 +2123,43 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
       </View>
       <View style={[s.settingsSection, t.cardBg]}>
         <Text style={[s.settingsH3, t.textInk]}>Budget Alerts</Text>
-        <Text style={[s.settingsSub, t.textMuted]}>Stay aware without feeling overwhelmed.</Text>
+        <Text style={[s.settingsSub, t.textMuted]}>Choose which thresholds trigger a warning per category.</Text>
         <Pressable onPress={() => setAlerts({ ...alerts, enabled: !alerts.enabled })} style={s.settingToggleRow} testID="settings-alerts">
-          <View style={{ flex: 1 }}><Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Enable alerts</Text><Text style={[{ fontSize: 9, color: C.muted3 }, t.textMuted]}>Budget notifications</Text></View>
+          <View style={{ flex: 1 }}><Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Enable alerts</Text><Text style={[{ fontSize: 9, color: C.muted3 }, t.textMuted]}>Master switch</Text></View>
           <View style={[s.toggle, alerts.enabled && s.toggleOn]}><View style={[s.toggleKnob, alerts.enabled && { transform: [{ translateX: 14 }] }]} /></View>
+        </Pressable>
+        {alerts.enabled && (categories || []).map((c: any) => (
+          <View key={c.id} style={{ marginTop: 10 }}>
+            <Text style={[{ fontSize: 10, fontWeight: '800', letterSpacing: 0.6, color: '#a97c39' }]}>{c.name.toUpperCase()}</Text>
+            {c.subcategories.map((sub: any) => {
+              const conf = (alerts.perCategory && alerts.perCategory[sub.id]) || { p50: false, p80: true, exceeded: true };
+              const toggle = (key: 'p50' | 'p80' | 'exceeded') => {
+                const next = { ...conf, [key]: !conf[key] };
+                setAlerts({ ...alerts, perCategory: { ...(alerts.perCategory || {}), [sub.id]: next } });
+              };
+              return (
+                <View key={sub.id} style={s.alertRow}>
+                  <Text style={[{ flex: 1, fontSize: 10, fontWeight: '600' }, t.textInk]}>{sub.name}</Text>
+                  {(['p50','p80','exceeded'] as const).map((k) => {
+                    const label = k === 'p50' ? '50%' : k === 'p80' ? '80%' : '100%+';
+                    return (
+                      <Pressable key={k} onPress={() => toggle(k)} style={[s.alertPill, conf[k] && s.alertPillOn]} testID={`alert-${sub.id}-${k}`}>
+                        <Text style={[s.alertPillText, conf[k] && { color: '#fff' }]}>{label}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              );
+            })}
+          </View>
+        ))}
+      </View>
+      <View style={[s.settingsSection, t.cardBg]}>
+        <Text style={[s.settingsH3, t.textInk]}>App Lock</Text>
+        <Text style={[s.settingsSub, t.textMuted]}>Require a PIN{appLock?.biometricsAvailable ? ' or Face ID' : ''} on app launch.</Text>
+        <Pressable onPress={() => setAppLock?.({ ...(appLock || {}), openConfigure: true })} style={s.settingToggleRow} testID="settings-applock">
+          <View style={{ flex: 1 }}><Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{appLock?.enabled ? 'Enabled' : 'Not set'}</Text><Text style={[{ fontSize: 9, color: C.muted3 }, t.textMuted]}>{appLock?.enabled ? (appLock?.biometricsEnabled ? 'Face ID + PIN' : 'PIN only') : 'Tap to set a PIN'}</Text></View>
+          <Ionicons name={appLock?.enabled ? 'lock-closed' : 'lock-open-outline'} size={18} color={appLock?.enabled ? '#8fa88f' : (t.dark ? D.textMuted : '#9a938a')} />
         </Pressable>
       </View>
       <View style={[s.settingsMenu, t.cardBg]}>
@@ -1711,6 +2179,15 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
         <Ionicons name="log-out-outline" size={17} color={C.danger} />
         <Text style={{ color: C.danger, fontSize: 12, fontWeight: '700' }}>Log Out</Text>
       </Pressable>
+      <Sheet visible={!!appLock?.openConfigure} close={() => setAppLock?.({ openConfigure: false })} title={appLock?.enabled ? 'Change App Lock' : 'Set up App Lock'} subtitle="Your PIN is stored securely on this device only.">
+        <AppLockConfigure
+          currentPin={appLock?.pin || ''}
+          biometricsAvailable={!!appLock?.biometricsAvailable}
+          biometricsEnabled={!!appLock?.biometricsEnabled}
+          onSaved={(next: any) => setAppLock?.({ ...next, openConfigure: false, locked: false })}
+          close={() => setAppLock?.({ openConfigure: false })}
+        />
+      </Sheet>
       <Modal transparent visible={confirmReset} animationType="fade" onRequestClose={() => setConfirmReset(false)}>
         <View style={{ flex: 1, backgroundColor: '#00000099', justifyContent: 'center', padding: 24 }}>
           <View style={[{ borderRadius: 22, padding: 22 }, { backgroundColor: t.dark ? D.surface : '#fff' }]}>
@@ -1972,6 +2449,13 @@ export default function App() {
 function MainApp() {
   const auth = useAuth();
   const [hydrated, setHydrated] = useState(false);
+  const [appLock, setAppLock] = useState<{ enabled: boolean; pin: string; biometricsEnabled: boolean; biometricsAvailable: boolean; openConfigure?: boolean; locked: boolean }>({ enabled: false, pin: '', biometricsEnabled: false, biometricsAvailable: false, locked: false });
+  useEffect(() => {
+    (async () => {
+      const l = await loadAppLock();
+      setAppLock({ enabled: !!l.pin, pin: l.pin, biometricsEnabled: l.biometricsEnabled, biometricsAvailable: l.biometricsAvailable, locked: !!l.pin });
+    })();
+  }, []);
   const [stage, setStage] = useState<'welcome'|'onboarding'|'signup'|'login'|'forgot'|'reset'|'connect'|'paywall'|'app'>('welcome');
   const [resetInfo, setResetInfo] = useState<{ email: string; token: string | null }>({ email: '', token: null });
   const [experience, setExperience] = useState('Both');
@@ -1985,7 +2469,7 @@ function MainApp() {
   const [liabilities] = useState<Asset[]>(initialLiabilities);
   const [linkedAccounts, setLinkedAccounts] = useState<any[]>([]);
   const [focusCategory, setFocusCategory] = useState<string | null>(null);
-  const [alerts, setAlerts] = useState({ enabled: true, threshold: 80 });
+  const [alerts, setAlerts] = useState<{ enabled: boolean; threshold: number; perCategory: Record<string, { p50: boolean; p80: boolean; exceeded: boolean }> }>({ enabled: true, threshold: 80, perCategory: {} });
 
   // Hydrate persisted UI state (auth is separate)
   useEffect(() => {
@@ -2124,17 +2608,25 @@ function MainApp() {
       {!auth.user && stage === 'reset' && <ResetPassword back={() => setStage('login')} email={resetInfo.email} prefilledToken={resetInfo.token} onDone={() => { setResetInfo({ email: '', token: null }); setStage('app'); }} />}
       {auth.user && stage === 'connect' && <FirstConnect onConnect={(data: any) => { setLinkedAccounts(data?.accounts || []); setStage('paywall'); }} onSkip={() => setStage('paywall')} />}
       {auth.user && stage === 'paywall' && <Paywall onContinue={() => setStage('app')} />}
-      {auth.user && stage === 'app' && (
+      {auth.user && stage === 'app' && appLock.enabled && appLock.locked && (
+        <AppLockGate
+          storedPin={appLock.pin}
+          biometricsEnabled={appLock.biometricsEnabled}
+          biometricsAvailable={appLock.biometricsAvailable}
+          onUnlock={() => setAppLock((a) => ({ ...a, locked: false }))}
+        />
+      )}
+      {auth.user && stage === 'app' && !(appLock.enabled && appLock.locked) && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
           {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
-          {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} />}
+          {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} />}
           {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} openLinkSheet={() => { setActive('settings'); }} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} liabilities={liabilities} transactions={transactions} restrictedCash={restrictedCash} setRestrictedCash={setRestrictedCash} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={linkedAccounts.length} onBack={() => setActive('home')} />}
           {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}
-          {active === 'settings' && <SettingsScreen initials={displayInitials} experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} onResetAppData={async () => {
+          {active === 'settings' && <SettingsScreen initials={displayInitials} experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} categories={categories} appLock={appLock} setAppLock={(next: any) => setAppLock({ ...appLock, ...next })} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} onResetAppData={async () => {
             try { await storage.removeItem(STORAGE_KEY); } catch {}
             for (const k of LEGACY_STORAGE_KEYS) { try { await storage.removeItem(k); } catch {} }
             setTransactions([]);
@@ -2144,7 +2636,7 @@ function MainApp() {
             setRestrictedCash(0);
             setExperience('Faith');
             setAppearance('System');
-            setAlerts({ enabled: true, threshold: 80 });
+            setAlerts({ enabled: true, threshold: 80, perCategory: {} });
           }} />}
           <BottomNav active={active} setActive={(id: string) => { setActive(id); }} isDark={isDark} />
         </View>
@@ -2242,6 +2734,45 @@ const s = StyleSheet.create({
   teaserBarFlow: { width: 14, borderRadius: 5 },
   /* Budget */
   budgetSummary: { flexDirection: 'row', gap: 1, marginBottom: 12, borderRadius: 19, overflow: 'hidden', backgroundColor: '#302d28' },
+  viewToggle: { flexDirection: 'row', gap: 4, backgroundColor: '#f2ecdf', borderRadius: 12, padding: 3 },
+  viewTogglePill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
+  viewTogglePillActive: { backgroundColor: '#fff' },
+  budgetActions: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  budgetActionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: '#e7d9be', backgroundColor: '#fbf5e9' },
+  budgetActionText: { color: '#9a6d32', fontSize: 11, fontWeight: '700' },
+  gridHeader: { flexDirection: 'row', paddingVertical: 8, paddingHorizontal: 8, backgroundColor: '#faf5eb', borderRadius: 12, borderWidth: 1, borderColor: '#eadfc2', marginBottom: 6 },
+  gridHeaderText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.4, color: '#7a6d55' },
+  gridGroupRow: { paddingVertical: 6, paddingHorizontal: 8, backgroundColor: '#f5efdf' },
+  gridGroupText: { fontSize: 10, fontWeight: '800', color: '#8a6d3a' },
+  gridRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: '#f1ede6' },
+  gridSubText: { fontSize: 10, fontWeight: '600', color: C.ink3 },
+  alertRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6 },
+  alertPill: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10, borderWidth: 1, borderColor: '#e2d6b7', backgroundColor: '#fbf5e9' },
+  alertPillOn: { backgroundColor: '#b28a4c', borderColor: '#b28a4c' },
+  alertPillText: { fontSize: 9, fontWeight: '800', color: '#8a6d3a' },
+  gate: { flex: 1, backgroundColor: '#090908', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30, paddingVertical: 40 },
+  gateTitle: { color: '#f5e8ca', fontSize: 26, fontFamily: F.serif, fontWeight: '600', marginTop: 14, letterSpacing: 2.5 },
+  gateSub: { color: '#a19381', fontSize: 12, marginTop: 6, marginBottom: 24 },
+  pinDots: { flexDirection: 'row', gap: 12 },
+  pinDot: { width: 14, height: 14, borderRadius: 8, borderWidth: 1, borderColor: '#7d6a4a', backgroundColor: 'transparent' },
+  pinDotFilled: { backgroundColor: '#e2b96f', borderColor: '#e2b96f' },
+  pinErr: { color: '#e79b7c', fontSize: 11, marginTop: 12, minHeight: 14 },
+  pinPad: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12, marginTop: 20, maxWidth: 260 },
+  pinBtn: { width: 70, height: 70, borderRadius: 40, backgroundColor: '#1b1915', alignItems: 'center', justifyContent: 'center' },
+  pinBtnText: { color: '#f0e6cf', fontSize: 22, fontWeight: '500' },
+  bioBtn: { marginTop: 24, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 12, borderRadius: 24, borderWidth: 1, borderColor: '#5a4a2f' },
+  calHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, paddingHorizontal: 4 },
+  calNavBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#fbf5e9', borderWidth: 1, borderColor: '#eadfc2', alignItems: 'center', justifyContent: 'center' },
+  calMonth: { fontSize: 13, fontWeight: '700', fontFamily: F.serif },
+  calWeekRow: { flexDirection: 'row', paddingHorizontal: 2, marginBottom: 4 },
+  calWeekText: { flex: 1, textAlign: 'center', fontSize: 9, fontWeight: '800', letterSpacing: 0.4, color: '#9a938a' },
+  calGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  calCell: { width: `${100/7}%`, aspectRatio: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 22, marginBottom: 2 },
+  calCellText: { fontSize: 12, fontWeight: '600' },
+  calCellSelected: { backgroundColor: '#b28a4c' },
+  timeChip: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20, borderWidth: 1, borderColor: '#eae3d5', backgroundColor: '#fff' },
+  timeChipActive: { backgroundColor: '#b28a4c', borderColor: '#b28a4c' },
+  timeChipText: { fontSize: 11, fontWeight: '700', color: '#3a3428' },
   budgetSumCell: { flex: 1, padding: 14, backgroundColor: C.ink3 },
   bsSmall: { color: '#aaa39a', fontSize: 8 },
   bsStrong: { fontFamily: F.serif, fontWeight: '600', fontSize: 16, color: '#fff', marginVertical: 3 },
