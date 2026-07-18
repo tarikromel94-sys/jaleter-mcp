@@ -174,11 +174,11 @@ const AppLockConfigure = ({ close, currentPin, biometricsAvailable, biometricsEn
         </Pressable>
       )}
       <GoldButton label={step === 'enter' ? 'Continue' : 'Save PIN'} onPress={advance} testID="cfg-pin-continue" />
-      {currentPin && (
+      {currentPin ? (
         <Pressable onPress={disable} style={{ marginTop: 10, alignItems: 'center' }} testID="cfg-pin-disable">
           <Text style={{ color: C.danger, fontSize: 11, fontWeight: '700' }}>Turn off App Lock</Text>
         </Pressable>
-      )}
+      ) : null}
     </View>
   );
 };
@@ -1549,7 +1549,12 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
       <PageHeader title="Transactions" subtitle="Synced automatically. Editable anytime." action={
         <View style={{ flexDirection: 'row', gap: 8 }}>
           <CircleBtn testID="tx-import" onPress={importFile}><Ionicons name={importing ? 'hourglass-outline' : 'cloud-upload-outline'} size={18} color={t.dark ? D.text : C.ink3} /></CircleBtn>
-          <CircleBtn testID="tx-add" onPress={() => setEditing({ type: 'expense', name: '', amount: '', date: 'Jul 15', groupId: 'steward', detailId: 'housing' })}>
+          <CircleBtn testID="tx-add" onPress={() => {
+            const now = new Date();
+            const dateLabel = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            const firstCat = categories?.[0];
+            setEditing({ type: 'expense', name: '', amount: '', date: dateLabel, groupId: firstCat?.id || 'steward', detailId: firstCat?.subcategories?.[0]?.id, period: currentMonth() });
+          }}>
             <Ionicons name="add" size={19} color={t.dark ? D.text : C.ink3} />
           </CircleBtn>
         </View>
@@ -1594,9 +1599,12 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
 };
 const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
   const [t, setT] = useState({ ...item, amount: String(item.amount || '') });
+  const isIncome = t.type === 'income';
+  const currentGroup = isIncome ? incomeSources.find((s: any) => s.id === t.groupId) : categories.find((c: any) => c.id === t.groupId);
+  const currentSubs = !isIncome && currentGroup ? currentGroup.subcategories : [];
   return (
     <View>
-      <PeriodPills values={['expense','income']} value={t.type} onChange={(v: string) => setT({ ...t, type: v, groupId: v === 'income' ? 'w2' : 'steward', detailId: v === 'income' ? undefined : 'housing' })} testID="tx-type" />
+      <PeriodPills values={['expense','income']} value={t.type} onChange={(v: string) => setT({ ...t, type: v, groupId: v === 'income' ? (incomeSources[0]?.id || 'w2') : (categories[0]?.id || 'steward'), detailId: v === 'income' ? undefined : (categories[0]?.subcategories?.[0]?.id) })} testID="tx-type" />
       <Text style={s.label}>Description</Text>
       <TextInput style={s.input} value={t.name} onChangeText={x => setT({ ...t, name: x })} testID="tx-name" />
       <Text style={s.label}>Amount</Text>
@@ -1606,8 +1614,46 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
       </View>
       <Text style={s.label}>Date</Text>
       <TextInput style={s.input} value={t.date} onChangeText={x => setT({ ...t, date: x })} testID="tx-date" />
+      <Text style={s.label}>Month</Text>
+      <PeriodPills values={[...MONTHS]} value={t.period || currentMonth()} onChange={(v: string) => setT({ ...t, period: v })} testID="tx-month" />
+      <Text style={s.label}>{isIncome ? 'Earn source' : 'Category'}</Text>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+        {(isIncome ? incomeSources : categories).map((g: any) => {
+          const on = t.groupId === g.id;
+          return (
+            <Pressable
+              key={g.id}
+              onPress={() => setT({ ...t, groupId: g.id, detailId: isIncome ? undefined : g.subcategories?.[0]?.id })}
+              style={[s.pickerChip, on && s.pickerChipOn]}
+              testID={`tx-group-${g.id}`}
+            >
+              <Text style={[s.pickerChipText, on && { color: '#fff' }]}>{g.name}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      {!isIncome && currentSubs.length > 0 && (
+        <>
+          <Text style={s.label}>Subcategory</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+            {currentSubs.map((sub: any) => {
+              const on = t.detailId === sub.id;
+              return (
+                <Pressable
+                  key={sub.id}
+                  onPress={() => setT({ ...t, detailId: sub.id })}
+                  style={[s.pickerChip, on && s.pickerChipOn]}
+                  testID={`tx-sub-${sub.id}`}
+                >
+                  <Text style={[s.pickerChipText, on && { color: '#fff' }]}>{sub.name}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </>
+      )}
       <View style={{ marginTop: 14 }}>
-        <GoldButton label="Save transaction" onPress={() => save({ ...t, amount: Number(t.amount), origin: t.origin || 'Manual', period: t.period || 'July' })} disabled={!t.name || !Number(t.amount)} testID="tx-save" />
+        <GoldButton label="Save transaction" onPress={() => save({ ...t, amount: Number(t.amount), origin: t.origin || 'Manual', period: t.period || currentMonth() })} disabled={!t.name || !Number(t.amount)} testID="tx-save" />
       </View>
       {remove && <Pressable onPress={() => remove(item.id)} style={{ marginTop: 12, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 }} testID="tx-delete">
         <Ionicons name="trash-outline" size={14} color={C.danger} /><Text style={{ color: C.danger, fontSize: 11 }}>Delete transaction</Text>
@@ -2184,7 +2230,17 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
           currentPin={appLock?.pin || ''}
           biometricsAvailable={!!appLock?.biometricsAvailable}
           biometricsEnabled={!!appLock?.biometricsEnabled}
-          onSaved={(next: any) => setAppLock?.({ ...next, openConfigure: false, locked: false })}
+          onSaved={async (next: any) => {
+            const fresh = await loadAppLock();
+            setAppLock?.({
+              enabled: !!fresh.pin,
+              pin: fresh.pin,
+              biometricsEnabled: fresh.biometricsEnabled,
+              biometricsAvailable: next.biometricsAvailable,
+              openConfigure: false,
+              locked: false,
+            });
+          }}
           close={() => setAppLock?.({ openConfigure: false })}
         />
       </Sheet>
@@ -2773,6 +2829,9 @@ const s = StyleSheet.create({
   timeChip: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20, borderWidth: 1, borderColor: '#eae3d5', backgroundColor: '#fff' },
   timeChipActive: { backgroundColor: '#b28a4c', borderColor: '#b28a4c' },
   timeChipText: { fontSize: 11, fontWeight: '700', color: '#3a3428' },
+  pickerChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14, borderWidth: 1, borderColor: '#eae3d5', backgroundColor: '#fff' },
+  pickerChipOn: { backgroundColor: '#b28a4c', borderColor: '#b28a4c' },
+  pickerChipText: { fontSize: 10, fontWeight: '700', color: '#3a3428' },
   budgetSumCell: { flex: 1, padding: 14, backgroundColor: C.ink3 },
   bsSmall: { color: '#aaa39a', fontSize: 8 },
   bsStrong: { fontFamily: F.serif, fontWeight: '600', fontSize: 16, color: '#fff', marginVertical: 3 },
