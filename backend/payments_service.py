@@ -22,7 +22,7 @@ from emergentintegrations.payments.stripe.checkout import (
 # Server-side product catalog. NEVER trust amounts sent from the client.
 PRODUCTS = {
     'coaching_session': {
-        'name': 'Coaching Session (1 hour)',
+        'name': 'Coaching Session (30 min)',
         'amount': 50.0,
         'currency': 'usd',
         'kind': 'coaching',
@@ -218,16 +218,18 @@ def new_booking_id() -> str:
     return f"book_{uuid.uuid4().hex[:12]}"
 
 
-async def create_pending_booking(db, user: dict, scheduled_at_iso: str) -> dict:
-    # Basic validation: must be a valid future ISO time
-    try:
-        dt = datetime.fromisoformat(scheduled_at_iso.replace('Z', '+00:00'))
-    except Exception:
-        raise ValueError('Invalid scheduled_at (expected ISO-8601)')
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    if dt < datetime.now(timezone.utc) + timedelta(minutes=15):
-        raise ValueError('Please choose a time at least 15 minutes in the future.')
+async def create_pending_booking(db, user: dict, scheduled_at_iso: str | None) -> dict:
+    # scheduled_at is optional (users may schedule via Calendly separately).
+    dt = None
+    if scheduled_at_iso:
+        try:
+            dt = datetime.fromisoformat(scheduled_at_iso.replace('Z', '+00:00'))
+        except Exception:
+            raise ValueError('Invalid scheduled_at (expected ISO-8601)')
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if dt < datetime.now(timezone.utc) - timedelta(days=1):
+            raise ValueError('Please choose a time in the future.')
 
     booking_id = new_booking_id()
     doc = {
@@ -235,12 +237,13 @@ async def create_pending_booking(db, user: dict, scheduled_at_iso: str) -> dict:
         'user_id': user['user_id'],
         'user_email': user['email'],
         'user_name': user.get('name'),
-        'scheduled_at': dt.isoformat(),
+        'scheduled_at': dt.isoformat() if dt else None,
+        'scheduled_via': 'calendly' if not dt else 'in_app',
         'status': 'pending_payment',
         'created_at': datetime.now(timezone.utc),
     }
     await db.coaching_bookings.insert_one(doc)
-    return {'booking_id': booking_id, 'scheduled_at': dt.isoformat()}
+    return {'booking_id': booking_id, 'scheduled_at': doc['scheduled_at']}
 
 
 async def list_user_bookings(db, user_id: str) -> list[dict]:

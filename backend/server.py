@@ -704,8 +704,6 @@ async def payments_checkout(payload: CheckoutRequest, request: Request, current_
 
     booking = None
     if payload.product == 'coaching_session':
-        if not payload.scheduled_at:
-            raise HTTPException(status_code=400, detail='scheduled_at is required for coaching sessions.')
         try:
             booking = await pay_create_booking(db, current_user, payload.scheduled_at)
         except ValueError as e:

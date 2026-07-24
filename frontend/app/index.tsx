@@ -1900,14 +1900,14 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet }: any) => {
     </ScrollView>
   );
 };
+const CALENDLY_URL = 'https://calendly.com/danyelldaugherty-v6lh/30min';
+
 const CoachingScreen = ({ back }: any) => {
   const t = useThemed();
   const { token } = useAuth();
   const { start } = usePayment();
-  const now = new Date();
-  const [cursor, setCursor] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
-  const [selectedDay, setSelectedDay] = useState<Date | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [payOpen, setPayOpen] = useState(false);
+  const [dateDraft, setDateDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [bookings, setBookings] = useState<any[]>([]);
@@ -1921,19 +1921,37 @@ const CoachingScreen = ({ back }: any) => {
   }, [token]);
   useEffect(() => { refreshBookings(); }, [refreshBookings]);
 
-  const onBookAndPay = async () => {
-    if (!selected) { setToast('Please choose a time slot.'); return; }
+  const openCalendly = async () => {
+    try {
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.open(CALENDLY_URL, '_blank', 'noopener');
+      } else {
+        await WebBrowser.openBrowserAsync(CALENDLY_URL);
+      }
+    } catch (e: any) {
+      setToast(e?.message || 'Could not open Calendly.');
+    }
+  };
+
+  const onPay = async () => {
     setBusy(true);
     setToast(null);
-    const res = await start('coaching_session', { scheduled_at: selected });
+    // Parse optional date/time input — accept "Jul 22 at 2pm" or ISO or blank.
+    let scheduled_at: string | undefined;
+    const raw = (dateDraft || '').trim();
+    if (raw) {
+      const d = new Date(raw);
+      if (!isNaN(d.getTime())) scheduled_at = d.toISOString();
+    }
+    const res = await start('coaching_session', scheduled_at ? { scheduled_at } : undefined);
     setBusy(false);
+    setPayOpen(false);
     if (res.paid) {
-      const iso = selected;
-      setSelected(null); setSelectedDay(null);
-      setToast(`Session confirmed for ${formatBookingDate(iso)}.`);
+      setToast(scheduled_at ? `Session confirmed for ${formatBookingDate(scheduled_at)}.` : 'Payment received. See Calendly for your confirmed time.');
+      setDateDraft('');
       refreshBookings();
     } else if (res.canceled) {
-      setToast('Payment canceled. Your time slot was released.');
+      setToast('Payment canceled.');
     } else if (res.error) {
       setToast(res.error);
     } else if (Platform.OS !== 'web') {
@@ -1943,112 +1961,72 @@ const CoachingScreen = ({ back }: any) => {
   };
 
   const upcoming = bookings
-    .filter((b) => b.status === 'confirmed' && new Date(b.scheduled_at).getTime() > Date.now())
-    .slice(0, 3);
-
-  // Calendar grid — 7 columns, week-starts-Sunday
-  const year = cursor.getFullYear();
-  const month = cursor.getMonth();
-  const firstOfMonth = new Date(year, month, 1);
-  const startWeekday = firstOfMonth.getDay();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const cells: (Date | null)[] = [];
-  for (let i = 0; i < startWeekday; i++) cells.push(null);
-  for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(year, month, d));
-  while (cells.length % 7 !== 0) cells.push(null);
-  const monthLabel = firstOfMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-  const isPast = (d: Date) => d.getFullYear() < now.getFullYear() ||
-    (d.getFullYear() === now.getFullYear() && d.getMonth() < now.getMonth()) ||
-    (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() < now.getDate());
-  const isWeekend = (d: Date) => d.getDay() === 0 || d.getDay() === 6;
-  const sameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-  const canBook = (d: Date) => !isPast(d) && !isWeekend(d);
-
-  // Time slots for the selected day
-  const hours = [10, 14, 16];
-  const timeSlots = selectedDay ? hours.map((h) => {
-    const slot = new Date(selectedDay.getFullYear(), selectedDay.getMonth(), selectedDay.getDate(), h, 0);
-    return { iso: slot.toISOString(), label: slot.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) };
-  }).filter((slot) => new Date(slot.iso).getTime() > Date.now() + 30 * 60 * 1000) : [];
+    .filter((b) => b.status === 'confirmed')
+    .sort((a, b) => (new Date(b.created_at).getTime()) - (new Date(a.created_at).getTime()))
+    .slice(0, 5);
 
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Coaching" subtitle="Personal financial clarity, one hour at a time." back={back} />
       <View style={s.coachingCard}>
         <View style={s.coachingIcon}><Ionicons name="chatbubble-outline" size={24} color={C.goldText} /></View>
-        <Text style={{ color: '#cda86d', fontSize: 9, letterSpacing: 1.2 }}>PRIVATE SESSION · 60 MIN</Text>
+        <Text style={{ color: '#cda86d', fontSize: 9, letterSpacing: 1.2 }}>PRIVATE SESSION · 30 MIN</Text>
         <Text style={s.coachingPrice}>$50</Text>
         <Text style={{ color: '#aaa298', fontSize: 10, textAlign: 'center' }}>Work through your budget, goals, or next financial decision with Danyell.</Text>
       </View>
 
+      <View style={{ marginTop: 18, gap: 10 }}>
+        <View style={[s.stepCard, t.cardBg]}>
+          <View style={s.stepBadge}><Text style={s.stepBadgeText}>1</Text></View>
+          <View style={{ flex: 1 }}>
+            <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>Pick a time</Text>
+            <Text style={[{ fontSize: 9, color: C.muted2, marginTop: 2 }, t.textMuted]}>Opens Calendly. Danyell will confirm by email.</Text>
+          </View>
+          <Pressable onPress={openCalendly} style={s.stepBtnPill} testID="coaching-open-calendly">
+            <Text style={s.stepBtnPillText}>Schedule →</Text>
+          </Pressable>
+        </View>
+        <View style={[s.stepCard, t.cardBg]}>
+          <View style={s.stepBadge}><Text style={s.stepBadgeText}>2</Text></View>
+          <View style={{ flex: 1 }}>
+            <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>Pay $50 to confirm</Text>
+            <Text style={[{ fontSize: 9, color: C.muted2, marginTop: 2 }, t.textMuted]}>Secure Stripe checkout — required to lock your slot.</Text>
+          </View>
+          <Pressable onPress={() => { setDateDraft(''); setPayOpen(true); }} style={[s.stepBtnPill, { backgroundColor: '#b28a4c' }]} testID="coaching-open-pay">
+            <Text style={[s.stepBtnPillText, { color: '#fff' }]}>Pay $50</Text>
+          </Pressable>
+        </View>
+      </View>
+
       {upcoming.length > 0 && (
-        <View style={{ marginTop: 18 }}>
-          <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 }, t.textInk]}>UPCOMING</Text>
+        <View style={{ marginTop: 22 }}>
+          <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 }, t.textInk]}>PAID SESSIONS</Text>
           {upcoming.map((b) => (
             <View key={b.booking_id} style={[s.slotRow, { borderColor: '#c9a56c33', backgroundColor: t.dark ? D.surface : '#faf4e9' }]}>
               <Ionicons name="checkmark-circle" size={17} color="#8fa88f" />
-              <Text style={[{ flex: 1, fontSize: 11, fontWeight: '600' }, t.textInk]}>{formatBookingDate(b.scheduled_at)}</Text>
+              <Text style={[{ flex: 1, fontSize: 11, fontWeight: '600' }, t.textInk]}>{b.scheduled_at ? formatBookingDate(b.scheduled_at) : 'Scheduled via Calendly'}</Text>
               <Text style={{ color: '#8fa88f', fontSize: 9, fontWeight: '700' }}>CONFIRMED</Text>
             </View>
           ))}
         </View>
       )}
 
-      <View style={{ marginTop: 18 }}>
-        <View style={s.calHeader}>
-          <Pressable onPress={() => setCursor(new Date(year, month - 1, 1))} testID="cal-prev" style={s.calNavBtn}><Ionicons name="chevron-back" size={16} color="#9a6d32" /></Pressable>
-          <Text style={[s.calMonth, t.textInk]}>{monthLabel}</Text>
-          <Pressable onPress={() => setCursor(new Date(year, month + 1, 1))} testID="cal-next" style={s.calNavBtn}><Ionicons name="chevron-forward" size={16} color="#9a6d32" /></Pressable>
-        </View>
-        <View style={s.calWeekRow}>
-          {['S','M','T','W','T','F','S'].map((d, i) => <Text key={i} style={[s.calWeekText, t.textMuted]}>{d}</Text>)}
-        </View>
-        <View style={s.calGrid}>
-          {cells.map((d, i) => {
-            if (!d) return <View key={i} style={s.calCell} />;
-            const disabled = !canBook(d);
-            const isToday = sameDay(d, now);
-            const isSelected = !!selectedDay && sameDay(d, selectedDay);
-            return (
-              <Pressable
-                key={i}
-                disabled={disabled}
-                onPress={() => { setSelectedDay(d); setSelected(null); }}
-                style={[s.calCell, { opacity: disabled ? 0.3 : 1 }, isSelected && s.calCellSelected]}
-                testID={`cal-day-${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`}
-              >
-                <Text style={[s.calCellText, t.textInk, isSelected && { color: '#fff' }, isToday && !isSelected && { color: '#9a6d32', fontWeight: '800' }]}>{d.getDate()}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      </View>
-
-      {selectedDay && (
-        <View style={{ marginTop: 18 }}>
-          <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 }, t.textInk]}>PICK A TIME · {selectedDay.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</Text>
-          {timeSlots.length === 0 && <Text style={[{ fontSize: 10 }, t.textMuted]}>No slots left today. Try another day.</Text>}
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            {timeSlots.map((slot) => {
-              const active = selected === slot.iso;
-              return (
-                <Pressable
-                  key={slot.iso}
-                  onPress={() => setSelected(slot.iso)}
-                  style={[s.timeChip, active && s.timeChipActive, t.dark && { backgroundColor: D.surface, borderColor: active ? '#c9a56c' : D.border }]}
-                  testID={`coaching-slot-${slot.iso}`}
-                >
-                  <Text style={[s.timeChipText, active && { color: '#fff' }, t.dark && !active && { color: D.text }]}>{slot.label}</Text>
-                </Pressable>
-              );
-            })}
+      <Sheet visible={payOpen} close={() => { setPayOpen(false); setDateDraft(''); }} title="Pay for your session" subtitle="Optionally paste the date/time from your Calendly confirmation so it shows up in the app.">
+        <View>
+          <Text style={s.label}>When is your session? (optional)</Text>
+          <TextInput
+            style={s.input}
+            value={dateDraft}
+            onChangeText={setDateDraft}
+            placeholder="e.g., Jul 22, 2026 at 2:00 PM"
+            testID="coaching-date-input"
+          />
+          <Text style={{ fontSize: 9, color: C.muted3, marginTop: 6 }}>Leave blank if you&apos;d rather rely on Calendly&apos;s confirmation email.</Text>
+          <View style={{ marginTop: 14 }}>
+            <GoldButton label={busy ? 'Opening secure checkout…' : 'Pay $50 with Stripe'} onPress={onPay} disabled={busy} testID="coaching-book" />
           </View>
         </View>
-      )}
-
-      <View style={{ marginTop: 18 }}>
-        <GoldButton label={busy ? 'Opening secure checkout…' : 'Book & Pay $50'} onPress={onBookAndPay} disabled={busy || !selected} testID="coaching-book" />
-      </View>
+      </Sheet>
       {toast && <Toast message={toast} onHide={() => setToast(null)} />}
     </ScrollView>
   );
@@ -2832,6 +2810,11 @@ const s = StyleSheet.create({
   pickerChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14, borderWidth: 1, borderColor: '#eae3d5', backgroundColor: '#fff' },
   pickerChipOn: { backgroundColor: '#b28a4c', borderColor: '#b28a4c' },
   pickerChipText: { fontSize: 10, fontWeight: '700', color: '#3a3428' },
+  stepCard: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: '#e7d9be', backgroundColor: '#fff' },
+  stepBadge: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#f4e6c8', alignItems: 'center', justifyContent: 'center' },
+  stepBadgeText: { color: '#8a6d3a', fontSize: 12, fontWeight: '800' },
+  stepBtnPill: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16, backgroundColor: '#fbf5e9', borderWidth: 1, borderColor: '#e0cfa4' },
+  stepBtnPillText: { color: '#8a6d3a', fontSize: 11, fontWeight: '800' },
   budgetSumCell: { flex: 1, padding: 14, backgroundColor: C.ink3 },
   bsSmall: { color: '#aaa39a', fontSize: 8 },
   bsStrong: { fontFamily: F.serif, fontWeight: '600', fontSize: 16, color: '#fff', marginVertical: 3 },
