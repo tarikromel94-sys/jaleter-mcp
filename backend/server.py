@@ -4,7 +4,8 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
-from jose import jwt, JWTError
+from jose import jwt, JWTError, jwk
+from jose.exceptions import ExpiredSignatureError, JWTClaimsError
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 from datetime import datetime, timedelta, timezone
@@ -318,6 +319,113 @@ async def emergent_session(payload: EmergentSessionRequest):
         }},
         upsert=True,
     )
+    return AuthResponse(user=public_user(user), token=session_token)
+
+
+# ---------------- Sign in with Apple ----------------
+APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys'
+APPLE_ISSUER = 'https://appleid.apple.com'
+APPLE_AUDIENCES = [a.strip() for a in os.environ.get('APPLE_AUDIENCES', '').split(',') if a.strip()]
+_apple_jwks_cache: dict = {'fetched_at': 0.0, 'keys': None}
+
+
+async def _apple_jwks() -> list[dict]:
+    now = datetime.now(timezone.utc).timestamp()
+    if _apple_jwks_cache['keys'] and now - _apple_jwks_cache['fetched_at'] < 3600:
+        return _apple_jwks_cache['keys']
+    async with httpx.AsyncClient(timeout=10.0) as hx:
+        r = await hx.get(APPLE_JWKS_URL)
+        r.raise_for_status()
+        keys = r.json().get('keys', [])
+    _apple_jwks_cache['keys'] = keys
+    _apple_jwks_cache['fetched_at'] = now
+    return keys
+
+
+class AppleAuthRequest(BaseModel):
+    identity_token: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+
+
+@api_router.post('/auth/apple', response_model=AuthResponse)
+async def apple_sign_in(payload: AppleAuthRequest):
+    if not APPLE_AUDIENCES:
+        raise HTTPException(status_code=500, detail='Apple sign-in is not configured on the server.')
+    try:
+        header = jwt.get_unverified_header(payload.identity_token)
+    except Exception:
+        raise HTTPException(status_code=401, detail='Invalid Apple identity token (malformed header).')
+    kid = header.get('kid')
+    if not kid:
+        raise HTTPException(status_code=401, detail='Invalid Apple identity token (missing kid).')
+    keys = await _apple_jwks()
+    key_dict = next((k for k in keys if k.get('kid') == kid), None)
+    if not key_dict:
+        # Apple may have rotated — bust cache and retry once
+        _apple_jwks_cache['fetched_at'] = 0.0
+        keys = await _apple_jwks()
+        key_dict = next((k for k in keys if k.get('kid') == kid), None)
+    if not key_dict:
+        raise HTTPException(status_code=401, detail='Apple identity token signed with unknown key.')
+
+    public_key = jwk.construct(key_dict)
+    try:
+        claims = jwt.decode(
+            payload.identity_token,
+            public_key.to_pem().decode(),
+            algorithms=['RS256'],
+            audience=APPLE_AUDIENCES,
+            issuer=APPLE_ISSUER,
+        )
+    except ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail='Apple identity token has expired.')
+    except JWTClaimsError as e:
+        raise HTTPException(status_code=401, detail=f'Apple identity token claims invalid: {e}')
+    except JWTError as e:
+        raise HTTPException(status_code=401, detail=f'Apple identity token verification failed: {e}')
+
+    apple_sub = claims.get('sub')
+    if not apple_sub:
+        raise HTTPException(status_code=401, detail='Apple identity token missing subject.')
+
+    token_email = (claims.get('email') or '').lower() or None
+    # Apple sometimes returns a private-relay email; still valid.
+    is_private_relay = bool(token_email and token_email.endswith('@privaterelay.appleid.com'))
+
+    # Look up existing user by apple_sub first, then by email as a fallback (link accounts).
+    user = await db.users.find_one({'apple_sub': apple_sub}, {'_id': 0})
+    if not user and token_email:
+        user = await db.users.find_one({'email': token_email}, {'_id': 0})
+
+    if user:
+        # Never overwrite existing name/email with nulls; only fill missing fields.
+        updates: dict = {'apple_sub': apple_sub}
+        if not user.get('name') and payload.name:
+            updates['name'] = payload.name.strip()
+        if not user.get('email') and token_email:
+            updates['email'] = token_email
+        if 'provider' not in user or not user['provider']:
+            updates['provider'] = 'apple'
+        if updates:
+            await db.users.update_one({'user_id': user['user_id']}, {'$set': updates})
+            user = await db.users.find_one({'user_id': user['user_id']}, {'_id': 0})
+    else:
+        # First sign-in — Apple gives us name/email only ONCE. Persist immediately.
+        user_id = new_user_id()
+        email_for_record = token_email or (payload.email or '').lower() or None
+        user = {
+            'user_id': user_id,
+            'apple_sub': apple_sub,
+            'name': (payload.name or '').strip() or (email_for_record.split('@')[0] if email_for_record else 'Friend'),
+            'email': email_for_record,
+            'provider': 'apple',
+            'email_is_private_relay': is_private_relay,
+            'created_at': datetime.now(timezone.utc),
+        }
+        await db.users.insert_one(dict(user))
+
+    session_token = create_access_token(user['user_id'])
     return AuthResponse(user=public_user(user), token=session_token)
 
 

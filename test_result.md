@@ -817,3 +817,99 @@ Client Batch C + D — 9 items:
 
       Please write results to /app/test_reports/iteration_15.json.
       DO NOT modify payments_service.py or checkout logic.
+
+## user_problem_statement (Apple Sign-In):
+Add Apple Sign-In to Login + Signup screens.
+
+## backend:
+  - task: "POST /api/auth/apple — verify Apple identity token via JWKS + issue our JWT"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New endpoint POST /api/auth/apple. Verifies the Apple identity_token:
+          - Fetches Apple JWKS from https://appleid.apple.com/auth/keys (cached 1h)
+          - Selects the key by 'kid' header, retries once after cache bust if unknown
+          - Verifies RS256 signature via python-jose (jwk.construct + to_pem)
+          - Validates issuer == https://appleid.apple.com and audience in APPLE_AUDIENCES
+            (from backend/.env — currently ["com.emergent.nochangesmobile.fl0fmc", "host.exp.Exponent"])
+          - Extracts 'sub' as apple_sub; email may be private-relay (still accepted)
+          - Links to existing user by apple_sub OR falls back to email match
+          - Creates a new user with provider='apple' on first sign-in, preserving name/email from
+            the initial credential payload (Apple only sends those ONCE)
+          - Returns AuthResponse (user + JWT) — same shape as /auth/login and /auth/emergent/session
+          Rejects malformed / unsigned / wrong-audience tokens with 401.
+
+## frontend:
+  - task: "Apple Sign-In button on Login + Signup"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/index.tsx, /app/frontend/src/AuthContext.tsx, /app/frontend/app.json"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          - expo-apple-authentication@8.0.8 installed
+          - app.json: expo.ios.usesAppleSignIn = true
+          - AuthContext exposes loginWithApple({ identity_token, name, email }) →
+            POSTs to /api/auth/apple, persists JWT via existing secure storage
+          - New AppleSignInButton component: hidden on non-iOS AND on iOS when
+            AppleAuthentication.isAvailableAsync() returns false. Uses Apple's
+            official CONTINUE button style (black).
+          - Rendered directly below the Google button on Login + Signup screens.
+          - On web the button is INTENTIONALLY hidden (Apple restricts native flow to iOS).
+          - Hint copy updated to include Apple only when Platform.OS === 'ios'.
+
+## metadata:
+  test_sequence: 17
+  run_ui: false
+
+## test_plan:
+  current_focus:
+    - "POST /api/auth/apple — verify Apple identity token via JWKS + issue our JWT"
+    - "Apple Sign-In button on Login + Signup"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+## agent_communication:
+  - agent: "main"
+    message: |
+      Please test the Apple Sign-In backend endpoint. The native iOS button flow CANNOT be
+      tested from Playwright/web preview — Apple only issues valid identity tokens through
+      the AppleAuthentication.signInAsync call on a real iOS device.
+
+      BACKEND (all against http://localhost:8001):
+      1. POST /api/auth/apple with body {} → expect 422 (validation) or 400.
+      2. POST /api/auth/apple {"identity_token":""} → expect 401 with detail containing "Invalid Apple identity token".
+      3. POST /api/auth/apple {"identity_token":"aaa.bbb.ccc"} → expect 401 with detail containing "Invalid Apple identity token (malformed header)".
+      4. POST /api/auth/apple with a JWT that has correct 3-segment shape but wrong signature
+         (e.g., an HS256 token signed with a random secret) → expect 401 "Apple identity token signed with unknown key" OR verification failed.
+         You can craft one via:
+            python3 -c "from jose import jwt; print(jwt.encode({'sub':'abc','iss':'https://appleid.apple.com','aud':'com.emergent.nochangesmobile.fl0fmc'}, 'wrong-secret', algorithm='HS256', headers={'kid':'zzzzzzzz'}))"
+      5. Confirm AUTH REGRESSION endpoints still work exactly as before:
+         POST /api/auth/register with a new email
+         POST /api/auth/login with alex+test1@jaleter.app / password123
+         GET /api/auth/me with the returned token
+         POST /api/auth/forgot-password (should return reset_token in dev-fallback since SENDGRID_API_KEY is empty)
+         POST /api/auth/emergent/session {"session_id":"anything"} — should return 401 or similar
+      6. Confirm /api/payments/products, /api/coaching/bookings, /api/user/membership still work.
+
+      FRONTEND (Playwright web preview — Apple button will be HIDDEN on web, that's correct):
+      1. Log-out state → tap Log in link. Verify Google button visible, Apple button NOT visible.
+      2. Log-out state → tap Sign up. Verify Google button visible, Apple button NOT visible.
+      3. No red console errors from the AppleSignInButton mounting.
+      4. Existing Google/email/JWT flows all still work exactly as before.
+
+      NOTE for tester: on iOS build the Apple button IS shown and works. Not testable in Expo Go/web/Playwright — this is a platform restriction, not a bug.
+
+      Report to /app/test_reports/iteration_17.json.

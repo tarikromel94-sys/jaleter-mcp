@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 17 (Apple Sign-In) — Backend: /api/auth/apple endpoint verified across all 6 scenarios (missing body → 422, empty token → 401 'Invalid Apple identity token', 'aaa.bbb.ccc' → 401 'malformed header', fake HS256 JWT with unknown kid → 401 'unknown key', JWKS reachable, empty APPLE_AUDIENCES → 500 'not configured'). Auth regressions all pass (register/login/me/forgot-reset roundtrip/emergent-session-invalid-no-500). Feature regressions pass: /api/accounts/all, /api/payments/products, /api/payments/checkout for jaleter_premium (200, returns stripe URL), /api/coaching/bookings, /api/user/membership. ONE BUG FOUND: /api/payments/checkout with product=coaching_session and no scheduled_at returns 502 due to metadata.scheduled_at being None (emergentintegrations CheckoutSessionRequest metadata requires str). Coaching product name confirmed = 'Coaching Session (30 min)'. Frontend (Playwright 390x844): Login screen shows Google button and NO Apple button, hint copy exactly 'Sign in with your Jaleter email or Google account.', no 'Apple' text anywhere. Signup screen (after onboarding) shows Google button and NO Apple button. Login as alex+test1@jaleter.app / password123 succeeds → lands on Home with bottom nav [Home, Budget, Transactions, Net Worth, Legacy] and AW profile pill; profile pill navigates to More screen. No red console errors from AppleSignInButton mounting on web. Alex password verified reset back to 'password123'.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/payments/checkout (product=coaching_session, no scheduled_at)",
+        "issue": "Returns 502 'Payment provider error: metadata.scheduled_at Input should be a valid string [input=None]'. Root cause: /app/backend/payments_service.py:95 sets metadata['scheduled_at'] = booking['scheduled_at'] which is None when no scheduled_at was provided by the client, but emergentintegrations CheckoutSessionRequest.metadata requires string values. Iteration 17 review explicitly expected this call to return 200. Fix: skip inserting metadata['scheduled_at'] when booking['scheduled_at'] is None, or coerce to '' or ISO string.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration17_apple.py",
+    "/app/test_reports/pytest/iteration17_results.xml",
+    "/app/test_reports/screenshots/iter17_welcome.png",
+    "/app/test_reports/screenshots/iter17_login.png",
+    "/app/test_reports/screenshots/iter17_signup_ok.png",
+    "/app/test_reports/screenshots/iter17_home_ok.png",
+    "/app/test_reports/screenshots/iter17_more.png"
+  ],
+  "action_items": [
+    "Fix coaching_session checkout when scheduled_at is None: in /app/backend/payments_service.py:93-95 only set metadata['scheduled_at'] if booking.get('scheduled_at') is not None (currently unconditionally assigns None → Stripe request pydantic validation fails 502). Alternatively coerce to empty string. Iteration 17 review requires this to return 200."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/payments_service.py: metadata dict receives None value for 'scheduled_at' when the booking has no scheduled time — should either omit the key or coerce to string. This is a real regression affecting the coaching Book & Pay flow whenever the user has not chosen a slot (calendar-style flow always sets one, but any callsite that doesn't will 502).",
+    "/app/backend/server.py:397: db.users.find_one by apple_sub does not project out _id — but returns via public_user() so OK. Confirm public_user() strips _id (spot-check recommended).",
+    "/app/backend/server.py Apple JWKS cache is a module-level dict — safe for a single worker but would need per-process locking for multi-worker deploys. Non-blocking for now.",
+    "/app/frontend/app/index.tsx AppleSignInButton correctly guards with Platform.OS !== 'ios' and isAvailableAsync() so it renders nothing on web/Android. Verified in Playwright."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration17_apple.py (new)",
+    "/app/test_reports/pytest/iteration17_results.xml (new)"
+  ],
+  "success_rate": {
+    "backend": "94% (16/17 passed — 1 SKIP for SimpleFIN demo token unavailable in test env, 1 FAIL for coaching_session-no-scheduled-at 502)",
+    "frontend": "100% (F1 Login Apple hidden + Google present ✓, F2 Signup Apple hidden + Google present ✓, F3 login/land on Home ✓, no red console errors)"
+  },
+  "seed_data_creation": "Created transient qa+apple-<ts>@example.com test user via /api/auth/register. Alex password cycled to NewPass123! and back to password123 via forgot/reset roundtrip. Verified alex+test1@jaleter.app / password123 still logs in at end of run.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "The Apple Sign-In backend endpoint is fully wired and returns the exact error messages iteration 17 review expects (see test_iteration17_apple.py). If retesting after the coaching_session 502 fix, just re-run: `pytest /app/backend/tests/test_iteration17_apple.py::TestFeatureRegressions::test_checkout_coaching -v`. The real Apple native flow (identity_token from Apple) can ONLY be exercised from an iOS device with a real Apple ID; do not try to Playwright it on web — button is intentionally not rendered.",
+  "rca_of_issue": "Coaching-checkout 502 RCA: pay_create_booking in payments_service.py returns {'scheduled_at': None} when the client omits scheduled_at. create_checkout_session then does metadata['scheduled_at'] = booking['scheduled_at']. The emergentintegrations CheckoutSessionRequest pydantic model declares metadata as Dict[str, str] (all values must be strings, non-null). Pydantic raises 'Input should be a valid string [input=None]' → caught by server.py:824 which wraps it as 502 'Payment provider error: …'. Mitigation: `if booking.get('scheduled_at'): metadata['scheduled_at'] = booking['scheduled_at']` on payments_service.py:95, OR coerce with str(booking.get('scheduled_at') or '')."
+}
