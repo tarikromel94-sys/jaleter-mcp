@@ -92,7 +92,8 @@ async def create_checkout_session(
     }
     if booking is not None:
         metadata['booking_id'] = booking['booking_id']
-        metadata['scheduled_at'] = booking['scheduled_at']
+        if booking.get('scheduled_at'):
+            metadata['scheduled_at'] = booking['scheduled_at']
 
     req = CheckoutSessionRequest(
         amount=product['amount'],
