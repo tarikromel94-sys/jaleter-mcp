@@ -378,6 +378,48 @@ const Sparkle = ({ size = 20, color = C.goldGlow, style }: any) => (
   <Text style={[{ color, fontSize: size, fontWeight: '700' }, style]}>✦</Text>
 );
 
+/* ---------------- Billing Website Notice (external web billing) ---------------- */
+// All Stripe checkout has moved to jaleter.com to bypass App Store fees.
+// Per Apple/Google in-app rules, this shows text-only guidance (no clickable link on iOS).
+const BillingWebsiteNotice = ({ compact = false }: { compact?: boolean }) => {
+  const t = useThemed();
+  return (
+    <View style={[billingNoticeStyles.card, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
+      <View style={billingNoticeStyles.iconWrap}>
+        <Ionicons name="globe-outline" size={16} color={C.goldEyebrow} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[billingNoticeStyles.title, t.textInk]}>Billing lives at jaleter.com</Text>
+        <Text style={[billingNoticeStyles.body, t.textMuted]}>
+          {compact
+            ? 'Manage payments and subscriptions on our website.'
+            : 'To keep prices honest and avoid App Store fees, all payments and subscription management happen on our secure website. Visit jaleter.com on any browser to purchase or renew.'}
+        </Text>
+      </View>
+    </View>
+  );
+};
+const billingNoticeStyles = StyleSheet.create({
+  card: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e8dcc4',
+    backgroundColor: '#fbf6ec',
+    marginTop: 10,
+  },
+  iconWrap: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: '#f4e6c9',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  title: { fontSize: 12, fontWeight: '800', color: '#615b52', letterSpacing: 0.2 },
+  body: { fontSize: 10, color: '#8a8378', marginTop: 3, lineHeight: 14 },
+});
+
 /* ---------------- Welcome (Get Started) ---------------- */
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const serifFont = Platform.select({ ios: 'PlayfairDisplay', android: 'PlayfairDisplay', default: 'PlayfairDisplay' });
@@ -953,25 +995,6 @@ const FirstConnect = ({ onConnect, onSkip }: any) => {
 
 /* ---------------- Paywall ---------------- */
 const Paywall = ({ onContinue }: any) => {
-  const { start } = usePayment();
-  const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
-  const onSubscribe = async () => {
-    setBusy(true);
-    setToast(null);
-    const res = await start('jaleter_premium');
-    setBusy(false);
-    if (res.paid) {
-      setToast('Membership activated — welcome to Jaleter Premium.');
-      setTimeout(onContinue, 900);
-    } else if (res.canceled) {
-      setToast('Checkout canceled. You can start again anytime.');
-    } else if (res.error) {
-      setToast(res.error);
-    } else if (Platform.OS !== 'web') {
-      setToast('Payment is still processing. We\'ll unlock premium once Stripe confirms.');
-    }
-  };
   return (
     <ScrollView style={s.lightScreen} contentContainerStyle={{ padding: 23, paddingTop: 60, paddingBottom: 28 }}>
       <View style={s.paywallMark}><Text style={{ color: '#e2b96f', fontSize: 24 }}>✦</Text></View>
@@ -990,9 +1013,8 @@ const Paywall = ({ onContinue }: any) => {
           </View>
         ))}
       </View>
-      <GoldButton label={busy ? 'Opening secure checkout…' : 'Subscribe — $75 / year'} onPress={onSubscribe} disabled={busy} testID="paywall-checkout" />
-      <Pressable onPress={onContinue} testID="paywall-preview"><Text style={[s.loginLink, { marginTop: 20 }]}>Continue in preview mode</Text></Pressable>
-      {toast && <Toast message={toast} onHide={() => setToast(null)} />}
+      <BillingWebsiteNotice />
+      <Pressable onPress={onContinue} testID="paywall-preview"><Text style={[s.loginLink, { marginTop: 20, textAlign: 'center' }]}>Continue to the app</Text></Pressable>
     </ScrollView>
   );
 };
@@ -1985,10 +2007,6 @@ const CALENDLY_URL = 'https://calendly.com/danyelldaugherty-v6lh/30min';
 const CoachingScreen = ({ back }: any) => {
   const t = useThemed();
   const { token } = useAuth();
-  const { start } = usePayment();
-  const [payOpen, setPayOpen] = useState(false);
-  const [dateDraft, setDateDraft] = useState('');
-  const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [bookings, setBookings] = useState<any[]>([]);
 
@@ -2010,33 +2028,6 @@ const CoachingScreen = ({ back }: any) => {
       }
     } catch (e: any) {
       setToast(e?.message || 'Could not open Calendly.');
-    }
-  };
-
-  const onPay = async () => {
-    setBusy(true);
-    setToast(null);
-    // Parse optional date/time input — accept "Jul 22 at 2pm" or ISO or blank.
-    let scheduled_at: string | undefined;
-    const raw = (dateDraft || '').trim();
-    if (raw) {
-      const d = new Date(raw);
-      if (!isNaN(d.getTime())) scheduled_at = d.toISOString();
-    }
-    const res = await start('coaching_session', scheduled_at ? { scheduled_at } : undefined);
-    setBusy(false);
-    setPayOpen(false);
-    if (res.paid) {
-      setToast(scheduled_at ? `Session confirmed for ${formatBookingDate(scheduled_at)}.` : 'Payment received. See Calendly for your confirmed time.');
-      setDateDraft('');
-      refreshBookings();
-    } else if (res.canceled) {
-      setToast('Payment canceled.');
-    } else if (res.error) {
-      setToast(res.error);
-    } else if (Platform.OS !== 'web') {
-      setToast('Payment is still processing. It will confirm shortly.');
-      setTimeout(refreshBookings, 2500);
     }
   };
 
@@ -2069,14 +2060,13 @@ const CoachingScreen = ({ back }: any) => {
         <View style={[s.stepCard, t.cardBg]}>
           <View style={s.stepBadge}><Text style={s.stepBadgeText}>2</Text></View>
           <View style={{ flex: 1 }}>
-            <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>Pay $50 to confirm</Text>
-            <Text style={[{ fontSize: 9, color: C.muted2, marginTop: 2 }, t.textMuted]}>Secure Stripe checkout — required to lock your slot.</Text>
+            <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>Pay $50 on the web</Text>
+            <Text style={[{ fontSize: 9, color: C.muted2, marginTop: 2 }, t.textMuted]}>Complete payment at jaleter.com to lock your session.</Text>
           </View>
-          <Pressable onPress={() => { setDateDraft(''); setPayOpen(true); }} style={[s.stepBtnPill, { backgroundColor: '#b28a4c' }]} testID="coaching-open-pay">
-            <Text style={[s.stepBtnPillText, { color: '#fff' }]}>Pay $50</Text>
-          </Pressable>
         </View>
       </View>
+
+      <BillingWebsiteNotice />
 
       {upcoming.length > 0 && (
         <View style={{ marginTop: 22 }}>
@@ -2091,22 +2081,6 @@ const CoachingScreen = ({ back }: any) => {
         </View>
       )}
 
-      <Sheet visible={payOpen} close={() => { setPayOpen(false); setDateDraft(''); }} title="Pay for your session" subtitle="Optionally paste the date/time from your Calendly confirmation so it shows up in the app.">
-        <View>
-          <Text style={s.label}>When is your session? (optional)</Text>
-          <TextInput
-            style={s.input}
-            value={dateDraft}
-            onChangeText={setDateDraft}
-            placeholder="e.g., Jul 22, 2026 at 2:00 PM"
-            testID="coaching-date-input"
-          />
-          <Text style={{ fontSize: 9, color: C.muted3, marginTop: 6 }}>Leave blank if you&apos;d rather rely on Calendly&apos;s confirmation email.</Text>
-          <View style={{ marginTop: 14 }}>
-            <GoldButton label={busy ? 'Opening secure checkout…' : 'Pay $50 with Stripe'} onPress={onPay} disabled={busy} testID="coaching-book" />
-          </View>
-        </View>
-      </Sheet>
       {toast && <Toast message={toast} onHide={() => setToast(null)} />}
     </ScrollView>
   );
@@ -2114,10 +2088,7 @@ const CoachingScreen = ({ back }: any) => {
 const MembershipScreen = ({ back }: any) => {
   const t = useThemed();
   const { token } = useAuth();
-  const { start } = usePayment();
   const [membership, setMembership] = useState<{ active: boolean; expires_at: string | null; plan: string | null } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
   const refresh = useCallback(async () => {
     if (!token) return;
     try {
@@ -2126,28 +2097,6 @@ const MembershipScreen = ({ back }: any) => {
     } catch { setMembership(null); }
   }, [token]);
   useEffect(() => { refresh(); }, [refresh]);
-
-  const onSubscribe = async () => {
-    setBusy(true);
-    setToast(null);
-    const res = await start('jaleter_premium');
-    setBusy(false);
-    if (res.paid) {
-      setToast('Membership activated for the next 12 months.');
-      refresh();
-    } else if (res.canceled) {
-      setToast('Checkout canceled.');
-    } else if (res.error) {
-      setToast(res.error);
-    } else if (Platform.OS !== 'web') {
-      setToast('Payment is still processing. Membership will unlock shortly.');
-      setTimeout(refresh, 2500);
-    }
-  };
-
-  const label = membership?.active
-    ? `Renew — $75 (extends to ${new Date(new Date(membership.expires_at as string).getTime() + 365 * 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })})`
-    : busy ? 'Opening secure checkout…' : 'Subscribe — $75 / year';
 
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
@@ -2167,8 +2116,7 @@ const MembershipScreen = ({ back }: any) => {
           </View>
         ))}
       </View>
-      <GoldButton label={label} onPress={onSubscribe} disabled={busy} testID="membership-manage" />
-      {toast && <Toast message={toast} onHide={() => setToast(null)} />}
+      <BillingWebsiteNotice />
     </ScrollView>
   );
 };
@@ -2184,8 +2132,8 @@ const MoreScreen = ({ navigate, linkedCount, onBack }: any) => {
       </View>
       <View style={{ gap: 10 }}>
         {[
-          ['coaching','Book Coaching','$50 per hour','chatbubble-outline'],
-          ['membership','Membership','$75 per year','sparkles-outline'],
+          ['coaching','Book Coaching','Schedule + pay at jaleter.com','chatbubble-outline'],
+          ['membership','Membership','Manage at jaleter.com','sparkles-outline'],
           ['settings','Settings',`${linkedCount} linked accounts`,'settings-outline'],
         ].map(([id, name, sub, icon]) => (
           <Pressable key={id} style={[s.moreGridBtn, t.cardBg]} onPress={() => navigate(id)} testID={`more-${id}`}>
@@ -2265,6 +2213,11 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
           <View style={{ flex: 1 }}><Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{appLock?.enabled ? 'Enabled' : 'Not set'}</Text><Text style={[{ fontSize: 9, color: C.muted3 }, t.textMuted]}>{appLock?.enabled ? (appLock?.biometricsEnabled ? 'Face ID + PIN' : 'PIN only') : 'Tap to set a PIN'}</Text></View>
           <Ionicons name={appLock?.enabled ? 'lock-closed' : 'lock-open-outline'} size={18} color={appLock?.enabled ? '#8fa88f' : (t.dark ? D.textMuted : '#9a938a')} />
         </Pressable>
+      </View>
+      <View style={[s.settingsSection, t.cardBg]}>
+        <Text style={[s.settingsH3, t.textInk]}>Billing</Text>
+        <Text style={[s.settingsSub, t.textMuted]}>Payments and subscriptions are managed on our website.</Text>
+        <BillingWebsiteNotice compact />
       </View>
       <View style={[s.settingsMenu, t.cardBg]}>
         {rows.map(([id, label, detail, icon]) => (
