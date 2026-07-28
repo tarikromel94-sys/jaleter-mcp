@@ -927,11 +927,14 @@ const ResetPassword = ({ back, email, prefilledToken, onDone }: any) => {
 /* ---------------- Connect ---------------- */
 const FirstConnect = ({ onConnect, onSkip }: any) => {
   const { token } = useAuth();
-  const [showLink, setShowLink] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
   const [setupToken, setSetupToken] = useState('');
   const [busy, setBusy] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState('');
-  const submit = async () => {
+  const [toast, setToast] = useState('');
+
+  const submitSimpleFin = async () => {
     if (!setupToken.trim()) { setError('Please paste your SimpleFIN Setup Token.'); return; }
     setError(''); setBusy(true);
     try {
@@ -941,21 +944,35 @@ const FirstConnect = ({ onConnect, onSkip }: any) => {
       }, token);
       onConnect(data);
     } catch (e: any) {
-      setError(e?.message || 'Could not link SimpleFIN.');
+      setError(e?.message || 'Could not link account.');
     } finally { setBusy(false); }
   };
+
+  const runImport = async () => {
+    await pickAndImport(
+      token,
+      (msg) => { setToast(msg); setTimeout(() => onSkip?.(), 900); },
+      (err) => setError(err),
+      setImporting
+    );
+  };
+
   return (
     <ScrollView style={s.lightScreen} contentContainerStyle={{ padding: 23, paddingTop: 60, paddingBottom: 28 }} keyboardShouldPersistTaps="handled">
       <View style={{ marginTop: 45, alignItems: 'center' }}>
-        <View style={s.connectLock}><Ionicons name="link" size={29} color={C.goldText} /></View>
-        <Text style={[s.eyebrow, { marginTop: 17 }]}>YOUR MONEY, IN ONE VIEW</Text>
-        <Text style={[s.onboardH1, { textAlign: 'center' }]}>Connect your first{'\n'}financial account.</Text>
-        <Text style={[s.onboardHint, { textAlign: 'center' }]}>Jaleter uses SimpleFIN to securely sync balances and transactions. We never ask for or store your bank password.</Text>
+        <View style={s.connectLock}><Ionicons name="shield-checkmark-outline" size={29} color={C.goldText} /></View>
+        <Text style={[s.eyebrow, { marginTop: 17 }]}>YOUR MONEY, YOUR CONTROL</Text>
+        <Text style={[s.onboardH1, { textAlign: 'center' }]}>Import your first{'\n'}statement.</Text>
+        <Text style={[s.onboardHint, { textAlign: 'center' }]}>
+          Jaleter never touches your bank credentials. Download a statement from your bank and upload it here — private, secure, on your terms.
+        </Text>
       </View>
+
       <View style={s.connectBenefits}>
         {[
-          ['Automatic transactions', 'Keep Budget actuals current.'],
-          ['Accurate net worth', 'See cash and liabilities together.'],
+          ['Bank-independent', 'Works with any bank that offers statement downloads.'],
+          ['Zero credential storage', 'Your bank password never leaves your bank.'],
+          ['No extra fees', 'No third-party sync bill added to your membership.'],
         ].map(([b, sm]) => (
           <View key={b} style={{ flexDirection: 'row', gap: 11, alignItems: 'center', marginVertical: 10 }}>
             <Ionicons name="checkmark" size={16} color="#a57537" />
@@ -963,14 +980,29 @@ const FirstConnect = ({ onConnect, onSkip }: any) => {
           </View>
         ))}
       </View>
-      {!showLink ? (
-        <GoldButton label="Connect with SimpleFIN" onPress={() => setShowLink(true)} testID="connect-simplefin" />
-      ) : (
-        <View>
-          <Text style={{ color: C.muted, fontSize: 11, marginBottom: 6, lineHeight: 16 }}>
-            1. Visit <Text style={{ fontWeight: '700', color: C.goldEyebrow }}>beta-bridge.simplefin.org</Text> and log in.
-            {'\n'}2. Tap <Text style={{ fontWeight: '700' }}>Create Setup Token</Text>, then copy it.
-            {'\n'}3. Paste the token below.
+
+      <GoldButton
+        label={importing ? 'Importing…' : 'Import Statement (CSV / OFX / QFX / QBO)'}
+        onPress={runImport}
+        disabled={importing}
+        testID="connect-import-file"
+      />
+
+      <Pressable onPress={onSkip} testID="connect-skip" hitSlop={8}>
+        <Text style={[s.loginLink, { marginTop: 20, textAlign: 'center' }]}>Skip and enter manually</Text>
+      </Pressable>
+
+      <Pressable onPress={() => setAdvanced(!advanced)} hitSlop={8}>
+        <Text style={{ marginTop: 22, textAlign: 'center', fontSize: 11, color: C.muted3 }}>
+          {advanced ? 'Hide advanced options' : 'Advanced · Auto-sync via SimpleFIN'}
+        </Text>
+      </Pressable>
+
+      {advanced && (
+        <View style={{ marginTop: 12, padding: 14, borderRadius: 14, backgroundColor: '#f5ede0', borderWidth: 1, borderColor: '#e8dcc4' }}>
+          <Text style={{ fontSize: 11, fontWeight: '700', color: C.ink, marginBottom: 6 }}>Auto-sync via SimpleFIN (optional)</Text>
+          <Text style={{ color: C.muted, fontSize: 10, marginBottom: 10, lineHeight: 15 }}>
+            Prefer automatic syncing? SimpleFIN is a paid third-party service (~$1.50/mo, billed directly by SimpleFIN — not by Jaleter). Sign up at beta-bridge.simplefin.org, create a Setup Token, then paste it below.
           </Text>
           <TextInput
             testID="connect-setup-token"
@@ -983,12 +1015,13 @@ const FirstConnect = ({ onConnect, onSkip }: any) => {
             placeholder="Paste your SimpleFIN Setup Token here…"
           />
           {error ? <Text testID="connect-error" style={s.formError}>{error}</Text> : null}
-          <View style={{ marginTop: 12 }}>
-            <GoldButton label={busy ? 'Linking…' : 'Link accounts'} onPress={submit} disabled={busy || !setupToken.trim()} testID="connect-submit" />
+          <View style={{ marginTop: 10 }}>
+            <GoldButton label={busy ? 'Linking…' : 'Link via SimpleFIN'} onPress={submitSimpleFin} disabled={busy || !setupToken.trim()} testID="connect-submit" />
           </View>
         </View>
       )}
-      <Pressable onPress={onSkip} testID="connect-skip"><Text style={[s.loginLink, { marginTop: 20 }]}>Skip and enter manually</Text></Pressable>
+
+      {toast ? <Toast message={toast} onHide={() => setToast('')} /> : null}
     </ScrollView>
   );
 };
@@ -1006,7 +1039,7 @@ const Paywall = ({ onContinue }: any) => {
       <View style={s.priceCard}>
         <Text style={{ color: C.goldEyebrow2, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 }}>ANNUAL MEMBERSHIP</Text>
         <Text style={s.priceStrong}>$75<Text style={{ fontSize: 13, color: '#8d867d', fontWeight: '500' }}>/year</Text></Text>
-        {['Secure SimpleFIN syncing', 'Budgets, Net Worth, and Legacy', '100 curated Faith + Focus messages'].map(t => (
+        {['Private statement import (any bank)', 'Budgets, Net Worth, and Legacy', '100 curated Faith + Focus messages'].map(t => (
           <View key={t} style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginVertical: 5 }}>
             <Ionicons name="checkmark" size={15} color="#a57537" />
             <Text style={{ color: '#615b52', fontSize: 11 }}>{t}</Text>
@@ -2109,7 +2142,7 @@ const MembershipScreen = ({ back }: any) => {
             <Text style={{ color: '#5a7f60', fontSize: 10, fontWeight: '700' }}>ACTIVE · renews {new Date(membership.expires_at as string).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>
           </View>
         )}
-        {['SimpleFIN account syncing','Full Budget and Transactions','Net Worth and Legacy planning','Faith + Focus library'].map(item => (
+        {['SimpleFIN account syncing (optional)','Full Budget and Transactions','Net Worth and Legacy planning','Faith + Focus library'].map(item => (
           <View key={item} style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginVertical: 5 }}>
             <Ionicons name="checkmark" size={15} color="#a57537" />
             <Text style={{ color: t.dark ? D.textSubtle : '#615b52', fontSize: 11 }}>{item}</Text>
@@ -2312,7 +2345,7 @@ const LegalSheet = ({ visible, close, type }: any) => (
   <Sheet visible={visible} close={close} title={type} subtitle="Last updated July 15, 2026">
     {type === 'Privacy Policy' ? (
       <View>
-        <Text style={s.privacyPara}>Jaleter displays financial information you choose to link. Financial credentials are handled by SimpleFIN and are not stored by Jaleter.</Text>
+        <Text style={s.privacyPara}>Jaleter never touches your bank credentials. You download statements from your bank and upload them into Jaleter — your login stays only with your bank. Optional auto-sync via SimpleFIN is available; if you use it, SimpleFIN (not Jaleter) handles the connection to your bank.</Text>
         <Text style={s.privacyPara}>We do not sell financial data. You control linked accounts and can disconnect them at any time.</Text>
         <Text style={s.privacyPara}>Manual entries and preferences are used only to provide requested features.</Text>
       </View>
@@ -2341,9 +2374,141 @@ const NotificationsSheet = ({ visible, close, onSave }: any) => {
     </Sheet>
   );
 };
+
+// Bank-specific import guides — how to export CSV/OFX from major US institutions.
+const BANK_IMPORT_GUIDES: { name: string; steps: string[]; format: string }[] = [
+  {
+    name: 'Chase',
+    steps: [
+      'Sign in at chase.com from a browser.',
+      'Open the account you want to export.',
+      'Click the download arrow icon (top right of transactions list).',
+      'Choose the date range, then select "Spreadsheet (Excel, CSV)".',
+      'Save the file, then import it in Jaleter.',
+    ],
+    format: 'CSV',
+  },
+  {
+    name: 'Bank of America',
+    steps: [
+      'Log in at bankofamerica.com.',
+      'Open the account, then click "Download".',
+      'Choose "Microsoft Excel" or "Comma-delimited (CSV)".',
+      'Select a date range and download.',
+      'Upload the file into Jaleter.',
+    ],
+    format: 'CSV',
+  },
+  {
+    name: 'Wells Fargo',
+    steps: [
+      'Sign in at wellsfargo.com.',
+      'Open the account and go to "Download Account Activity".',
+      'Choose date range and "Comma Delimited" format.',
+      'Save and import into Jaleter.',
+    ],
+    format: 'CSV',
+  },
+  {
+    name: 'Capital One',
+    steps: [
+      'Sign in at capitalone.com.',
+      'Open your account, click the three-dot menu next to Transactions.',
+      'Choose "Download transactions".',
+      'Pick a date range and CSV format.',
+      'Import into Jaleter.',
+    ],
+    format: 'CSV',
+  },
+  {
+    name: 'Citi',
+    steps: [
+      'Sign in at citi.com.',
+      'Choose the account and open "Statements".',
+      'Click "Download activity" and choose CSV.',
+      'Select date range and save.',
+      'Import into Jaleter.',
+    ],
+    format: 'CSV',
+  },
+  {
+    name: 'US Bank',
+    steps: [
+      'Log in at usbank.com.',
+      'Open the account, click "Manage" then "Export transactions".',
+      'Choose Excel/CSV.',
+      'Save the export and upload it in Jaleter.',
+    ],
+    format: 'CSV',
+  },
+  {
+    name: 'PNC',
+    steps: [
+      'Log in at pnc.com.',
+      'Open the account and click "Activity".',
+      'Click the download icon and choose CSV.',
+      'Select date range and save.',
+      'Import into Jaleter.',
+    ],
+    format: 'CSV',
+  },
+  {
+    name: 'Discover Card',
+    steps: [
+      'Log in at discover.com.',
+      'Go to "Account Details" then "Download activity".',
+      'Choose CSV format and date range.',
+      'Save and import into Jaleter.',
+    ],
+    format: 'CSV',
+  },
+  {
+    name: 'American Express',
+    steps: [
+      'Log in at americanexpress.com.',
+      'Open your card and go to "Statements & Activity".',
+      'Click "Download" (icon near recent activity).',
+      'Choose "CSV" and a date range.',
+      'Save and import into Jaleter.',
+    ],
+    format: 'CSV',
+  },
+  {
+    name: 'USAA',
+    steps: [
+      'Sign in at usaa.com.',
+      'Open the account and click "Export".',
+      'Choose "Comma Separated Values (CSV)" or "Quicken (QFX)".',
+      'Save the file and upload it into Jaleter.',
+    ],
+    format: 'CSV or QFX',
+  },
+  {
+    name: 'Truist',
+    steps: [
+      'Log in at truist.com.',
+      'Open the account, click the download icon on the transactions list.',
+      'Choose CSV and select your date range.',
+      'Save and import into Jaleter.',
+    ],
+    format: 'CSV',
+  },
+  {
+    name: 'Credit Union / Other',
+    steps: [
+      'Log in to your credit union or bank on a browser.',
+      'Look for "Download", "Export", or a download-arrow icon on the transactions/statements page.',
+      'Choose CSV (preferred), OFX, QFX, or QBO — Jaleter supports all four.',
+      'Save the file and upload it in Jaleter.',
+      'If your bank has no export at all, use "Request an institution" to let us know.',
+    ],
+    format: 'CSV / OFX / QFX / QBO',
+  },
+];
+
 const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
   const { token } = useAuth();
-  const [mode, setMode] = useState<'menu' | 'simplefin' | 'file' | 'request'>('menu');
+  const [mode, setMode] = useState<'menu' | 'simplefin' | 'file' | 'request' | 'guides'>('menu');
   const [setupToken, setSetupToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -2407,7 +2572,7 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
     finally { setBusy(false); }
   };
   return (
-    <Sheet visible={visible} close={close} title={mode === 'menu' ? 'Linked accounts' : mode === 'simplefin' ? 'SimpleFIN' : mode === 'file' ? 'Upload statement' : 'Request an institution'} subtitle={mode === 'menu' ? 'Refresh, remove, or add a new account.' : ''}>
+    <Sheet visible={visible} close={close} title={mode === 'menu' ? 'Linked accounts' : mode === 'simplefin' ? 'Auto-sync (SimpleFIN)' : mode === 'file' ? 'Import statement' : mode === 'guides' ? 'How to download from your bank' : 'Request an institution'} subtitle={mode === 'menu' ? 'Refresh, remove, or add a new account.' : ''}>
       {mode === 'menu' && (
         <View style={{ gap: 10 }}>
           {existing && existing.length > 0 && (
@@ -2444,9 +2609,10 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
           )}
           <Text style={{ fontSize: 9, fontWeight: '700', color: C.muted, letterSpacing: 1.2, marginTop: 4 }}>ADD AN ACCOUNT</Text>
           {[
-            { id: 'simplefin', icon: 'link' as const, label: 'Connect a bank via SimpleFIN', sub: 'Checking, savings, credit cards, loans.' },
-            { id: 'file', icon: 'document-attach-outline' as const, label: 'Upload CSV / OFX / QFX / QBO', sub: 'For banks SimpleFIN can\u2019t reach.' },
+            { id: 'file', icon: 'cloud-upload-outline' as const, label: 'Import statement (recommended)', sub: 'Upload CSV, OFX, QFX, or QBO from any bank.' },
+            { id: 'guides', icon: 'library-outline' as const, label: 'How to download from your bank', sub: 'Step-by-step guides for 10+ major banks.' },
             { id: 'request', icon: 'help-circle-outline' as const, label: 'Request an unsupported institution', sub: 'Tell us who to add next.' },
+            { id: 'simplefin', icon: 'sync-outline' as const, label: 'Advanced · Auto-sync via SimpleFIN', sub: 'Optional. Paid third-party service ($1.50/mo, billed by SimpleFIN).' },
           ].map((row) => (
             <Pressable key={row.id} testID={`link-mode-${row.id}`} onPress={() => setMode(row.id as any)} style={s.moreGridBtn}>
               <View style={s.moreGridIcon}><Ionicons name={row.icon} size={20} color={C.goldEyebrow} /></View>
@@ -2461,6 +2627,9 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
       )}
       {mode === 'simplefin' && (
         <View>
+          <Text style={{ color: '#817b72', fontSize: 11, marginBottom: 6, lineHeight: 16 }}>
+            <Text style={{ fontWeight: '800' }}>Optional third-party service.</Text> SimpleFIN offers automatic syncing for ~$1.50/mo, billed directly by SimpleFIN — not by Jaleter. Prefer to skip the fee? Use {'"Import statement"'} instead.
+          </Text>
           <Text style={{ color: '#817b72', fontSize: 11, marginBottom: 10, lineHeight: 16 }}>
             Visit <Text style={{ fontWeight: '700', color: C.goldEyebrow }}>beta-bridge.simplefin.org</Text>, tap <Text style={{ fontWeight: '700' }}>Create Setup Token</Text>, and paste it below.
           </Text>
@@ -2474,7 +2643,7 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
       {mode === 'file' && (
         <View>
           <Text style={{ color: '#817b72', fontSize: 11, marginBottom: 12, lineHeight: 16 }}>
-            Choose a CSV export or an OFX/QFX/QBO statement from your bank. We&apos;ll detect columns, dedupe transactions and update balances automatically.
+            Download a statement from your bank (CSV, OFX, QFX, or QBO), then upload it here. Jaleter detects columns, dedupes transactions, and updates your budget automatically. Need help? Tap {'"How to download from your bank"'} for step-by-step guides.
           </Text>
           {error ? <Text testID="import-error" style={s.formError}>{error}</Text> : null}
           {message ? <Text style={{ color: C.green, fontSize: 11 }}>{message}</Text> : null}
@@ -2482,6 +2651,27 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
             <GoldButton label={busy ? 'Uploading…' : 'Choose file'} onPress={submitFile} disabled={busy} testID="import-choose" />
           </View>
         </View>
+      )}
+      {mode === 'guides' && (
+        <ScrollView style={{ maxHeight: 460 }} showsVerticalScrollIndicator>
+          <Text style={{ color: '#817b72', fontSize: 11, marginBottom: 14, lineHeight: 16 }}>
+            Each bank offers a way to export transactions to CSV or OFX. Log in on any browser, follow the steps, then come back to Jaleter and tap {'"Import statement"'}.
+          </Text>
+          {BANK_IMPORT_GUIDES.map((g) => (
+            <View key={g.name} style={{ padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#e8dcc4', marginBottom: 8, backgroundColor: '#fbf6ec' }}>
+              <Text style={{ fontSize: 12, fontWeight: '800', color: C.ink, marginBottom: 6 }}>{g.name}</Text>
+              {g.steps.map((step, i) => (
+                <Text key={i} style={{ fontSize: 10, color: '#615b52', marginBottom: 3, lineHeight: 15 }}>
+                  {i + 1}.  {step}
+                </Text>
+              ))}
+              <Text style={{ fontSize: 9, color: C.muted3, marginTop: 6, fontStyle: 'italic' }}>Format: {g.format}</Text>
+            </View>
+          ))}
+          <Text style={{ fontSize: 10, color: C.muted3, marginTop: 6, lineHeight: 15 }}>
+            Don&apos;t see your bank?  Almost every US bank offers a {'"Download / Export"'} option under Transactions or Statements. If you can&apos;t find it, use the {'"Request an institution"'} option and we&apos;ll help.
+          </Text>
+        </ScrollView>
       )}
       {mode === 'request' && (
         <View>
