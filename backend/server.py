@@ -854,6 +854,27 @@ async def user_membership(current_user: dict = Depends(get_current_user)):
     return await pay_membership_status(db, current_user)
 
 
+# Public download endpoint for Jaleter WordPress landing assets.
+# Files live at /app/JALETER_* (project root). No auth — these are marketing assets.
+from fastapi.responses import FileResponse as _FileResponse  # local alias, avoid top-level import churn
+_ALLOWED_DOWNLOADS = {
+    "wp-landing": ("/app/JALETER_WORDPRESS_LANDING.html", "text/html; charset=utf-8", "JALETER_WORDPRESS_LANDING.html"),
+    "brand-guide": ("/app/JALETER_BRAND_STYLE_GUIDE.md", "text/markdown; charset=utf-8", "JALETER_BRAND_STYLE_GUIDE.md"),
+    "readme": ("/app/JALETER_PACKAGE_README.md", "text/markdown; charset=utf-8", "JALETER_PACKAGE_README.md"),
+    "package": ("/app/JALETER_PACKAGE.zip", "application/zip", "JALETER_PACKAGE.zip"),
+}
+
+@api_router.get("/download/{key}")
+async def download_asset(key: str):
+    entry = _ALLOWED_DOWNLOADS.get(key)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Not found")
+    path, media, filename = entry
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="File missing")
+    return _FileResponse(path, media_type=media, filename=filename)
+
+
 app.include_router(api_router)
 
 app.add_middleware(
