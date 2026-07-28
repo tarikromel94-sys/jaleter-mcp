@@ -8,10 +8,12 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Defs, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import { WebView } from 'react-native-webview';
 import { storage } from '@/src/utils/storage';
 import { AuthProvider, useAuth, apiCall } from '@/src/AuthContext';
 import { C, D, F } from '@/src/jaleterTheme';
 import { dailyQuote, MONEY, EXACT, QuoteType } from '@/src/quoteLibrary';
+import { WELCOME_HTML } from '@/src/welcomeHtml';
 
 const STORAGE_KEY = 'jaleter-state-v2';
 // One-time migration: any legacy v1 cache (which was seeded with mock $ figures) must be discarded.
@@ -463,62 +465,85 @@ function BackgroundArtwork() {
   );
 }
 
-const Welcome = ({ onStart, onLogin }: any) => (
-  <View style={welcomeStyles.screen}>
-    <RNStatusBar barStyle="light-content" backgroundColor="transparent" translucent />
-    <BackgroundArtwork />
-    <SafeAreaView style={welcomeStyles.safeArea}>
-      <View style={welcomeStyles.content}>
-        {/* Brand block — sits at ~28-32% from top via paddingTop */}
-        <View style={welcomeStyles.brandSection}>
-          <View style={welcomeStyles.sparkles} pointerEvents="none">
-            <Text style={welcomeStyles.largeSparkle}>✦</Text>
-            <Text style={welcomeStyles.smallSparkle}>✦</Text>
-          </View>
-          <Text style={welcomeStyles.logo} numberOfLines={1} adjustsFontSizeToFit testID="welcome-wordmark">
-            Jaleter
-          </Text>
-          <Text style={welcomeStyles.tagline}>SMART BUDGETING.</Text>
-          <Text style={welcomeStyles.tagline}>WEALTHY LIVING.</Text>
-        </View>
-        {/* Bottom actions */}
-        <View style={welcomeStyles.actions}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Get Started"
-            testID="welcome-get-started"
-            onPress={onStart}
-            style={({ pressed }) => [welcomeStyles.buttonWrap, pressed && welcomeStyles.buttonPressed]}
-          >
-            <LinearGradient
-              colors={['#F4D28F', '#DEAA55']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={welcomeStyles.primaryButton}
-            >
-              <Text style={welcomeStyles.primaryButtonText}>Get Started</Text>
-            </LinearGradient>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Log in"
-            testID="welcome-login"
-            onPress={onLogin}
-            hitSlop={12}
-            style={({ pressed }) => [welcomeStyles.loginButton, pressed && { opacity: 0.7 }]}
-          >
-            <Text style={welcomeStyles.loginText}>
-              Already have an account? <Text style={welcomeStyles.loginLink}>Log in</Text>
-            </Text>
-          </Pressable>
-        </View>
+const Welcome = ({ onStart, onLogin }: any) => {
+  const handleMessage = useCallback((event: any) => {
+    const msg = event?.nativeEvent?.data;
+    if (msg === 'navigate:onboarding') onStart?.();
+    else if (msg === 'navigate:login') onLogin?.();
+  }, [onStart, onLogin]);
+
+  // On web, react-native-webview is unsupported — render the HTML in an <iframe>
+  // and listen for postMessage events for navigation bridging.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const listener = (evt: any) => {
+      const data = evt?.data;
+      if (data === 'navigate:onboarding') onStart?.();
+      else if (data === 'navigate:login') onLogin?.();
+    };
+    // @ts-ignore
+    window.addEventListener('message', listener);
+    // @ts-ignore
+    return () => window.removeEventListener('message', listener);
+  }, [onStart, onLogin]);
+
+  if (Platform.OS === 'web') {
+    // On web, embed via iframe using srcdoc; patch the postMessage bridge to use window.parent.postMessage.
+    const webHtml = WELCOME_HTML.replace(
+      "window.ReactNativeWebView && window.ReactNativeWebView.postMessage",
+      "window.parent && window.parent.postMessage"
+    ).replace(
+      "window.ReactNativeWebView.postMessage(msg);",
+      "window.parent.postMessage(msg, '*');"
+    );
+    return (
+      <View style={welcomeStyles.screen}>
+        <RNStatusBar barStyle="light-content" backgroundColor="#090908" translucent />
+        {React.createElement('iframe' as any, {
+          srcDoc: webHtml,
+          style: {
+            flex: 1,
+            width: '100%',
+            height: '100%',
+            border: 0,
+            backgroundColor: '#090908',
+          },
+          sandbox: 'allow-scripts allow-same-origin',
+        })}
       </View>
-    </SafeAreaView>
-  </View>
-);
+    );
+  }
+
+  return (
+    <View style={welcomeStyles.screen}>
+      <RNStatusBar barStyle="light-content" backgroundColor="#090908" translucent />
+      <WebView
+        originWhitelist={['*']}
+        source={{ html: WELCOME_HTML }}
+        onMessage={handleMessage}
+        style={welcomeStyles.webview}
+        containerStyle={welcomeStyles.webview}
+        javaScriptEnabled
+        domStorageEnabled
+        allowsInlineMediaPlayback
+        mediaPlaybackRequiresUserAction={false}
+        scrollEnabled={false}
+        bounces={false}
+        overScrollMode="never"
+        showsVerticalScrollIndicator={false}
+        showsHorizontalScrollIndicator={false}
+        androidLayerType="hardware"
+        setSupportMultipleWindows={false}
+        automaticallyAdjustContentInsets={false}
+        contentInsetAdjustmentBehavior="never"
+      />
+    </View>
+  );
+};
 
 const welcomeStyles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#090908' },
+  webview: { flex: 1, backgroundColor: '#090908' },
   safeArea: { flex: 1 },
   content: { flex: 1, paddingHorizontal: 28, justifyContent: 'space-between' },
   brandSection: { alignItems: 'center', paddingTop: SCREEN_HEIGHT * 0.30 },
