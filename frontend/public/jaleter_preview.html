@@ -1,0 +1,733 @@
+<!--
+  ═══════════════════════════════════════════════════════════════════════════
+  JALETER — WordPress-Ready Landing Page (Custom HTML Block)
+  ═══════════════════════════════════════════════════════════════════════════
+
+  HOW TO USE THIS FILE:
+  1. Open your WordPress page editor (Gutenberg or Elementor).
+  2. Add a "Custom HTML" block (Gutenberg) or "HTML" widget (Elementor).
+  3. Paste EVERYTHING between <!-- START --> and <!-- END --> below into that block.
+  4. Replace the two Stripe payment link placeholders:
+       - COACHING_STRIPE_LINK    (e.g. https://buy.stripe.com/xxxxxxxx)
+       - MEMBERSHIP_STRIPE_LINK  (e.g. https://buy.stripe.com/xxxxxxxx)
+  5. Replace CALENDLY_LINK with your Calendly URL.
+  6. Save & preview.
+
+  NOTES:
+  - Self-contained: no external stylesheets except Google Fonts + Ionicons.
+  - Animated gold-glass ribbon canvas — same as the mobile app Welcome screen.
+  - Works on mobile, tablet, and desktop.
+  - Uses inline CSS + JS so it drops into ANY WordPress theme without conflicts.
+  - CSS is scoped under .jaleter-page so it won't clash with your WordPress theme.
+  ═══════════════════════════════════════════════════════════════════════════
+-->
+
+<!-- START -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<script type="module" src="https://unpkg.com/ionicons@7/dist/ionicons/ionicons.esm.js"></script>
+<script nomodule src="https://unpkg.com/ionicons@7/dist/ionicons/ionicons.js"></script>
+
+<style>
+/* ═══════ JALETER LANDING PAGE STYLES ═══════ */
+.jaleter-page * { box-sizing: border-box; }
+.jaleter-page {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: #090908;
+  line-height: 1.55;
+  background: #FBF6EC;
+  margin: -20px 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+.jaleter-page h1, .jaleter-page h2, .jaleter-page h3 {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-weight: 500;
+  margin: 0;
+  color: #090908;
+}
+.jaleter-page .container {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+.jaleter-page .eyebrow {
+  font-family: 'Inter', sans-serif;
+  color: #A57537;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  margin: 0 0 12px;
+  display: block;
+}
+.jaleter-page a { text-decoration: none; color: inherit; }
+.jaleter-page .cta-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 32px;
+  min-height: 52px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #F4D28F 0%, #DEAA55 100%);
+  color: #090908;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  border: 0;
+  box-shadow: 0 4px 20px rgba(222, 170, 85, 0.15);
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.jaleter-page .cta-primary:hover { box-shadow: 0 6px 24px rgba(222, 170, 85, 0.28); }
+.jaleter-page .cta-primary:active { transform: scale(0.97); }
+.jaleter-page .cta-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 28px;
+  min-height: 48px;
+  border-radius: 999px;
+  background: transparent;
+  color: #DEAA55;
+  border: 1px solid rgba(222,170,85,0.35);
+  font-weight: 500;
+  font-size: 14px;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.jaleter-page .cta-ghost:hover { border-color: #DEAA55; background: rgba(222, 170, 85, 0.06); }
+
+/* ── HERO ── */
+.jaleter-page .hero {
+  position: relative;
+  background: #090908;
+  overflow: hidden;
+  padding: 120px 0 100px;
+}
+.jaleter-page .hero .ambient-glow {
+  position: absolute;
+  bottom: -100px; right: -100px;
+  width: 380px; height: 380px;
+  border-radius: 9999px;
+  filter: blur(60px);
+  background: radial-gradient(circle, rgba(222,170,85,0.09) 0%, rgba(166,124,82,0.03) 45%, rgba(9,9,8,0) 70%);
+  pointer-events: none;
+  z-index: 1;
+}
+.jaleter-page #heroCanvas {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+.jaleter-page .hero-content {
+  position: relative;
+  z-index: 3;
+  text-align: center;
+  padding: 0 24px;
+}
+.jaleter-page .hero-wordmark {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: clamp(60px, 10vw, 96px);
+  line-height: 1;
+  font-weight: 400;
+  color: #EED7AB;
+  margin: 0 0 32px;
+}
+.jaleter-page .hero-tagline {
+  color: rgba(255, 248, 235, 0.7);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  margin: 0 0 40px;
+}
+.jaleter-page .hero-h1 {
+  color: #EED7AB;
+  font-size: clamp(32px, 5vw, 48px);
+  line-height: 1.15;
+  letter-spacing: -0.5px;
+  margin: 0 auto 20px;
+  max-width: 720px;
+}
+.jaleter-page .hero-sub {
+  color: rgba(255, 248, 235, 0.6);
+  font-size: 16px;
+  line-height: 1.6;
+  max-width: 560px;
+  margin: 0 auto 40px;
+}
+.jaleter-page .hero-ctas {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* ── SECTION SHELL ── */
+.jaleter-page .section {
+  padding: 96px 0;
+  background: #FBF6EC;
+}
+.jaleter-page .section.alt { background: #F5EDE0; }
+.jaleter-page .section h2 {
+  font-size: clamp(28px, 4vw, 40px);
+  letter-spacing: -0.3px;
+  margin: 0 0 20px;
+  text-align: center;
+}
+.jaleter-page .section .lede {
+  color: #615B52;
+  font-size: 16px;
+  line-height: 1.7;
+  text-align: center;
+  max-width: 640px;
+  margin: 0 auto 56px;
+}
+
+/* ── PRICING GRID ── */
+.jaleter-page .price-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
+  max-width: 880px;
+  margin: 0 auto;
+}
+.jaleter-page .price-card {
+  background: #FBF6EC;
+  border: 1px solid #E8DCC4;
+  border-radius: 24px;
+  padding: 32px 28px;
+  display: flex;
+  flex-direction: column;
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+.jaleter-page .price-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px rgba(9,9,8,0.06);
+}
+.jaleter-page .price-card.featured {
+  background: #090908;
+  border-color: rgba(222, 170, 85, 0.25);
+  color: #EED7AB;
+  position: relative;
+}
+.jaleter-page .price-card.featured .price,
+.jaleter-page .price-card.featured .card-title { color: #EED7AB; }
+.jaleter-page .price-card.featured li { color: rgba(255,248,235,0.75); }
+.jaleter-page .price-card.featured .price-suffix { color: rgba(255,248,235,0.5); }
+.jaleter-page .price-card.featured::before {
+  content: "MOST POPULAR";
+  position: absolute;
+  top: -12px; right: 24px;
+  background: linear-gradient(135deg, #F4D28F, #DEAA55);
+  color: #090908;
+  font-size: 9px;
+  font-weight: 800;
+  padding: 6px 12px;
+  border-radius: 999px;
+  letter-spacing: 0.16em;
+}
+.jaleter-page .price-card .card-eyebrow {
+  color: #A57537;
+  font-family: 'Inter';
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.jaleter-page .price-card .card-title {
+  font-family: 'Playfair Display', serif;
+  font-size: 26px;
+  font-weight: 500;
+  margin: 0 0 4px;
+}
+.jaleter-page .price-card .card-sub {
+  color: #8E8A83;
+  font-size: 13px;
+  margin: 0 0 20px;
+}
+.jaleter-page .price-card.featured .card-sub { color: rgba(255,248,235,0.5); }
+.jaleter-page .price-card .price {
+  font-family: 'Playfair Display', serif;
+  font-weight: 500;
+  font-size: 52px;
+  line-height: 1;
+  margin: 0;
+  color: #090908;
+}
+.jaleter-page .price-card .price-suffix {
+  color: #8E8A83;
+  font-family: 'Inter';
+  font-size: 15px;
+  font-weight: 500;
+}
+.jaleter-page .price-card ul {
+  list-style: none;
+  padding: 0;
+  margin: 24px 0 28px;
+  flex: 1;
+}
+.jaleter-page .price-card li {
+  color: #615B52;
+  font-size: 14px;
+  padding: 8px 0 8px 26px;
+  position: relative;
+  line-height: 1.5;
+}
+.jaleter-page .price-card li::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 12px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: rgba(222,170,85,0.12);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8l3 3 5-6' stroke='%23A57537' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 12px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.jaleter-page .price-card.featured li::before {
+  background-color: rgba(222,170,85,0.18);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8l3 3 5-6' stroke='%23F4D28F' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* ── FEATURE GRID ── */
+.jaleter-page .feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 32px;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+.jaleter-page .feature-item {
+  text-align: center;
+  padding: 24px 12px;
+}
+.jaleter-page .feature-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #F4D28F22, #DEAA5522);
+  border: 1px solid rgba(222,170,85,0.2);
+  margin-bottom: 16px;
+  color: #A57537;
+  font-size: 24px;
+}
+.jaleter-page .feature-item h3 {
+  font-family: 'Inter';
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0 0 8px;
+  color: #090908;
+}
+.jaleter-page .feature-item p {
+  color: #615B52;
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* ── ABOUT / QUOTE STRIP ── */
+.jaleter-page .quote-strip {
+  background: #090908;
+  color: #EED7AB;
+  padding: 96px 0;
+  text-align: center;
+}
+.jaleter-page .quote-strip blockquote {
+  font-family: 'Playfair Display', serif;
+  font-style: italic;
+  font-size: clamp(24px, 3.4vw, 34px);
+  line-height: 1.45;
+  color: #EED7AB;
+  max-width: 780px;
+  margin: 0 auto 20px;
+  padding: 0;
+  quotes: '\201C' '\201D';
+}
+.jaleter-page .quote-strip blockquote::before { content: open-quote; opacity: 0.4; margin-right: 4px; }
+.jaleter-page .quote-strip blockquote::after  { content: close-quote; opacity: 0.4; margin-left: 4px; }
+.jaleter-page .quote-strip .attrib {
+  color: rgba(255,248,235,0.5);
+  font-size: 12px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  font-family: 'Inter';
+  font-weight: 500;
+}
+
+/* ── FINAL CTA ── */
+.jaleter-page .final-cta {
+  padding: 120px 0;
+  text-align: center;
+  background: #FBF6EC;
+}
+.jaleter-page .final-cta h2 {
+  margin: 0 0 16px;
+}
+.jaleter-page .final-cta .lede {
+  color: #615B52;
+  margin: 0 auto 40px;
+}
+
+/* ── FOOTER ── */
+.jaleter-page .footer {
+  background: #090908;
+  color: rgba(255,248,235,0.55);
+  padding: 56px 0 32px;
+  font-size: 13px;
+}
+.jaleter-page .footer .footer-wordmark {
+  font-family: 'Playfair Display', serif;
+  color: #EED7AB;
+  font-size: 22px;
+  margin-bottom: 12px;
+}
+.jaleter-page .footer .footer-tag {
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: rgba(255,248,235,0.4);
+  margin-bottom: 32px;
+}
+.jaleter-page .footer-cols {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: 32px;
+  margin-bottom: 40px;
+}
+.jaleter-page .footer-col h4 {
+  font-family: 'Inter';
+  color: #EED7AB;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  margin: 0 0 16px;
+}
+.jaleter-page .footer-col a {
+  display: block;
+  color: rgba(255,248,235,0.55);
+  padding: 4px 0;
+  transition: color 120ms ease;
+}
+.jaleter-page .footer-col a:hover { color: #DEAA55; }
+.jaleter-page .footer-bottom {
+  border-top: 1px solid rgba(255,248,235,0.08);
+  padding-top: 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  color: rgba(255,248,235,0.35);
+}
+@media (max-width: 720px) {
+  .jaleter-page .footer-cols { grid-template-columns: 1fr 1fr; }
+  .jaleter-page .hero { padding: 80px 0 70px; }
+  .jaleter-page .section { padding: 64px 0; }
+  .jaleter-page .final-cta { padding: 80px 0; }
+}
+@media (max-width: 480px) {
+  .jaleter-page .footer-cols { grid-template-columns: 1fr; }
+}
+</style>
+
+<div class="jaleter-page">
+
+  <!-- ═══════════════════════ HERO ═══════════════════════ -->
+  <section class="hero">
+    <canvas id="heroCanvas"></canvas>
+    <div class="ambient-glow"></div>
+    <div class="hero-content container">
+      <h1 class="hero-wordmark">Jaleter</h1>
+      <div class="hero-tagline">SMART BUDGETING &nbsp;·&nbsp; WEALTHY LIVING</div>
+      <h2 class="hero-h1">Steward today.<br />Build tomorrow.</h2>
+      <p class="hero-sub">
+        Personal financial coaching and a members-only budgeting platform designed for
+        people building lives — and legacies — with purpose.
+      </p>
+      <div class="hero-ctas">
+        <a href="#pricing" class="cta-primary">Explore Membership</a>
+        <a href="#coaching" class="cta-ghost">Book Coaching →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════ WHY JALETER ═══════════════════════ -->
+  <section class="section">
+    <div class="container">
+      <span class="eyebrow" style="text-align:center; display:block;">Why Jaleter</span>
+      <h2>Clarity today. Confidence forever.</h2>
+      <p class="lede">
+        A modern budgeting practice built around real conversations,
+        real numbers, and a real plan for the long term.
+      </p>
+      <div class="feature-grid">
+        <div class="feature-item">
+          <div class="feature-icon"><ion-icon name="wallet-outline"></ion-icon></div>
+          <h3>Honest Budgeting</h3>
+          <p>Simple, dignified tools that show where every dollar goes — no gimmicks, no shame.</p>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon"><ion-icon name="trophy-outline"></ion-icon></div>
+          <h3>Legacy Planning</h3>
+          <p>Model what today's stewardship could become in 1, 5, or 20 years.</p>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon"><ion-icon name="chatbubble-outline"></ion-icon></div>
+          <h3>Private Coaching</h3>
+          <p>1-on-1 sessions with Danyell — practical guidance, personal accountability.</p>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon"><ion-icon name="shield-checkmark-outline"></ion-icon></div>
+          <h3>Bank-Level Privacy</h3>
+          <p>Your financial data is yours. Secured, encrypted, never sold, ever.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════ QUOTE STRIP ═══════════════════════ -->
+  <section class="quote-strip">
+    <div class="container">
+      <blockquote>Let all things be done decently and in order.</blockquote>
+      <div class="attrib">1 Corinthians 14 : 40 &nbsp;·&nbsp; KJV</div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════ PRICING ═══════════════════════ -->
+  <section class="section alt" id="pricing">
+    <div class="container">
+      <span class="eyebrow" style="text-align:center; display:block;">Ways to Work Together</span>
+      <h2>Choose your path.</h2>
+      <p class="lede">
+        Book a single coaching session, or join the annual membership for
+        ongoing access to the full Jaleter platform.
+      </p>
+      <div class="price-grid">
+
+        <!-- Coaching Card -->
+        <div class="price-card" id="coaching">
+          <div class="card-eyebrow">Coaching · 30 min</div>
+          <div class="card-title">Private Session</div>
+          <div class="card-sub">Personal financial clarity, one hour at a time.</div>
+          <div>
+            <span class="price">$50</span>
+            <span class="price-suffix">/ session</span>
+          </div>
+          <ul>
+            <li>1-on-1 with Danyell via Zoom</li>
+            <li>Walk through your budget & goals</li>
+            <li>Actionable next-step plan by email</li>
+            <li>Perfect for a specific decision or reset</li>
+          </ul>
+          <a href="COACHING_STRIPE_LINK" class="cta-primary">
+            Book &amp; Pay — $50
+          </a>
+          <a href="CALENDLY_LINK" class="cta-ghost" style="margin-top:10px;" target="_blank" rel="noopener">
+            View Availability →
+          </a>
+        </div>
+
+        <!-- Membership Card -->
+        <div class="price-card featured">
+          <div class="card-eyebrow" style="color:#F4D28F;">Jaleter Premium</div>
+          <div class="card-title">Annual Membership</div>
+          <div class="card-sub">Everything in the app, all year.</div>
+          <div>
+            <span class="price">$75</span>
+            <span class="price-suffix">/ year</span>
+          </div>
+          <ul>
+            <li>Full 12-month budgeting workspace</li>
+            <li>Secure bank sync via SimpleFIN</li>
+            <li>Net Worth &amp; Legacy projections</li>
+            <li>100 curated Faith + Focus messages</li>
+            <li>Member-only coaching pricing</li>
+          </ul>
+          <a href="MEMBERSHIP_STRIPE_LINK" class="cta-primary">
+            Join for $75 / year
+          </a>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════ FINAL CTA ═══════════════════════ -->
+  <section class="final-cta">
+    <div class="container">
+      <span class="eyebrow">Ready when you are</span>
+      <h2>Let's build something lasting.</h2>
+      <p class="lede">
+        Every decision today shapes the legacy of tomorrow.
+        Start with a single session — no long-term commitment.
+      </p>
+      <a href="COACHING_STRIPE_LINK" class="cta-primary">Book Your First Session</a>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════ FOOTER ═══════════════════════ -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-cols">
+        <div class="footer-col">
+          <div class="footer-wordmark">Jaleter</div>
+          <div class="footer-tag">Smart Budgeting · Wealthy Living</div>
+          <p style="margin:0; max-width:340px; line-height:1.6;">
+            A personal finance company committed to helping you steward well and build for the long haul.
+          </p>
+        </div>
+        <div class="footer-col">
+          <h4>Company</h4>
+          <a href="#">About</a>
+          <a href="#">Contact</a>
+          <a href="#pricing">Pricing</a>
+        </div>
+        <div class="footer-col">
+          <h4>Services</h4>
+          <a href="#coaching">Coaching</a>
+          <a href="#pricing">Membership</a>
+          <a href="#">Mobile App</a>
+        </div>
+        <div class="footer-col">
+          <h4>Legal</h4>
+          <a href="#">Terms</a>
+          <a href="#">Privacy</a>
+          <a href="#">Refund Policy</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <div>© <span id="jaleterYear"></span> Jaleter. All rights reserved.</div>
+        <div>Made with care for stewards everywhere.</div>
+      </div>
+    </div>
+  </footer>
+
+</div>
+
+<script>
+(function() {
+  /* Auto footer year */
+  var yEl = document.getElementById('jaleterYear');
+  if (yEl) yEl.textContent = new Date().getFullYear();
+
+  /* ══════ Animated Gold-Glass Ribbon Canvas (matches mobile Welcome screen) ══════ */
+  var canvas = document.getElementById('heroCanvas');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var width = 0, height = 0, time = 0;
+  var animationFrameId;
+
+  function resizeCanvas() {
+    var parent = canvas.parentElement;
+    if (!parent) return;
+    width = parent.clientWidth || 1160;
+    height = parent.clientHeight || 600;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+  }
+
+  function drawSubtleGlassLayer(config) {
+    var yRatio = config.yRatio, amplitude = config.amplitude, freq = config.freq;
+    var speed = config.speed, thickness = config.thickness, opacity = config.opacity;
+    var phaseOffset = config.phaseOffset;
+    var pointsTop = [], pointsBottom = [];
+    var stepX = 8;
+    var yBase = height * yRatio;
+
+    for (var x = -20; x <= width + 20; x += stepX) {
+      var normX = x / Math.max(1, width);
+      var baseArc = Math.sin(normX * Math.PI) * 32;
+      var wave1 = Math.sin(x * freq + time * speed + phaseOffset) * amplitude;
+      var wave2 = Math.cos(x * freq * 1.4 - time * speed * 0.6) * (amplitude * 0.3);
+      var centerY = yBase + baseArc + wave1 + wave2;
+      var dynamicThickness = thickness + Math.sin(normX * Math.PI * 2 + time * 0.0015) * (thickness * 0.2);
+      pointsTop.push({ x: x, y: centerY - dynamicThickness / 2 });
+      pointsBottom.push({ x: x, y: centerY + dynamicThickness / 2 });
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(pointsTop[0].x, pointsTop[0].y);
+    for (var i = 1; i < pointsTop.length; i++) ctx.lineTo(pointsTop[i].x, pointsTop[i].y);
+    for (var j = pointsBottom.length - 1; j >= 0; j--) ctx.lineTo(pointsBottom[j].x, pointsBottom[j].y);
+    ctx.closePath();
+    var glassBodyGrad = ctx.createLinearGradient(0, yBase - 40, width, yBase + 60);
+    glassBodyGrad.addColorStop(0, 'rgba(238,215,171,' + (opacity * 0.04) + ')');
+    glassBodyGrad.addColorStop(0.4, 'rgba(244,210,143,' + (opacity * 0.22) + ')');
+    glassBodyGrad.addColorStop(0.75, 'rgba(222,170,85,' + (opacity * 0.15) + ')');
+    glassBodyGrad.addColorStop(1, 'rgba(180,120,40,' + (opacity * 0.02) + ')');
+    ctx.fillStyle = glassBodyGrad;
+    ctx.fill();
+
+    ctx.save();
+    ctx.clip();
+    var sheenX = ((time * 20 + phaseOffset * 100) % (Math.max(1, width) * 2.4)) - width * 0.7;
+    var causticGrad = ctx.createLinearGradient(sheenX, yBase - 60, sheenX + 110, yBase + 60);
+    causticGrad.addColorStop(0, 'rgba(255,255,255,0)');
+    causticGrad.addColorStop(0.45, 'rgba(255,250,235,' + (opacity * 0.28) + ')');
+    causticGrad.addColorStop(0.55, 'rgba(255,255,255,' + (opacity * 0.45) + ')');
+    causticGrad.addColorStop(0.65, 'rgba(244,210,143,' + (opacity * 0.18) + ')');
+    causticGrad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = causticGrad;
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+
+    ctx.beginPath();
+    ctx.moveTo(pointsTop[0].x, pointsTop[0].y);
+    for (var k = 1; k < pointsTop.length; k++) ctx.lineTo(pointsTop[k].x, pointsTop[k].y);
+    var topRimGrad = ctx.createLinearGradient(0, 0, width, 0);
+    topRimGrad.addColorStop(0, 'rgba(238,215,171,0)');
+    topRimGrad.addColorStop(0.25, 'rgba(255,250,235,' + (opacity * 0.65) + ')');
+    topRimGrad.addColorStop(0.6, 'rgba(244,210,143,' + (opacity * 0.75) + ')');
+    topRimGrad.addColorStop(1, 'rgba(222,170,85,0)');
+    ctx.strokeStyle = topRimGrad;
+    ctx.lineWidth = 1.0;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(pointsBottom[0].x, pointsBottom[0].y);
+    for (var m = 1; m < pointsBottom.length; m++) ctx.lineTo(pointsBottom[m].x, pointsBottom[m].y);
+    var bottomRimGrad = ctx.createLinearGradient(0, 0, width, 0);
+    bottomRimGrad.addColorStop(0, 'rgba(222,170,85,0)');
+    bottomRimGrad.addColorStop(0.5, 'rgba(222,170,85,' + (opacity * 0.35) + ')');
+    bottomRimGrad.addColorStop(1, 'rgba(222,170,85,0)');
+    ctx.strokeStyle = bottomRimGrad;
+    ctx.lineWidth = 0.7;
+    ctx.stroke();
+  }
+
+  function renderScene() {
+    try {
+      ctx.clearRect(0, 0, width, height);
+      time += 0.7;
+      drawSubtleGlassLayer({ yRatio: 0.48, amplitude: 18, freq: 0.003, speed: 0.007, thickness: 42, opacity: 0.35, phaseOffset: 0 });
+      drawSubtleGlassLayer({ yRatio: 0.51, amplitude: 22, freq: 0.0025, speed: 0.010, thickness: 28, opacity: 0.68, phaseOffset: 1.5 });
+      drawSubtleGlassLayer({ yRatio: 0.53, amplitude: 14, freq: 0.0038, speed: 0.012, thickness: 14, opacity: 0.50, phaseOffset: 3.2 });
+      animationFrameId = requestAnimationFrame(renderScene);
+    } catch (e) {
+      animationFrameId = requestAnimationFrame(renderScene);
+    }
+  }
+
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+  renderScene();
+})();
+</script>
+<!-- END -->
