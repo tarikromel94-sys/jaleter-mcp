@@ -1,5 +1,6 @@
-// Raw HTML/Canvas Welcome Screen — rendered inside a WebView.
+// Raw HTML/Canvas Welcome Screen — rendered inside a WebView (native) or iframe (web).
 // Buttons post messages back to the native app via window.ReactNativeWebView.postMessage.
+// Zero drops/particles — subtle multi-layer frosted gold glass ribbons only.
 export const WELCOME_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -26,7 +27,6 @@ export const WELCOME_HTML = `<!DOCTYPE html>
     padding: 0 24px 40px;
     z-index: 20;
   }
-  /* Warm brown/gold ambient corner glow */
   .ambient-glow {
     position: absolute;
     bottom: -80px; right: -80px;
@@ -34,7 +34,7 @@ export const WELCOME_HTML = `<!DOCTYPE html>
     border-radius: 9999px;
     filter: blur(48px);
     opacity: 0.70;
-    background: radial-gradient(circle, rgba(222,170,85,0.08) 0%, rgba(166,124,82,0.03) 45%, rgba(9,9,8,0) 70%);
+    background: radial-gradient(circle, rgba(222,170,85,0.07) 0%, rgba(166,124,82,0.03) 45%, rgba(9,9,8,0) 70%);
     pointer-events: none;
     z-index: 0;
   }
@@ -141,25 +141,6 @@ export const WELCOME_HTML = `<!DOCTYPE html>
     var ctx = canvas.getContext('2d');
     var width = 0, height = 0, time = 0;
     var animationFrameId;
-    var BOKEH_COUNT = 24;
-    var bokehParticles = [];
-
-    function initGoldGlassElements() {
-      bokehParticles = [];
-      var w = width || window.innerWidth || 393;
-      var h = height || window.innerHeight || 852;
-      for (var i = 0; i < BOKEH_COUNT; i++) {
-        bokehParticles.push({
-          x: Math.random() * w,
-          y: Math.random() * h,
-          radius: Math.random() * 6 + 2,
-          alpha: Math.random() * 0.2 + 0.05,
-          speedY: -(Math.random() * 0.16 + 0.05),
-          speedX: (Math.random() - 0.5) * 0.1,
-          pulseSpeed: Math.random() * 0.015 + 0.005
-        });
-      }
-    }
 
     function resizeCanvas() {
       try {
@@ -172,89 +153,104 @@ export const WELCOME_HTML = `<!DOCTYPE html>
         canvas.style.height = height + 'px';
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.scale(dpr, dpr);
-        initGoldGlassElements();
       } catch (e) {}
     }
 
-    function drawGoldGlassRibbon(layerIndex, config) {
-      var yBase = config.yBase, heightAmp = config.heightAmp, freq = config.freq;
+    // Subtle frosted glass lens ribbon renderer (Zero drops/particles)
+    function drawSubtleGlassLayer(config) {
+      var yRatio = config.yRatio, amplitude = config.amplitude, freq = config.freq;
       var speed = config.speed, thickness = config.thickness, opacity = config.opacity;
+      var phaseOffset = config.phaseOffset;
       var pointsTop = [], pointsBottom = [];
-      var stepX = 6;
+      var stepX = 8;
+      var yBase = height * yRatio;
+
       for (var x = -20; x <= width + 20; x += stepX) {
         var normX = x / Math.max(1, width);
-        var baseArc = Math.sin(normX * Math.PI) * 40;
-        var wave1 = Math.sin(x * freq + time * speed + layerIndex) * heightAmp;
-        var wave2 = Math.cos(x * freq * 1.5 - time * speed * 0.7) * (heightAmp * 0.35);
+        // Smooth glass arch curvature
+        var baseArc = Math.sin(normX * Math.PI) * 32;
+        var wave1 = Math.sin(x * freq + time * speed + phaseOffset) * amplitude;
+        var wave2 = Math.cos(x * freq * 1.4 - time * speed * 0.6) * (amplitude * 0.3);
         var centerY = yBase + baseArc + wave1 + wave2;
-        var dynamicThickness = thickness + Math.sin(normX * Math.PI * 2 + time * 0.002) * (thickness * 0.3);
+        var dynamicThickness = thickness + Math.sin(normX * Math.PI * 2 + time * 0.0015) * (thickness * 0.2);
         pointsTop.push({ x: x, y: centerY - dynamicThickness / 2 });
         pointsBottom.push({ x: x, y: centerY + dynamicThickness / 2 });
       }
+
+      // 1. Translucent Frosted Glass Body
       ctx.beginPath();
       ctx.moveTo(pointsTop[0].x, pointsTop[0].y);
       for (var i = 1; i < pointsTop.length; i++) ctx.lineTo(pointsTop[i].x, pointsTop[i].y);
       for (var j = pointsBottom.length - 1; j >= 0; j--) ctx.lineTo(pointsBottom[j].x, pointsBottom[j].y);
       ctx.closePath();
-      var glassFillGrad = ctx.createLinearGradient(0, yBase - 50, width, yBase + 70);
-      glassFillGrad.addColorStop(0, 'rgba(238,215,171,' + (opacity * 0.08) + ')');
-      glassFillGrad.addColorStop(0.35, 'rgba(244,210,143,' + (opacity * 0.32) + ')');
-      glassFillGrad.addColorStop(0.7, 'rgba(222,170,85,' + (opacity * 0.25) + ')');
-      glassFillGrad.addColorStop(1, 'rgba(180,120,40,' + (opacity * 0.04) + ')');
-      ctx.fillStyle = glassFillGrad;
+      var glassBodyGrad = ctx.createLinearGradient(0, yBase - 40, width, yBase + 60);
+      glassBodyGrad.addColorStop(0, 'rgba(238,215,171,' + (opacity * 0.04) + ')');
+      glassBodyGrad.addColorStop(0.4, 'rgba(244,210,143,' + (opacity * 0.22) + ')');
+      glassBodyGrad.addColorStop(0.75, 'rgba(222,170,85,' + (opacity * 0.15) + ')');
+      glassBodyGrad.addColorStop(1, 'rgba(180,120,40,' + (opacity * 0.02) + ')');
+      ctx.fillStyle = glassBodyGrad;
       ctx.fill();
 
+      // 2. Soft Light Caustic Sheen Sweep across Glass Surface
       ctx.save();
-      ctx.clip();
-      var sheenX = ((time * 28 + layerIndex * 110) % (Math.max(1, width) * 2.2)) - width * 0.6;
-      var causticGrad = ctx.createLinearGradient(sheenX, yBase - 80, sheenX + 85, yBase + 80);
+      ctx.clip(); // Keep specular reflection inside glass body
+      var sheenX = ((time * 20 + phaseOffset * 100) % (Math.max(1, width) * 2.4)) - width * 0.7;
+      var causticGrad = ctx.createLinearGradient(sheenX, yBase - 60, sheenX + 110, yBase + 60);
       causticGrad.addColorStop(0, 'rgba(255,255,255,0)');
-      causticGrad.addColorStop(0.4, 'rgba(255,248,220,0.28)');
-      causticGrad.addColorStop(0.5, 'rgba(255,255,255,0.5)');
-      causticGrad.addColorStop(0.6, 'rgba(244,210,143,0.2)');
+      causticGrad.addColorStop(0.45, 'rgba(255,250,235,' + (opacity * 0.28) + ')');
+      causticGrad.addColorStop(0.55, 'rgba(255,255,255,' + (opacity * 0.45) + ')');
+      causticGrad.addColorStop(0.65, 'rgba(244,210,143,' + (opacity * 0.18) + ')');
       causticGrad.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.fillStyle = causticGrad;
       ctx.fillRect(0, 0, width, height);
       ctx.restore();
 
+      // 3. Specular Top Glass Bevel Rim
       ctx.beginPath();
       ctx.moveTo(pointsTop[0].x, pointsTop[0].y);
       for (var k = 1; k < pointsTop.length; k++) ctx.lineTo(pointsTop[k].x, pointsTop[k].y);
       var topRimGrad = ctx.createLinearGradient(0, 0, width, 0);
       topRimGrad.addColorStop(0, 'rgba(238,215,171,0)');
-      topRimGrad.addColorStop(0.2, 'rgba(255,250,230,0.65)');
-      topRimGrad.addColorStop(0.5, 'rgba(244,210,143,0.85)');
-      topRimGrad.addColorStop(0.8, 'rgba(222,170,85,0.55)');
-      topRimGrad.addColorStop(1, 'rgba(238,215,171,0)');
+      topRimGrad.addColorStop(0.25, 'rgba(255,250,235,' + (opacity * 0.65) + ')');
+      topRimGrad.addColorStop(0.6, 'rgba(244,210,143,' + (opacity * 0.75) + ')');
+      topRimGrad.addColorStop(1, 'rgba(222,170,85,0)');
       ctx.strokeStyle = topRimGrad;
-      ctx.lineWidth = 1.1;
+      ctx.lineWidth = 1.0;
+      ctx.stroke();
+
+      // 4. Subtle Bottom Refractive Edge
+      ctx.beginPath();
+      ctx.moveTo(pointsBottom[0].x, pointsBottom[0].y);
+      for (var m = 1; m < pointsBottom.length; m++) ctx.lineTo(pointsBottom[m].x, pointsBottom[m].y);
+      var bottomRimGrad = ctx.createLinearGradient(0, 0, width, 0);
+      bottomRimGrad.addColorStop(0, 'rgba(222,170,85,0)');
+      bottomRimGrad.addColorStop(0.5, 'rgba(222,170,85,' + (opacity * 0.35) + ')');
+      bottomRimGrad.addColorStop(1, 'rgba(222,170,85,0)');
+      ctx.strokeStyle = bottomRimGrad;
+      ctx.lineWidth = 0.7;
       ctx.stroke();
     }
 
     function renderScene() {
       try {
         ctx.clearRect(0, 0, width, height);
-        time += 0.8;
-        for (var i = 0; i < bokehParticles.length; i++) {
-          var p = bokehParticles[i];
-          p.y += p.speedY;
-          p.x += p.speedX;
-          if (p.y < -20) p.y = height + 20;
-          if (p.x < -20) p.x = width + 20;
-          if (p.x > width + 20) p.x = -20;
-          var currentAlpha = Math.max(0.02, p.alpha + Math.sin(time * p.pulseSpeed) * 0.08);
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-          var bGrad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.radius);
-          bGrad.addColorStop(0, 'rgba(255,245,210,' + (currentAlpha * 1.4) + ')');
-          bGrad.addColorStop(0.5, 'rgba(244,210,143,' + currentAlpha + ')');
-          bGrad.addColorStop(1, 'rgba(222,170,85,0)');
-          ctx.fillStyle = bGrad;
-          ctx.fill();
-        }
-        drawGoldGlassRibbon(1, { yBase: height * 0.49, heightAmp: 20, freq: 0.0035, speed: 0.008, thickness: 44, opacity: 0.38 });
-        drawGoldGlassRibbon(2, { yBase: height * 0.51, heightAmp: 25, freq: 0.0028, speed: 0.012, thickness: 32, opacity: 0.72 });
-        drawGoldGlassRibbon(3, { yBase: height * 0.53, heightAmp: 16, freq: 0.0042, speed: 0.015, thickness: 15, opacity: 0.58 });
+        time += 0.7;
+        // Multi-layer subtle gold glass bands (Strictly NO drops or particles)
+        // Background soft glass ribbon
+        drawSubtleGlassLayer({
+          yRatio: 0.48, amplitude: 18, freq: 0.003, speed: 0.007,
+          thickness: 42, opacity: 0.35, phaseOffset: 0
+        });
+        // Main polished central glass ribbon
+        drawSubtleGlassLayer({
+          yRatio: 0.51, amplitude: 22, freq: 0.0025, speed: 0.010,
+          thickness: 28, opacity: 0.68, phaseOffset: 1.5
+        });
+        // Foreground delicate glass accent strand
+        drawSubtleGlassLayer({
+          yRatio: 0.53, amplitude: 14, freq: 0.0038, speed: 0.012,
+          thickness: 14, opacity: 0.50, phaseOffset: 3.2
+        });
         animationFrameId = requestAnimationFrame(renderScene);
       } catch (e) {
         animationFrameId = requestAnimationFrame(renderScene);
