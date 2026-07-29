@@ -1730,9 +1730,8 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
           <CircleBtn testID="tx-import" onPress={importFile}><Ionicons name={importing ? 'hourglass-outline' : 'cloud-upload-outline'} size={18} color={t.dark ? D.text : C.ink3} /></CircleBtn>
           <CircleBtn testID="tx-add" onPress={() => {
             const now = new Date();
-            const dateLabel = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
             const firstCat = categories?.[0];
-            setEditing({ type: 'expense', name: '', amount: '', date: dateLabel, groupId: firstCat?.id || 'steward', detailId: firstCat?.subcategories?.[0]?.id, period: currentMonth() });
+            setEditing({ type: 'expense', name: '', amount: '', date: now.toISOString(), groupId: firstCat?.id || 'steward', detailId: firstCat?.subcategories?.[0]?.id, period: currentMonth() });
           }}>
             <Ionicons name="add" size={19} color={t.dark ? D.text : C.ink3} />
           </CircleBtn>
