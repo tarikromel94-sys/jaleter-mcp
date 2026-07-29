@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback, createContext, useContext } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, StatusBar as RNStatusBar, Platform, Linking, Dimensions } from 'react-native';
+import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, StatusBar as RNStatusBar, Platform, Linking, Dimensions, Alert } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import * as ExpoLinking from 'expo-linking';
 import * as LocalAuthentication from 'expo-local-authentication';
@@ -9,6 +9,7 @@ import Svg, { Defs, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { storage } from '@/src/utils/storage';
 import { AuthProvider, useAuth, apiCall } from '@/src/AuthContext';
 import { C, D, F } from '@/src/jaleterTheme';
@@ -290,7 +291,7 @@ const initialCategories = [
   { id: 'steward', name: 'Steward', tagline: 'Protect what you have', subcategories: [
     { id: 'housing', name: 'Housing', budgeted: 0 }, { id: 'food', name: 'Food & Dining', budgeted: 0 }, { id: 'transport', name: 'Transportation', budgeted: 0 }, { id: 'utilities', name: 'Utilities', budgeted: 0 }] },
   { id: 'grow', name: 'Grow', tagline: 'Build future wealth', subcategories: [
-    { id: 'investments', name: 'Investments', budgeted: 0 }, { id: 'emergency', name: 'Emergency Fund', budgeted: 0 }, { id: 'education', name: 'Education', budgeted: 0 }] },
+    { id: 'investments', name: 'Investments', budgeted: 0 }, { id: 'education', name: 'Education', budgeted: 0 }] },
   { id: 'enjoy', name: 'Enjoy', tagline: 'Enjoy life responsibly', subcategories: [
     { id: 'travel', name: 'Travel', budgeted: 0 }, { id: 'shopping', name: 'Shopping', budgeted: 0 }, { id: 'entertainment', name: 'Entertainment', budgeted: 0 }] },
 ];
@@ -1282,12 +1283,39 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
     setToast(`Added "${name}".`);
   };
   const removeCategory = (id: string) => {
-    setCategories((prev: Category[]) => prev.filter((c) => c.id !== id));
-    setToast('Category removed.');
+    const cat = categories.find((c: Category) => c.id === id);
+    const name = cat?.name || 'this category';
+    const doIt = () => {
+      setCategories((prev: Category[]) => prev.filter((c) => c.id !== id));
+      setToast('Category removed.');
+    };
+    if (Platform.OS === 'web') {
+      // eslint-disable-next-line no-alert
+      if (typeof window !== 'undefined' && window.confirm(`Delete "${name}" and all its subcategories?\n\nThis cannot be undone.`)) doIt();
+    } else {
+      Alert.alert(`Delete "${name}"?`, 'This removes the category and all its subcategories. This cannot be undone.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: doIt },
+      ]);
+    }
   };
   const removeSubcategory = (groupId: string, subId: string) => {
-    setCategories((prev: Category[]) => prev.map((c) => c.id !== groupId ? c : { ...c, subcategories: c.subcategories.filter((x) => x.id !== subId) }));
-    setToast('Subcategory removed.');
+    const cat = categories.find((c: Category) => c.id === groupId);
+    const sub = cat?.subcategories.find((x: Subcategory) => x.id === subId);
+    const name = sub?.name || 'this subcategory';
+    const doIt = () => {
+      setCategories((prev: Category[]) => prev.map((c) => c.id !== groupId ? c : { ...c, subcategories: c.subcategories.filter((x) => x.id !== subId) }));
+      setToast('Subcategory removed.');
+    };
+    if (Platform.OS === 'web') {
+      // eslint-disable-next-line no-alert
+      if (typeof window !== 'undefined' && window.confirm(`Delete "${name}"?\n\nThis cannot be undone.`)) doIt();
+    } else {
+      Alert.alert(`Delete "${name}"?`, 'This cannot be undone.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: doIt },
+      ]);
+    }
   };
 
   return (
@@ -1373,24 +1401,38 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
               const barColor = pct >= 100 ? C.red : pct >= 80 ? C.amber : C.green;
               return (
                 <View key={c.id} style={[s.budgetCategory, t.cardBg, open && { borderColor: '#ddc7a6' }]}>
-                  <Pressable style={s.categorySummary} onPress={() => setExpanded(xs => xs.includes(c.id) ? xs.filter(x => x !== c.id) : [...xs, c.id])} onLongPress={() => removeCategory(c.id)} testID={`budget-cat-${c.id}`}>
-                    <View style={s.purposeIcon}><Text style={s.purposeIconText}>{c.name[0]}</Text></View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[{ fontSize: 12, fontWeight: '700', color: C.ink }, t.textInk]}>{c.name}</Text>
-                      <Text style={[{ fontSize: 9, color: C.muted2 }, t.textMuted]} numberOfLines={1}>{c.tagline}</Text>
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={[{ fontSize: 11, fontWeight: '700', color: C.ink }, t.textInk]}>{MONEY(actual)} <Text style={{ color: '#c1b9ac', fontWeight: '400' }}>/ {MONEY(total)}</Text></Text>
-                      <Text style={[{ fontSize: 8, color: C.muted2 }, t.textMuted]}>{Math.round(pct)}% used</Text>
-                    </View>
-                    <Ionicons name={open ? 'chevron-down' : 'chevron-forward'} size={17} color={t.dark ? D.textMuted : C.muted} />
-                  </Pressable>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Pressable style={[s.categorySummary, { flex: 1 }]} onPress={() => setExpanded(xs => xs.includes(c.id) ? xs.filter(x => x !== c.id) : [...xs, c.id])} onLongPress={() => removeCategory(c.id)} testID={`budget-cat-${c.id}`}>
+                      <View style={s.purposeIcon}><Text style={s.purposeIconText}>{c.name[0]}</Text></View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[{ fontSize: 12, fontWeight: '700', color: C.ink }, t.textInk]}>{c.name}</Text>
+                        <Text style={[{ fontSize: 9, color: C.muted2 }, t.textMuted]} numberOfLines={1}>{c.tagline}</Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={[{ fontSize: 11, fontWeight: '700', color: C.ink }, t.textInk]}>{MONEY(actual)} <Text style={{ color: '#c1b9ac', fontWeight: '400' }}>/ {MONEY(total)}</Text></Text>
+                        <Text style={[{ fontSize: 8, color: C.muted2 }, t.textMuted]}>{Math.round(pct)}% used</Text>
+                      </View>
+                      <Ionicons name={open ? 'chevron-down' : 'chevron-forward'} size={17} color={t.dark ? D.textMuted : C.muted} />
+                    </Pressable>
+                    <Pressable onPress={() => removeCategory(c.id)} hitSlop={8} style={{ paddingHorizontal: 8, paddingVertical: 6 }} testID={`budget-cat-del-${c.id}`}>
+                      <Ionicons name="trash-outline" size={15} color="#b06a5b" />
+                    </Pressable>
+                  </View>
                   <View style={s.categoryProgress}><View style={[s.categoryProgressBar, { width: `${Math.min(pct, 100)}%`, backgroundColor: barColor }]} /></View>
                   {open && (
                     <View style={s.subcategoryList}>
+                      {/* Column headers */}
+                      <View style={s.subHeaderRow}>
+                        <Text style={s.subHeaderName}>Subcategory</Text>
+                        <Text style={s.subHeaderCol}>Actual</Text>
+                        <Text style={s.subHeaderCol}>Budget</Text>
+                        <Text style={s.subHeaderCol}>Left</Text>
+                        <View style={{ width: 24 }} />
+                      </View>
                       {c.subcategories.map((sub: Subcategory) => {
                         const b = budgetFor(sub);
                         const a = spentInSub(sub.id);
+                        const remaining = b - a;
                         const overridden = !annual && sub.months && sub.months[mIdx] !== undefined;
                         const spct = b > 0 ? a / b * 100 : 0;
                         const conf = (alerts?.perCategory && alerts.perCategory[sub.id]) || { p50: false, p80: true, exceeded: true };
@@ -1401,31 +1443,33 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
                           else if (conf.p50 && spct >= 50) alertLevel = 'p50';
                         }
                         const alertColor = alertLevel === 'exceeded' ? C.red : alertLevel === 'p80' ? C.amber : alertLevel === 'p50' ? '#c9a56c' : null;
+                        const leftColor = b > 0 ? (remaining < 0 ? C.red : remaining < b * 0.2 ? C.amber : '#5a7f60') : '#c1b9ac';
                         return (
-                          <Pressable
-                            key={sub.id}
-                            onPress={() => startEdit(c.id, sub)}
-                            onLongPress={() => removeSubcategory(c.id, sub.id)}
-                            style={s.subcategoryRow}
-                            testID={`budget-sub-${sub.id}`}
-                          >
-                            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                              <View style={{ flex: 1 }}>
-                                <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{sub.name}{overridden ? ' •' : ''}</Text>
-                                <Text style={{ fontSize: 8, color: C.muted2 }}>actual / budgeted</Text>
-                              </View>
-                              {alertColor && (
-                                <View style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, backgroundColor: alertColor + '22', borderWidth: 1, borderColor: alertColor }}>
-                                  <Text style={{ color: alertColor, fontSize: 8, fontWeight: '800' }}>{alertLevel === 'exceeded' ? 'OVER' : alertLevel === 'p80' ? '80%' : '50%'}</Text>
+                          <View key={sub.id} style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <Pressable
+                              onPress={() => startEdit(c.id, sub)}
+                              onLongPress={() => removeSubcategory(c.id, sub.id)}
+                              style={[s.subcategoryRow, { flex: 1 }]}
+                              testID={`budget-sub-${sub.id}`}
+                            >
+                              <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                                <View style={{ flex: 1, minWidth: 0 }}>
+                                  <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]} numberOfLines={1}>{sub.name}{overridden ? ' •' : ''}</Text>
                                 </View>
-                              )}
-                            </View>
-                            <View style={{ alignItems: 'flex-end' }}>
-                              <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{MONEY(a)} <Text style={{ color: '#c1b9ac', fontWeight: '400' }}>/ {MONEY(b)}</Text></Text>
-                              <Text style={{ fontSize: 8, color: b > 0 ? C.muted2 : '#c9a56c' }}>{b > 0 ? '' : 'tap to set'}</Text>
-                            </View>
-                            <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#c1b9ac'} />
-                          </Pressable>
+                                {alertColor && (
+                                  <View style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6, backgroundColor: alertColor + '22', borderWidth: 1, borderColor: alertColor }}>
+                                    <Text style={{ color: alertColor, fontSize: 8, fontWeight: '800' }}>{alertLevel === 'exceeded' ? 'OVER' : alertLevel === 'p80' ? '80%' : '50%'}</Text>
+                                  </View>
+                                )}
+                              </View>
+                              <Text style={[s.subCol, t.textInk]}>{MONEY(a)}</Text>
+                              <Text style={[s.subCol, { color: b > 0 ? (t.dark ? D.textInk : C.ink) : '#c9a56c' }]}>{b > 0 ? MONEY(b) : '—'}</Text>
+                              <Text style={[s.subCol, { color: leftColor, fontWeight: '800' }]}>{b > 0 ? MONEY(remaining) : '—'}</Text>
+                            </Pressable>
+                            <Pressable onPress={() => removeSubcategory(c.id, sub.id)} hitSlop={6} style={{ paddingHorizontal: 6, paddingVertical: 8 }} testID={`budget-sub-del-${sub.id}`}>
+                              <Ionicons name="close-circle-outline" size={14} color="#b06a5b" />
+                            </Pressable>
+                          </View>
                         );
                       })}
                       <Pressable onPress={() => { setAddingSubTo(c.id); setNewSubName(''); setDraft(''); }} style={[s.subcategoryRow, { justifyContent: 'center' }]} testID={`budget-sub-add-${c.id}`}>
@@ -1734,12 +1778,43 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
 };
 const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
   const [t, setT] = useState({ ...item, amount: String(item.amount || '') });
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const isIncome = t.type === 'income';
   const currentGroup = isIncome ? incomeSources.find((s: any) => s.id === t.groupId) : categories.find((c: any) => c.id === t.groupId);
   const currentSubs = !isIncome && currentGroup ? currentGroup.subcategories : [];
+
+  // Parse the current date string. Fallback to today.
+  const parsedDate = (() => {
+    if (!t.date) return new Date();
+    const d = new Date(t.date);
+    return isNaN(d.getTime()) ? new Date() : d;
+  })();
+  const displayDate = parsedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const isoDateForInput = parsedDate.toISOString().slice(0, 10); // yyyy-mm-dd for native <input type="date">
+
+  const setDateFromValue = (d: Date) => {
+    if (!isNaN(d.getTime())) {
+      setT({ ...t, date: d.toISOString() });
+    }
+  };
+
   return (
     <View>
-      <PeriodPills values={['expense','income']} value={t.type} onChange={(v: string) => setT({ ...t, type: v, groupId: v === 'income' ? (incomeSources[0]?.id || 'w2') : (categories[0]?.id || 'steward'), detailId: v === 'income' ? undefined : (categories[0]?.subcategories?.[0]?.id) })} testID="tx-type" />
+      {/* Type selector — Income appears BEFORE Expense, both Title-Case */}
+      <PeriodPills
+        values={['Income', 'Expense']}
+        value={t.type === 'income' ? 'Income' : 'Expense'}
+        onChange={(label: string) => {
+          const v = label.toLowerCase();
+          setT({
+            ...t,
+            type: v,
+            groupId: v === 'income' ? (incomeSources[0]?.id || 'w2') : (categories[0]?.id || 'steward'),
+            detailId: v === 'income' ? undefined : (categories[0]?.subcategories?.[0]?.id),
+          });
+        }}
+        testID="tx-type"
+      />
       <Text style={s.label}>Description</Text>
       <TextInput style={s.input} value={t.name} onChangeText={x => setT({ ...t, name: x })} testID="tx-name" />
       <Text style={s.label}>Amount</Text>
@@ -1747,8 +1822,65 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
         <Text style={s.amountPrefix}>$</Text>
         <TextInput style={[s.input, { paddingLeft: 26 }]} value={t.amount} onChangeText={x => setT({ ...t, amount: x })} keyboardType="numeric" testID="tx-amount" />
       </View>
+
       <Text style={s.label}>Date</Text>
-      <TextInput style={s.input} value={t.date} onChangeText={x => setT({ ...t, date: x })} testID="tx-date" />
+      {Platform.OS === 'web' ? (
+        // Web: use native browser date picker (perfect UX in Safari/Chrome/Firefox)
+        React.createElement('input' as any, {
+          type: 'date',
+          value: isoDateForInput,
+          onChange: (e: any) => {
+            const iso = e.target.value; // yyyy-mm-dd
+            if (iso) {
+              const [y, m, d] = iso.split('-').map(Number);
+              setDateFromValue(new Date(y, m - 1, d));
+            }
+          },
+          style: {
+            width: '100%',
+            padding: '10px 12px',
+            fontSize: 13,
+            borderRadius: 10,
+            border: '1px solid #d9cfbf',
+            background: '#fbf6ec',
+            fontFamily: 'inherit',
+            color: '#2d2820',
+            outline: 'none',
+          },
+          'data-testid': 'tx-date-web',
+        })
+      ) : (
+        // Native (iOS/Android): open modal calendar picker
+        <>
+          <Pressable
+            onPress={() => setShowDatePicker(true)}
+            style={[s.input, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}
+            testID="tx-date-open"
+          >
+            <Text style={{ fontSize: 13, color: C.ink }}>{displayDate}</Text>
+            <Ionicons name="calendar-outline" size={16} color={C.goldEyebrow} />
+          </Pressable>
+          {showDatePicker && (
+            <DateTimePicker
+              value={parsedDate}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'inline' : 'default'}
+              onChange={(event: any, selected?: Date) => {
+                // On Android the picker closes automatically; on iOS keep it open until confirm
+                if (Platform.OS === 'android') setShowDatePicker(false);
+                if (event?.type === 'dismissed') { setShowDatePicker(false); return; }
+                if (selected) setDateFromValue(selected);
+              }}
+            />
+          )}
+          {Platform.OS === 'ios' && showDatePicker && (
+            <Pressable onPress={() => setShowDatePicker(false)} style={{ alignSelf: 'flex-end', paddingVertical: 6, paddingHorizontal: 12 }}>
+              <Text style={{ color: C.goldEyebrow, fontSize: 12, fontWeight: '700' }}>Done</Text>
+            </Pressable>
+          )}
+        </>
+      )}
+
       <Text style={s.label}>Month</Text>
       <PeriodPills values={[...MONTHS]} value={t.period || currentMonth()} onChange={(v: string) => setT({ ...t, period: v })} testID="tx-month" />
       <Text style={s.label}>{isIncome ? 'Earn source' : 'Category'}</Text>
@@ -3050,6 +3182,10 @@ const s = StyleSheet.create({
   categoryMeta: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
   subcategoryList: { marginTop: 14, paddingTop: 4, borderTopWidth: 1, borderTopColor: C.border2 },
   subcategoryRow: { flexDirection: 'row', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f1ede6' },
+  subHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingBottom: 6, borderBottomWidth: 1, borderBottomColor: '#e8dcc4' },
+  subHeaderName: { flex: 1, fontSize: 8, fontWeight: '800', color: C.muted2, letterSpacing: 0.6, textTransform: 'uppercase' },
+  subHeaderCol: { width: 62, textAlign: 'right', fontSize: 8, fontWeight: '800', color: C.muted2, letterSpacing: 0.6, textTransform: 'uppercase' },
+  subCol: { width: 62, textAlign: 'right', fontSize: 11, fontWeight: '700', color: C.ink },
   /* Transactions */
   syncBanner: { flexDirection: 'row', alignItems: 'center', gap: 9, padding: 12, borderWidth: 1, borderColor: '#dce8dd', borderRadius: 17, backgroundColor: C.streakBg, marginBottom: 12 },
   syncIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: '#dfece1', alignItems: 'center', justifyContent: 'center' },

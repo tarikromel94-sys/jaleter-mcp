@@ -1,0 +1,41 @@
+{
+  "summary": "Frontend-only testing of Session 1 (Batches A + B). Logged in as alex+test1@jaleter.app via the animated WebView bridge and validated every item in the request. Batch A (TxForm quick wins) — PASS: type selector shows Income before Expense, both Title-Case; clicking Income switches to income mode showing 'Earn source' with W-2/Contract/Business chips and NO expense subcategory picker (Tithe not rendered); web date field renders as native <input type='date' data-testid='tx-date-web'>; picking a date (2026-01-15) updates state and Save writes ISO date (transaction saved as '2026-01-15T00:00:00.000Z'). Batch A5 PASS: 'Emergency Fund' is absent from code (grep returns only a quote-library string) and absent from Grow subcategories in UI (Grow expands to Investments + Education only). Batch B PASS: category expansion shows header row with SUBCATEGORY | ACTUAL | BUDGET | LEFT columns; subcategory rows show 3 separate numbers ($0 | — | —, and after setting Tithe=$100: $0 | $100 | $100 green); trash icons (budget-cat-del-give/steward/grow/enjoy) delete a category with window.confirm accept — Enjoy category successfully removed; X icons (budget-sub-del-*) delete subcategories — Missions removed. B5 onLongPress handlers verified in code (lines 1405, 1451). B6 leftColor logic verified in code (line 1446) and green shown for full-remaining Tithe. Regression: Welcome iframe → Log in bridge works, login works, add-transaction save works, add subcategory button visible. FOUND ONE BUG (see rca_of_issue).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "TxForm default date", "issue": "Default date on new Add Transaction sheet shows 07/29/2001 instead of today. Root cause: /app/frontend/app/index.tsx line 1733 sets dateLabel = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) which produces 'Jul 29' (no year). TxForm then does new Date('Jul 29') at line 1789 which JS engines parse as year 2001. If the user saves without touching the date, the transaction is persisted with a 2001 date and the wrong month/period. Screenshot: /app/test_reports/screenshots/s4_txform_default.png and /app/test_reports/screenshots/s_income_mode.png both show 07/29/2001.", "testID": "tx-date-web", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Budget → expanded category", "issues": ["3-column layout looks clean but subCol width is fixed 62px each (styles line 3187-3188). On 390px viewport a long subcategory name is truncated to numberOfLines=1 which is acceptable. No overflow observed on Give/Steward/Grow."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/s4_txform_default.png",
+    "/app/test_reports/screenshots/s_income_mode.png",
+    "/app/test_reports/screenshots/b3_steward_expanded.png",
+    "/app/test_reports/screenshots/b2_grow_expanded.png",
+    "/app/test_reports/screenshots/b_after_deletes.png",
+    "/app/test_reports/screenshots/s7_after_save.png"
+  ],
+  "action_items": [
+    "Fix TxForm default date year=2001 bug. Recommended fix: at /app/frontend/app/index.tsx line 1735, pass an ISO date instead of 'Jul 29'. E.g. `date: now.toISOString()` (TxForm already parses ISO cleanly). Alternatively include the year in dateLabel: `now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })`. Verified via UI: the date input shows 07/29/2001 by default on every fresh 'Add transaction' open.",
+    "Optional: run manual test that saving with default date now produces today's ISO in tx.date."
+  ],
+  "critical_code_review_comments": [
+    "index.tsx is 3269 lines — recommend splitting screens/components into separate files (BudgetScreen, TxForm, HomeScreen) to stay under the 700-line guideline. Not blocking Session 1.",
+    "Line 1735: date default 'Jul 29' bug (see action_items).",
+    "TxForm date parsing at line 1789 tolerates ISO but not month-day strings; the fix should be on the setter side (line 1735), not here.",
+    "removeCategory/removeSubcategory (lines 1285-1319) correctly branch on Platform.OS for confirmation and both trash-icon path and onLongPress path share the same handler — good.",
+    "B6 color logic (line 1446): leftColor = b > 0 ? (remaining < 0 ? red : remaining < b*0.2 ? amber : green) : '#c1b9ac'. Matches spec exactly.",
+    "Column header row styles (subHeaderRow / subHeaderCol / subCol lines 3185-3188) use fixed 62px column width — fine on 390px viewport."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (out of scope)", "frontend": "94% (15 of 16 checks pass; 1 pre-existing default-date bug found)"},
+  "seed_data_creation": "Created one manual transaction 'TEST Session1 Coffee' $7.50 dated 2026-01-15 to verify save path. Also deleted seeded Enjoy category and Missions subcategory during B3/B4 tests — these are per-user client-side state (categories not persisted server-side).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Session 1 items A1/A2/A3(picker exists)/A5/B1/B2/B3/B4/B5/B6 all pass. A4 partially passes: picker WRITES ISO correctly BUT the default value handed to the picker is year 2001 because tx-add sets date='Jul 29'. Preview URL: https://no-changes-mobile.preview.emergentagent.com. Login: iframe 'Log in' -> fill you@example.com/Your password -> 'Log in' button last. Test creds in /app/memory/test_credentials.md.",
+  "rca_of_issue": "BUG — Default transaction date = 2001-07-29. Reproduction: 1) Log in as alex+test1@jaleter.app. 2) Go to Transactions tab. 3) Tap the '+' (testID tx-add). 4) Observe the Date field shows 07/29/2001 (or 07/current-day/2001). Root cause: /app/frontend/app/index.tsx line 1733 builds dateLabel via now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) which returns e.g. 'Jul 29' (no year). At line 1735 this is stored into editing.date. TxForm at lines 1787-1791 does `const d = new Date(t.date)` — JS parses 'Jul 29' as year 2001 (V8/JSC default when year missing). The <input type='date'> then binds to 2001-07-29 and users who don't tap the picker will save 2001-dated transactions. Mitigation: change line 1735 to `date: now.toISOString()` OR add year to dateLabel. Confirmed by two independent screenshots (s4_txform_default, s_income_mode) both show 07/29/2001 as the pre-filled value."
+}
