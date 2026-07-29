@@ -35,14 +35,27 @@ The definitive Jaleter brand reference — colors, typography, spacing, iconogra
 ### Step 2 — Copy your Calendly URL
 Grab the public URL of your Calendly page (e.g. `https://calendly.com/jaleter/coaching`)
 
-### Step 3 — Update the three placeholders in the HTML file
-Open `JALETER_WORDPRESS_LANDING.html` and Find/Replace:
+### Step 3 — Update the placeholders in the HTML file
+Open `JALETER_WORDPRESS_LANDING.html` and Find/Replace all instances:
 
-| Find                    | Replace With                          |
-|-------------------------|---------------------------------------|
-| `COACHING_STRIPE_LINK`  | your Coaching Payment Link URL        |
-| `MEMBERSHIP_STRIPE_LINK`| your Membership Payment Link URL      |
-| `CALENDLY_LINK`         | your Calendly URL                     |
+| Find                    | Replace With                                            |
+|-------------------------|---------------------------------------------------------|
+| `COACHING_STRIPE_LINK`  | your Coaching Payment Link URL                          |
+| `MEMBERSHIP_STRIPE_LINK`| your Membership Payment Link URL                        |
+| `CALENDLY_LINK`         | your Calendly URL                                       |
+| `RESOURCE_PDF_URL`      | URL of the Jaleter Financial Guides PDF (WP Media)      |
+| `RESOURCE_XLSX_URL`     | URL of the Jaleter Budget Workbook XLSX (WP Media)      |
+| `TERMS_URL`             | URL of your Terms of Service page or PDF                |
+| `PRIVACY_URL`           | URL of your Privacy Policy page or PDF                  |
+
+### Step 3.5 — Upload the free resources + legal PDFs to WordPress
+1. WordPress → **Media → Add New**
+2. Drag & drop these files from your JALETER_PACKAGE folder (or wherever you saved them):
+   - Jaleter Financial Guides.pdf
+   - Jaleter-Budget-Templates.xlsx
+   - Jaleter Privacy Policy.pdf
+   - Jaleter Terms of Service.pdf
+3. After each upload, click the file → click "Copy URL" → paste it into your HTML find/replace above.
 
 ### Step 4 — Paste into WordPress
 1. WordPress admin → Pages → Add New → name it "Jaleter"

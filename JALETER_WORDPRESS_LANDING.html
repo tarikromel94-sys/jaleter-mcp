@@ -7,11 +7,15 @@
   1. Open your WordPress page editor (Gutenberg or Elementor).
   2. Add a "Custom HTML" block (Gutenberg) or "HTML" widget (Elementor).
   3. Paste EVERYTHING between the START and END markers below into that block.
-  4. Replace the two Stripe payment link placeholders:
-       - COACHING_STRIPE_LINK    (e.g. https://buy.stripe.com/xxxxxxxx)
-       - MEMBERSHIP_STRIPE_LINK  (e.g. https://buy.stripe.com/xxxxxxxx)
-  5. Replace CALENDLY_LINK with your Calendly URL.
-  6. Save and preview.
+  4. Replace these 5 placeholders (Find & Replace):
+       - COACHING_STRIPE_LINK      Coaching Stripe Payment Link
+       - MEMBERSHIP_STRIPE_LINK    Membership Stripe Payment Link
+       - CALENDLY_LINK             Your Calendly URL
+       - RESOURCE_PDF_URL          URL of Jaleter Financial Guides.pdf (upload to WP Media)
+       - RESOURCE_XLSX_URL         URL of Jaleter-Budget-Templates.xlsx (upload to WP Media)
+       - TERMS_URL                 URL of Jaleter Terms of Service page or PDF
+       - PRIVACY_URL               URL of Jaleter Privacy Policy page or PDF
+  5. Save and preview.
 
   NOTES:
   - Self-contained: no external stylesheets except Google Fonts + Ionicons.
@@ -296,6 +300,74 @@
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8l3 3 5-6' stroke='%23F4D28F' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
+/* ── RESOURCE CARDS ── */
+.jaleter-page .resource-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
+  max-width: 880px;
+  margin: 0 auto;
+}
+.jaleter-page .resource-card {
+  background: #FBF6EC;
+  border: 1px solid #E8DCC4;
+  border-radius: 24px;
+  padding: 32px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-decoration: none;
+  color: inherit;
+  transition: transform 200ms ease, box-shadow 200ms ease, border-color 200ms ease;
+}
+.jaleter-page .resource-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px rgba(9,9,8,0.08);
+  border-color: rgba(222,170,85,0.5);
+}
+.jaleter-page .resource-icon {
+  width: 52px; height: 52px;
+  border-radius: 16px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #F4D28F33, #DEAA5522);
+  border: 1px solid rgba(222,170,85,0.25);
+  color: #A57537;
+  font-size: 22px;
+}
+.jaleter-page .resource-card .resource-tag {
+  color: #A57537;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin-top: 4px;
+}
+.jaleter-page .resource-card h3 {
+  font-family: 'Playfair Display', serif;
+  font-size: 24px;
+  font-weight: 500;
+  margin: 0;
+  color: #090908;
+}
+.jaleter-page .resource-card p {
+  color: #615B52;
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0;
+  flex: 1;
+}
+.jaleter-page .resource-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #DEAA55;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-top: 8px;
+}
+.jaleter-page .resource-download ion-icon { font-size: 16px; }
+
 /* ── FEATURE GRID ── */
 .jaleter-page .feature-grid {
   display: grid;
@@ -497,6 +569,37 @@
     </div>
   </section>
 
+  <!-- ═══════════════════════ FREE RESOURCES ═══════════════════════ -->
+  <section class="section alt" id="resources">
+    <div class="container">
+      <span class="eyebrow" style="text-align:center; display:block;">Free Resources</span>
+      <h2>Start with the tools.</h2>
+      <p class="lede">
+        Two downloads that stand on their own — even if you never open the app.
+      </p>
+      <div class="resource-grid">
+        <a href="RESOURCE_PDF_URL" target="_blank" rel="noopener" class="resource-card">
+          <div class="resource-icon"><ion-icon name="document-text-outline"></ion-icon></div>
+          <div class="resource-tag">PDF · 7 Guides</div>
+          <h3>The Jaleter Starter Guide</h3>
+          <p>
+            Seven bite-size guides covering the Give / Steward / Grow / Enjoy framework, debt-payoff strategies, tithing, emergency funds, self-employment taxes, and legacy planning.
+          </p>
+          <div class="resource-download">Download PDF <ion-icon name="download-outline"></ion-icon></div>
+        </a>
+        <a href="RESOURCE_XLSX_URL" target="_blank" rel="noopener" class="resource-card">
+          <div class="resource-icon"><ion-icon name="grid-outline"></ion-icon></div>
+          <div class="resource-tag">Excel · 11 Sheets</div>
+          <h3>The Jaleter Budget Workbook</h3>
+          <p>
+            Monthly budget, net-worth tracker, tithe log, savings goals, debt payoff, retirement projection, and weekly + quarterly money-date prompts — all in one Excel file.
+          </p>
+          <div class="resource-download">Download Workbook <ion-icon name="download-outline"></ion-icon></div>
+        </a>
+      </div>
+    </div>
+  </section>
+
   <!-- ═══════════════════════ QUOTE STRIP ═══════════════════════ -->
   <section class="quote-strip">
     <div class="container">
@@ -591,6 +694,7 @@
         <div class="footer-col">
           <h4>Company</h4>
           <a href="#">About</a>
+          <a href="#resources">Free Resources</a>
           <a href="#">Contact</a>
           <a href="#pricing">Pricing</a>
         </div>
@@ -602,8 +706,8 @@
         </div>
         <div class="footer-col">
           <h4>Legal</h4>
-          <a href="#">Terms</a>
-          <a href="#">Privacy</a>
+          <a href="TERMS_URL" target="_blank" rel="noopener">Terms of Service</a>
+          <a href="PRIVACY_URL" target="_blank" rel="noopener">Privacy Policy</a>
           <a href="#">Refund Policy</a>
         </div>
       </div>
