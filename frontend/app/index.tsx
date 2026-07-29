@@ -1239,8 +1239,15 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
       subcategories: c.subcategories.map((sc: Subcategory) => {
         if (sc.id !== editing.sub.id) return sc;
         if (annual) {
-          // Setting annual → uniform monthly budget of clean/12; clear all overrides.
-          return { ...sc, budgeted: Math.round(clean / 12), months: undefined };
+          // Annual set: divide evenly and ONLY apply to months that don't already have a manual override.
+          // Existing month overrides are preserved so users don't lose their custom edits.
+          const perMonth = Math.round(clean / 12);
+          const existing = sc.months || {};
+          const nextMonths: Record<number, number> = { ...existing };
+          for (let i = 0; i < 12; i++) {
+            if (nextMonths[i] === undefined) nextMonths[i] = perMonth;
+          }
+          return { ...sc, budgeted: perMonth, months: nextMonths };
         }
         // Setting for a specific month → override that month only.
         const months = { ...(sc.months || {}), [mIdx]: clean };
@@ -1327,6 +1334,13 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
         </View>
       } />
       <PeriodPills values={[...MONTHS, 'Year']} value={period} onChange={setPeriod} testID="budget-period" />
+      {annual && (
+        <View style={s.yearTotalTop}>
+          <Text style={s.yearTotalEyebrow}>TOTAL INCOME · {new Date().getFullYear()}</Text>
+          <Text style={s.yearTotalStrong}>{MONEY(actualIncome)}</Text>
+          <Text style={s.yearTotalSub}>Expected {MONEY(plannedIncome)} · {plannedIncome > 0 ? Math.round((actualIncome / plannedIncome) * 100) : 0}% received</Text>
+        </View>
+      )}
       <View style={s.budgetSummary}>
         <View style={s.budgetSumCell}><Text style={s.bsSmall}>Total Income</Text><Text style={s.bsStrong}>{MONEY(actualIncome)}</Text><Text style={s.bsSmall}>of {MONEY(plannedIncome)}</Text></View>
         <View style={s.budgetSumCell}><Text style={s.bsSmall}>Expenses</Text><Text style={s.bsStrong}>{MONEY(actualExpenses)}</Text><Text style={s.bsSmall}>actual</Text></View>
@@ -1482,12 +1496,33 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
               );
             })}
           </View>
+          {annual && (
+            <View style={s.yearTotalBottom}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 6 }}>
+                <Text style={s.yearTotalEyebrow}>TOTAL EXPENSES · {new Date().getFullYear()}</Text>
+                <Text style={{ fontSize: 9, color: C.muted2 }}>{plannedIncome > 0 ? `${Math.round((actualExpenses / plannedIncome) * 100)}% of income` : ''}</Text>
+              </View>
+              <Text style={[s.yearTotalStrong, { color: C.ink }]}>{MONEY(actualExpenses)}</Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#e8dcc4' }}>
+                <Text style={{ fontSize: 10, fontWeight: '700', color: C.muted2, letterSpacing: 0.6 }}>NET REMAINING</Text>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: actualIncome - actualExpenses >= 0 ? '#5a7f60' : C.red }}>{MONEY(actualIncome - actualExpenses)}</Text>
+              </View>
+            </View>
+          )}
         </>
       ) : (
-        <BudgetGrid categories={categories} spentInSub={(id: string, mi: number) => transactions.filter((t: Tx) => t.type === 'expense' && t.detailId === id && t.period === MONTHS[mi]).reduce((s: number, t: Tx) => s + t.amount, 0)} onEdit={startEdit} tDark={t.dark} />
+        <BudgetGrid
+          categories={categories}
+          incomeSources={incomeSources}
+          incomeReceivedForMonth={(srcId: string, mi: number) => transactions.filter((t: Tx) => t.type === 'income' && t.groupId === srcId && t.period === MONTHS[mi]).reduce((s: number, t: Tx) => s + t.amount, 0)}
+          spentInSub={(id: string, mi: number) => transactions.filter((t: Tx) => t.type === 'expense' && t.detailId === id && t.period === MONTHS[mi]).reduce((s: number, t: Tx) => s + t.amount, 0)}
+          onEdit={startEdit}
+          onEditIncome={(src: any) => { setEditingEarn(src); setDraft(src.budgeted ? String(src.budgeted) : ''); }}
+          tDark={t.dark}
+        />
       )}
 
-      <Sheet visible={!!editing} close={() => { setEditing(null); setDraft(''); }} title={editing ? `${annual ? 'Set annual' : `Set ${period}`} · ${editing.sub.name}` : ''} subtitle={annual ? 'Annual amount auto-splits evenly across 12 months (existing month overrides will be cleared).' : `Amount is for ${period} only. Other months keep their auto-split.`}>
+      <Sheet visible={!!editing} close={() => { setEditing(null); setDraft(''); }} title={editing ? `${annual ? 'Set annual' : `Set ${period}`} · ${editing.sub.name}` : ''} subtitle={annual ? 'Annual amount auto-splits evenly across 12 months — but any months you\'ve already customized will stay unchanged.' : `Amount is for ${period} only. Other months are not affected.`}>
         {editing && (
           <View>
             <Text style={s.label}>{annual ? 'Annual amount' : 'Monthly amount'}</Text>
@@ -1587,7 +1622,7 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
 };
 
 /* ---------------- Budget Grid (annual spreadsheet view) ---------------- */
-const BudgetGrid = ({ categories, spentInSub, onEdit, tDark }: any) => {
+const BudgetGrid = ({ categories, incomeSources, incomeReceivedForMonth, spentInSub, onEdit, onEditIncome, tDark }: any) => {
   const cellW = 60;
   const nameW = 130;
   return (
@@ -1603,6 +1638,42 @@ const BudgetGrid = ({ categories, spentInSub, onEdit, tDark }: any) => {
           <View style={{ width: cellW + 10, alignItems: 'center' }}><Text style={[s.gridHeaderText, tDark && { color: D.text }]}>Year</Text></View>
         </ScrollView>
       </View>
+      {/* Income section — matches monthly breakdown for Earn sources */}
+      {Array.isArray(incomeSources) && incomeSources.length > 0 && (
+        <View style={{ marginBottom: 8 }}>
+          <View style={[s.gridGroupRow, tDark && { backgroundColor: D.surfaceAlt }, { backgroundColor: '#eef4e6' }]}>
+            <Text style={[s.gridGroupText, tDark && { color: D.text }, { color: '#4e765c' }]}>Income · Earn</Text>
+          </View>
+          {incomeSources.map((src: any) => {
+            const annualPlanned = (src.budgeted || 0) * 12;
+            return (
+              <View key={src.id} style={[s.gridRow, tDark && { borderColor: D.border }]}>
+                <View style={{ width: nameW, paddingRight: 6 }}><Text style={[s.gridSubText, tDark && { color: D.text }]} numberOfLines={1}>{src.name}</Text></View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  {MONTHS.map((_: string, i: number) => {
+                    const planned = src.budgeted || 0;
+                    const received = incomeReceivedForMonth ? incomeReceivedForMonth(src.id, i) : 0;
+                    return (
+                      <Pressable
+                        key={i}
+                        onPress={() => onEditIncome?.(src)}
+                        style={{ width: cellW, alignItems: 'center', paddingVertical: 6 }}
+                        testID={`grid-inc-${src.id}-${i}`}
+                      >
+                        <Text style={[{ fontSize: 10, fontWeight: '700', color: '#4e765c' }, tDark && { color: '#a4c9a5' }]}>{planned > 0 ? `$${Math.round(planned)}` : '—'}</Text>
+                        {received > 0 && <Text style={{ fontSize: 8, color: '#7a9b7a' }}>${Math.round(received)}</Text>}
+                      </Pressable>
+                    );
+                  })}
+                  <View style={{ width: cellW + 10, alignItems: 'center', paddingVertical: 6 }}>
+                    <Text style={{ fontSize: 10, fontWeight: '800', color: '#4e765c' }}>${Math.round(annualPlanned)}</Text>
+                  </View>
+                </ScrollView>
+              </View>
+            );
+          })}
+        </View>
+      )}
       {categories.map((c: Category) => (
         <View key={c.id} style={{ marginBottom: 6 }}>
           <View style={[s.gridGroupRow, tDark && { backgroundColor: D.surfaceAlt }]}><Text style={[s.gridGroupText, tDark && { color: D.text }]}>{c.name}</Text></View>
@@ -1934,12 +2005,19 @@ const isInvestmentAccount = (r: any) => {
   if (r.provider === 'snaptrade') return true;
   return /(invest|brokerage|ira|401k|403b|roth|hsa|mutual|advisor|wealth|portfolio|etrade|schwab|fidelity|vanguard|robinhood)/.test(hay);
 };
-const NetWorthScreen = ({ assets, liabilities, transactions, restrictedCash, setRestrictedCash }: any) => {
+const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transactions, restrictedBuckets, setRestrictedBuckets }: any) => {
   const t = useThemed();
   const { token } = useAuth();
   const [linkedRows, setLinkedRows] = useState<any[]>([]);
-  const [editingRestricted, setEditingRestricted] = useState(false);
-  const [restrictedDraft, setRestrictedDraft] = useState('');
+  const [restrictedOpen, setRestrictedOpen] = useState(false);
+  const [addingRestricted, setAddingRestricted] = useState(false);
+  const [newBucketName, setNewBucketName] = useState('');
+  const [newBucketAmt, setNewBucketAmt] = useState('');
+  const [editingBucket, setEditingBucket] = useState<any>(null);
+  const [editRow, setEditRow] = useState<{ side: 'assets' | 'liabilities'; row: Asset } | null>(null);
+  const [rowDraftName, setRowDraftName] = useState('');
+  const [rowDraftAmt, setRowDraftAmt] = useState('');
+  const [addingRowSide, setAddingRowSide] = useState<'assets' | 'liabilities' | null>(null);
   useEffect(() => {
     if (!token) return;
     apiCall('/api/accounts/all', { method: 'GET' }, token)
@@ -1980,6 +2058,7 @@ const NetWorthScreen = ({ assets, liabilities, transactions, restrictedCash, set
   const tl = liabilities.reduce((sum: number, x: Asset) => sum + x.value, 0);
   const nw = ta - tl;
   const cash = displayAssets.find((x: any) => x.id === 'cash')?.value || 0;
+  const totalRestricted = restrictedBuckets.reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Net Worth" subtitle="Your full financial picture, in one place." action={
@@ -2004,36 +2083,155 @@ const NetWorthScreen = ({ assets, liabilities, transactions, restrictedCash, set
       <View style={[s.cashProtection, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
         <View style={{ flex: 1 }}><Text style={[s.cpSmall, t.textMuted]}>TOTAL CASH</Text><Text style={[s.cpStrong, t.textInk]}>{MONEY(cash)}</Text></View>
         <Text style={{ color: '#b99a6c' }}>−</Text>
-        <Pressable onPress={() => { setRestrictedDraft(restrictedCash ? String(restrictedCash) : ''); setEditingRestricted(true); }} style={{ flex: 1 }} testID="nw-restricted">
+        <Pressable onPress={() => setRestrictedOpen(true)} style={{ flex: 1 }} testID="nw-restricted">
           <Text style={[s.cpSmall, t.textMuted]}>RESTRICTED</Text>
-          <Text style={[s.cpStrong, t.textInk]}>{MONEY(restrictedCash || 0)}</Text>
-          <Text style={{ color: '#c9a56c', fontSize: 8, marginTop: 2 }}>{restrictedCash > 0 ? 'tap to edit' : 'tap to set'}</Text>
+          <Text style={[s.cpStrong, t.textInk]}>{MONEY(totalRestricted)}</Text>
+          <Text style={{ color: '#c9a56c', fontSize: 8, marginTop: 2 }}>{restrictedBuckets.length > 0 ? `${restrictedBuckets.length} bucket${restrictedBuckets.length > 1 ? 's' : ''} · tap to manage` : 'tap to add'}</Text>
         </Pressable>
         <Text style={{ color: '#b99a6c' }}>=</Text>
-        <View style={[{ flex: 1.2 }, s.cpAvailable]}><Text style={[s.cpSmall, { color: '#c8b494' }]}>AVAILABLE</Text><Text style={[s.cpStrong, { color: '#f3dfbd' }]}>{MONEY(Math.max(0, cash - (restrictedCash || 0)))}</Text></View>
+        <View style={[{ flex: 1.2 }, s.cpAvailable]}><Text style={[s.cpSmall, { color: '#c8b494' }]}>AVAILABLE</Text><Text style={[s.cpStrong, { color: '#f3dfbd' }]}>{MONEY(Math.max(0, cash - totalRestricted))}</Text></View>
       </View>
-      <Sheet visible={editingRestricted} close={() => { setEditingRestricted(false); setRestrictedDraft(''); }} title="Restricted Cash" subtitle="Money set aside for goals, taxes, or upcoming bills — subtracted from Available.">
+      <Sheet visible={restrictedOpen} close={() => { setRestrictedOpen(false); setAddingRestricted(false); setEditingBucket(null); setNewBucketName(''); setNewBucketAmt(''); }} title="Restricted Cash" subtitle="Create named buckets for money set aside — taxes, gifts, goals. Each bucket is subtracted from Available.">
         <View>
-          <Text style={s.label}>Restricted amount</Text>
+          {restrictedBuckets.length === 0 && !addingRestricted && (
+            <Text style={{ fontSize: 11, color: C.muted2, marginBottom: 12 }}>No buckets yet. Tap the button below to add your first.</Text>
+          )}
+          {restrictedBuckets.map((b: any) => (
+            <View key={b.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f1ede6' }}>
+              <Pressable onPress={() => { setEditingBucket(b); setNewBucketName(b.name); setNewBucketAmt(String(b.amount)); setAddingRestricted(true); }} style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>{b.name}</Text>
+                  <Text style={{ fontSize: 9, color: C.muted2 }}>tap to edit</Text>
+                </View>
+                <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>{MONEY(b.amount)}</Text>
+              </Pressable>
+              <Pressable onPress={() => {
+                const doIt = () => setRestrictedBuckets((prev: any[]) => prev.filter((x: any) => x.id !== b.id));
+                if (Platform.OS === 'web') { if (typeof window !== 'undefined' && window.confirm(`Remove "${b.name}"?`)) doIt(); }
+                else { Alert.alert(`Remove "${b.name}"?`, 'This allocation returns to Available cash.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Remove', style: 'destructive', onPress: doIt }]); }
+              }} hitSlop={6} style={{ paddingHorizontal: 8, paddingVertical: 6 }} testID={`bucket-del-${b.id}`}>
+                <Ionicons name="close-circle-outline" size={16} color="#b06a5b" />
+              </Pressable>
+            </View>
+          ))}
+          {addingRestricted ? (
+            <View style={{ marginTop: 12 }}>
+              <Text style={s.label}>Bucket name</Text>
+              <TextInput style={s.input} value={newBucketName} onChangeText={setNewBucketName} placeholder="e.g., Q3 Taxes, Christmas Gifts" autoFocus testID="bucket-name" />
+              <Text style={s.label}>Amount</Text>
+              <View style={s.amountInput}>
+                <Text style={s.amountPrefix}>$</Text>
+                <TextInput style={[s.input, { paddingLeft: 26 }]} value={newBucketAmt} onChangeText={setNewBucketAmt} keyboardType="numeric" placeholder="0" testID="bucket-amount" />
+              </View>
+              <View style={{ marginTop: 12 }}>
+                <GoldButton label={editingBucket ? 'Save bucket' : 'Add bucket'} onPress={() => {
+                  const cleanAmt = Math.max(0, Math.round(Number((newBucketAmt || '').replace(/[^0-9.]/g, '')) || 0));
+                  const cleanName = newBucketName.trim();
+                  if (!cleanName) return;
+                  if (editingBucket) {
+                    setRestrictedBuckets((prev: any[]) => prev.map((x: any) => x.id === editingBucket.id ? { ...x, name: cleanName, amount: cleanAmt } : x));
+                  } else {
+                    setRestrictedBuckets((prev: any[]) => [...prev, { id: `bucket-${Date.now()}`, name: cleanName, amount: cleanAmt }]);
+                  }
+                  setAddingRestricted(false); setEditingBucket(null);
+                  setNewBucketName(''); setNewBucketAmt('');
+                }} disabled={!newBucketName.trim()} testID="bucket-save" />
+              </View>
+              <Pressable onPress={() => { setAddingRestricted(false); setEditingBucket(null); setNewBucketName(''); setNewBucketAmt(''); }} style={{ marginTop: 10, alignItems: 'center' }}>
+                <Text style={{ color: C.muted2, fontSize: 11 }}>Cancel</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable onPress={() => { setEditingBucket(null); setNewBucketName(''); setNewBucketAmt(''); setAddingRestricted(true); }} style={[s.subcategoryRow, { justifyContent: 'center', marginTop: 8 }]} testID="bucket-add">
+              <Ionicons name="add-circle-outline" size={16} color="#9a6d32" />
+              <Text style={{ color: '#9a6d32', fontSize: 11, fontWeight: '700', marginLeft: 6 }}>Add restricted bucket</Text>
+            </Pressable>
+          )}
+        </View>
+      </Sheet>
+      <Sheet visible={!!editRow} close={() => setEditRow(null)} title={editRow ? `Edit · ${editRow.row.name}` : ''} subtitle={editRow?.row.id === 'cash' || editRow?.row.id === 'investments' ? 'This value is added on top of any linked account balances.' : 'Update the name or amount at any time.'}>
+        {editRow && (
+          <View>
+            {(editRow.row.id !== 'cash' && editRow.row.id !== 'investments') && (
+              <>
+                <Text style={s.label}>Name</Text>
+                <TextInput style={s.input} value={rowDraftName} onChangeText={setRowDraftName} testID="row-name" />
+              </>
+            )}
+            <Text style={s.label}>Amount</Text>
+            <View style={s.amountInput}>
+              <Text style={s.amountPrefix}>$</Text>
+              <TextInput style={[s.input, { paddingLeft: 26 }]} value={rowDraftAmt} onChangeText={setRowDraftAmt} keyboardType="numeric" placeholder="0" testID="row-amount" />
+            </View>
+            <View style={{ marginTop: 12 }}>
+              <GoldButton label="Save" onPress={() => {
+                const cleanAmt = Math.max(0, Math.round(Number((rowDraftAmt || '').replace(/[^0-9.]/g, '')) || 0));
+                const cleanName = rowDraftName.trim() || editRow.row.name;
+                if (editRow.side === 'assets') {
+                  const isBuiltin = editRow.row.id === 'cash' || editRow.row.id === 'investments';
+                  if (isBuiltin) setAssets((prev: Asset[]) => prev.map((x) => x.id === editRow.row.id ? { ...x, value: cleanAmt } : x));
+                  else setAssets((prev: Asset[]) => prev.map((x) => x.id === editRow.row.id ? { ...x, name: cleanName, value: cleanAmt } : x));
+                } else {
+                  setLiabilities((prev: Asset[]) => prev.map((x) => x.id === editRow.row.id ? { ...x, name: cleanName, value: cleanAmt } : x));
+                }
+                setEditRow(null); setRowDraftName(''); setRowDraftAmt('');
+              }} testID="row-save" />
+            </View>
+            {(editRow.row.id !== 'cash' && editRow.row.id !== 'investments') && (
+              <Pressable onPress={() => {
+                const doIt = () => {
+                  if (editRow.side === 'assets') setAssets((prev: Asset[]) => prev.filter((x) => x.id !== editRow.row.id));
+                  else setLiabilities((prev: Asset[]) => prev.filter((x) => x.id !== editRow.row.id));
+                  setEditRow(null);
+                };
+                if (Platform.OS === 'web') { if (typeof window !== 'undefined' && window.confirm(`Remove "${editRow.row.name}"?`)) doIt(); }
+                else { Alert.alert(`Remove "${editRow.row.name}"?`, 'This cannot be undone.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Remove', style: 'destructive', onPress: doIt }]); }
+              }} style={{ marginTop: 12, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 }} testID="row-delete">
+                <Ionicons name="trash-outline" size={14} color={C.danger} /><Text style={{ color: C.danger, fontSize: 11 }}>Remove</Text>
+              </Pressable>
+            )}
+          </View>
+        )}
+      </Sheet>
+      <Sheet visible={!!addingRowSide} close={() => { setAddingRowSide(null); setRowDraftName(''); setRowDraftAmt(''); }} title={addingRowSide === 'assets' ? 'Add asset' : 'Add liability'} subtitle="Anything you own (asset) or owe (liability).">
+        <View>
+          <Text style={s.label}>Name</Text>
+          <TextInput style={s.input} value={rowDraftName} onChangeText={setRowDraftName} placeholder={addingRowSide === 'assets' ? 'e.g., Rental property, Jewelry' : 'e.g., Personal loan, Medical debt'} autoFocus testID="row-add-name" />
+          <Text style={s.label}>Amount</Text>
           <View style={s.amountInput}>
             <Text style={s.amountPrefix}>$</Text>
-            <TextInput style={[s.input, { paddingLeft: 26 }]} value={restrictedDraft} onChangeText={setRestrictedDraft} keyboardType="numeric" placeholder="0" autoFocus testID="nw-restricted-amount" />
+            <TextInput style={[s.input, { paddingLeft: 26 }]} value={rowDraftAmt} onChangeText={setRowDraftAmt} keyboardType="numeric" placeholder="0" testID="row-add-amount" />
           </View>
-          <View style={{ marginTop: 14 }}>
-            <GoldButton label="Save" onPress={() => {
-              const clean = Math.max(0, Math.round(Number((restrictedDraft || '').replace(/[^0-9.]/g, '')) || 0));
-              setRestrictedCash(clean);
-              setEditingRestricted(false); setRestrictedDraft('');
-            }} testID="nw-restricted-save" />
+          <View style={{ marginTop: 12 }}>
+            <GoldButton label={`Add ${addingRowSide === 'assets' ? 'asset' : 'liability'}`} onPress={() => {
+              const cleanAmt = Math.max(0, Math.round(Number((rowDraftAmt || '').replace(/[^0-9.]/g, '')) || 0));
+              const cleanName = rowDraftName.trim();
+              if (!cleanName || !addingRowSide) return;
+              const id = `${addingRowSide}-${Date.now()}`;
+              const icon = addingRowSide === 'assets' ? 'cube-outline' : 'card-outline';
+              const row: Asset = { id, name: cleanName, value: cleanAmt, source: 'Manual', icon };
+              if (addingRowSide === 'assets') setAssets((prev: Asset[]) => [...prev, row]);
+              else setLiabilities((prev: Asset[]) => [...prev, row]);
+              setAddingRowSide(null); setRowDraftName(''); setRowDraftAmt('');
+            }} disabled={!rowDraftName.trim()} testID="row-add-save" />
           </View>
         </View>
       </Sheet>
-      <WorthCard title="Assets" total={ta} rows={displayAssets} hidden={!visible} />
-      <WorthCard title="Liabilities" total={tl} rows={liabilities} hidden={!visible} />
+      <WorthCard title="Assets" total={ta} rows={displayAssets} hidden={!visible} onRowPress={(row: Asset) => {
+        setEditRow({ side: 'assets', row });
+        setRowDraftName(row.name);
+        const raw = row.id === 'cash' ? manualCash : row.id === 'investments' ? manualInvest : row.value;
+        setRowDraftAmt(raw ? String(raw) : '');
+      }} onAdd={() => setAddingRowSide('assets')} />
+      <WorthCard title="Liabilities" total={tl} rows={liabilities} hidden={!visible} onRowPress={(row: Asset) => {
+        setEditRow({ side: 'liabilities', row });
+        setRowDraftName(row.name);
+        setRowDraftAmt(row.value ? String(row.value) : '');
+      }} onAdd={() => setAddingRowSide('liabilities')} />
     </ScrollView>
   );
 };
-const WorthCard = ({ title, total, rows, hidden }: any) => {
+const WorthCard = ({ title, total, rows, hidden, onRowPress, onAdd }: any) => {
   const t = useThemed();
   return (
     <View style={[s.worthCard, t.cardBg]}>
@@ -2042,12 +2240,19 @@ const WorthCard = ({ title, total, rows, hidden }: any) => {
         <Text style={[{ fontSize: 13, fontWeight: '700', color: C.ink }, t.textInk]}>{hidden ? '••••••' : MONEY(total)}</Text>
       </View>
       {rows.map((r: Asset) => (
-        <View key={r.id} style={[s.worthRow, t.dividerBorder]}>
+        <Pressable key={r.id} onPress={() => onRowPress?.(r)} style={[s.worthRow, t.dividerBorder]} testID={`nw-row-${r.id}`}>
           <View style={[s.worthIcon, t.dark && { backgroundColor: D.surfaceAlt }]}><Ionicons name={r.icon as any} size={17} color={t.dark ? D.textMuted : '#817969'} /></View>
           <View style={{ flex: 1 }}><Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{r.name}</Text><Text style={[{ fontSize: 8, color: '#9b958c' }, t.textMuted]}>{r.source}</Text></View>
           <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{hidden ? '••••' : MONEY(r.value)}</Text>
-        </View>
+          <Ionicons name="chevron-forward" size={12} color={t.dark ? D.textMuted : '#c1b9ac'} style={{ marginLeft: 4 }} />
+        </Pressable>
       ))}
+      {onAdd && (
+        <Pressable onPress={onAdd} style={[s.worthRow, t.dividerBorder, { justifyContent: 'center' }]} testID={`nw-add-${title.toLowerCase()}`}>
+          <Ionicons name="add-circle-outline" size={15} color="#9a6d32" />
+          <Text style={{ color: '#9a6d32', fontSize: 10, fontWeight: '700', marginLeft: 6 }}>Add {title === 'Assets' ? 'asset' : 'liability'}</Text>
+        </Pressable>
+      )}
     </View>
   );
 };
@@ -2851,10 +3056,10 @@ function MainApp() {
   const [active, setActive] = useState('home');
   const [categories, setCategories] = useState(initialCategories);
   const [incomeSources, setIncomeSources] = useState(initialIncome);
-  const [restrictedCash, setRestrictedCash] = useState(0);
+  const [restrictedBuckets, setRestrictedBuckets] = useState<Array<{ id: string; name: string; amount: number }>>([]);
   const [transactions, setTransactions] = useState<Tx[]>(initialTx);
-  const [assets] = useState<Asset[]>(initialAssets);
-  const [liabilities] = useState<Asset[]>(initialLiabilities);
+  const [assets, setAssets] = useState<Asset[]>(initialAssets);
+  const [liabilities, setLiabilities] = useState<Asset[]>(initialLiabilities);
   const [linkedAccounts, setLinkedAccounts] = useState<any[]>([]);
   const [focusCategory, setFocusCategory] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<{ enabled: boolean; threshold: number; perCategory: Record<string, { p50: boolean; p80: boolean; exceeded: boolean }> }>({ enabled: true, threshold: 80, perCategory: {} });
@@ -2877,7 +3082,13 @@ function MainApp() {
           if (data.alerts) setAlerts(data.alerts);
           if (Array.isArray(data.categories) && data.categories.length > 0) setCategories(data.categories);
           if (Array.isArray(data.incomeSources) && data.incomeSources.length > 0) setIncomeSources(data.incomeSources);
-          if (typeof data.restrictedCash === 'number') setRestrictedCash(data.restrictedCash);
+          if (Array.isArray(data.restrictedBuckets)) setRestrictedBuckets(data.restrictedBuckets);
+          else if (typeof data.restrictedCash === 'number' && data.restrictedCash > 0) {
+            // Migrate legacy single-value restrictedCash into a bucket.
+            setRestrictedBuckets([{ id: 'legacy-restricted', name: 'Restricted', amount: data.restrictedCash }]);
+          }
+          if (Array.isArray(data.assets) && data.assets.length > 0) setAssets(data.assets);
+          if (Array.isArray(data.liabilities) && data.liabilities.length > 0) setLiabilities(data.liabilities);
         }
       } catch {}
       setHydrated(true);
@@ -2886,8 +3097,8 @@ function MainApp() {
   // Persist on change (skip auth-managed fields)
   useEffect(() => {
     if (!hydrated) return;
-    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedCash })).catch(() => {});
-  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedCash]);
+    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities })).catch(() => {});
+  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities]);
 
   // Listen for SnapTrade OAuth callback deep link (jaleter://snaptrade-callback).
   useEffect(() => {
@@ -3009,7 +3220,7 @@ function MainApp() {
           {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
           {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} />}
           {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} openLinkSheet={() => { setActive('settings'); }} />}
-          {active === 'networth' && <NetWorthScreen assets={syncedAssets} liabilities={liabilities} transactions={transactions} restrictedCash={restrictedCash} setRestrictedCash={setRestrictedCash} />}
+          {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={linkedAccounts.length} onBack={() => setActive('home')} />}
           {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
@@ -3180,6 +3391,11 @@ const s = StyleSheet.create({
   categoryProgressBar: { height: '100%' },
   categoryMeta: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
   subcategoryList: { marginTop: 14, paddingTop: 4, borderTopWidth: 1, borderTopColor: C.border2 },
+  yearTotalTop: { backgroundColor: '#0f0e0c', borderRadius: 18, padding: 20, marginTop: 12, marginBottom: 4 },
+  yearTotalBottom: { backgroundColor: '#fbf6ec', borderRadius: 18, padding: 20, marginTop: 12, borderWidth: 1, borderColor: '#e8dcc4' },
+  yearTotalEyebrow: { color: '#c9a56c', fontSize: 9, fontWeight: '800', letterSpacing: 1.4 },
+  yearTotalStrong: { color: '#EED7AB', fontSize: 32, fontWeight: '700', marginTop: 4, fontFamily: Platform.select({ ios: 'Georgia', default: 'serif' }) },
+  yearTotalSub: { color: '#8e8a83', fontSize: 10, marginTop: 4 },
   subcategoryRow: { flexDirection: 'row', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f1ede6' },
   subHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingBottom: 6, borderBottomWidth: 1, borderBottomColor: '#e8dcc4' },
   subHeaderName: { flex: 1, fontSize: 8, fontWeight: '800', color: C.muted2, letterSpacing: 0.6, textTransform: 'uppercase' },
