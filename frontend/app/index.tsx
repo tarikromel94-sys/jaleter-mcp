@@ -928,31 +928,14 @@ const ResetPassword = ({ back, email, prefilledToken, onDone }: any) => {
 /* ---------------- Connect ---------------- */
 const FirstConnect = ({ onConnect, onSkip }: any) => {
   const { token } = useAuth();
-  const [advanced, setAdvanced] = useState(false);
-  const [setupToken, setSetupToken] = useState('');
-  const [busy, setBusy] = useState(false);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
 
-  const submitSimpleFin = async () => {
-    if (!setupToken.trim()) { setError('Please paste your SimpleFIN Setup Token.'); return; }
-    setError(''); setBusy(true);
-    try {
-      const data = await apiCall('/api/accounts/simplefin/link', {
-        method: 'POST',
-        body: JSON.stringify({ setup_token: setupToken.trim() }),
-      }, token);
-      onConnect(data);
-    } catch (e: any) {
-      setError(e?.message || 'Could not link account.');
-    } finally { setBusy(false); }
-  };
-
   const runImport = async () => {
     await pickAndImport(
       token,
-      (msg) => { setToast(msg); setTimeout(() => onSkip?.(), 900); },
+      (msg) => { setToast(msg); setTimeout(() => onSkip?.(), 900); onConnect?.({}); },
       (err) => setError(err),
       setImporting
     );
@@ -989,38 +972,11 @@ const FirstConnect = ({ onConnect, onSkip }: any) => {
         testID="connect-import-file"
       />
 
+      {error ? <Text testID="connect-error" style={[s.formError, { marginTop: 10 }]}>{error}</Text> : null}
+
       <Pressable onPress={onSkip} testID="connect-skip" hitSlop={8}>
         <Text style={[s.loginLink, { marginTop: 20, textAlign: 'center' }]}>Skip and enter manually</Text>
       </Pressable>
-
-      <Pressable onPress={() => setAdvanced(!advanced)} hitSlop={8}>
-        <Text style={{ marginTop: 22, textAlign: 'center', fontSize: 11, color: C.muted3 }}>
-          {advanced ? 'Hide advanced options' : 'Advanced · Auto-sync via SimpleFIN'}
-        </Text>
-      </Pressable>
-
-      {advanced && (
-        <View style={{ marginTop: 12, padding: 14, borderRadius: 14, backgroundColor: '#f5ede0', borderWidth: 1, borderColor: '#e8dcc4' }}>
-          <Text style={{ fontSize: 11, fontWeight: '700', color: C.ink, marginBottom: 6 }}>Auto-sync via SimpleFIN (optional)</Text>
-          <Text style={{ color: C.muted, fontSize: 10, marginBottom: 10, lineHeight: 15 }}>
-            Prefer automatic syncing? SimpleFIN is a paid third-party service (~$1.50/mo, billed directly by SimpleFIN — not by Jaleter). Sign up at beta-bridge.simplefin.org, create a Setup Token, then paste it below.
-          </Text>
-          <TextInput
-            testID="connect-setup-token"
-            style={[s.input, { minHeight: 80 }]}
-            value={setupToken}
-            onChangeText={setSetupToken}
-            multiline
-            autoCapitalize="none"
-            autoCorrect={false}
-            placeholder="Paste your SimpleFIN Setup Token here…"
-          />
-          {error ? <Text testID="connect-error" style={s.formError}>{error}</Text> : null}
-          <View style={{ marginTop: 10 }}>
-            <GoldButton label={busy ? 'Linking…' : 'Link via SimpleFIN'} onPress={submitSimpleFin} disabled={busy || !setupToken.trim()} testID="connect-submit" />
-          </View>
-        </View>
-      )}
 
       {toast ? <Toast message={toast} onHide={() => setToast('')} /> : null}
     </ScrollView>
@@ -2040,7 +1996,7 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
     const providers = Array.from(new Set(rows.map((r: any) => r.provider)));
     const orgs = Array.from(new Set(rows.map((r: any) => r.org_name).filter(Boolean)));
     const providerName = providers.length === 1
-      ? (providers[0] === 'simplefin' ? 'SimpleFIN' : providers[0] === 'file' ? 'Imported' : providers[0] === 'snaptrade' ? 'SnapTrade' : 'Linked')
+      ? (providers[0] === 'file' ? 'Imported' : providers[0] === 'snaptrade' ? 'SnapTrade' : 'Linked')
       : 'Linked';
     if (orgs.length === 1) return `${providerName} · ${orgs[0]}`;
     return `${providerName} · ${rows.length} account${rows.length > 1 ? 's' : ''}`;
@@ -2480,7 +2436,7 @@ const MembershipScreen = ({ back }: any) => {
             <Text style={{ color: '#5a7f60', fontSize: 10, fontWeight: '700' }}>ACTIVE · renews {new Date(membership.expires_at as string).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>
           </View>
         )}
-        {['SimpleFIN account syncing (optional)','Full Budget and Transactions','Net Worth and Legacy planning','Faith + Focus library'].map(item => (
+        {['Private statement import (any bank)','Full Budget and Transactions','Net Worth and Legacy planning','Faith + Focus library'].map(item => (
           <View key={item} style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginVertical: 5 }}>
             <Ionicons name="checkmark" size={15} color="#a57537" />
             <Text style={{ color: t.dark ? D.textSubtle : '#615b52', fontSize: 11 }}>{item}</Text>
@@ -2683,7 +2639,7 @@ const LegalSheet = ({ visible, close, type }: any) => (
   <Sheet visible={visible} close={close} title={type} subtitle="Last updated July 15, 2026">
     {type === 'Privacy Policy' ? (
       <View>
-        <Text style={s.privacyPara}>Jaleter never touches your bank credentials. You download statements from your bank and upload them into Jaleter — your login stays only with your bank. Optional auto-sync via SimpleFIN is available; if you use it, SimpleFIN (not Jaleter) handles the connection to your bank.</Text>
+        <Text style={s.privacyPara}>Jaleter never touches your bank credentials. You download statements from your bank and upload them into Jaleter — your login stays only with your bank.</Text>
         <Text style={s.privacyPara}>We do not sell financial data. You control linked accounts and can disconnect them at any time.</Text>
         <Text style={s.privacyPara}>Manual entries and preferences are used only to provide requested features.</Text>
       </View>
@@ -2846,8 +2802,7 @@ const BANK_IMPORT_GUIDES: { name: string; steps: string[]; format: string }[] = 
 
 const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
   const { token } = useAuth();
-  const [mode, setMode] = useState<'menu' | 'simplefin' | 'file' | 'request' | 'guides'>('menu');
-  const [setupToken, setSetupToken] = useState('');
+  const [mode, setMode] = useState<'menu' | 'file' | 'request' | 'guides'>('menu');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -2862,7 +2817,7 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
       setExisting(Array.isArray(data?.accounts) ? data.accounts : []);
     } catch { setExisting([]); }
   };
-  useEffect(() => { if (visible) { setMode('menu'); setSetupToken(''); setError(''); setMessage(''); setInstitution(''); setNotes(''); setBusy(false); refresh(); } }, [visible]);
+  useEffect(() => { if (visible) { setMode('menu'); setError(''); setMessage(''); setInstitution(''); setNotes(''); setBusy(false); refresh(); } }, [visible]);
   const syncOne = async (link_id: string) => {
     if (!link_id) return;
     setSyncingId(link_id); setError('');
@@ -2886,18 +2841,6 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
     } catch (e: any) { setError(e?.message || 'Unlink failed.'); }
     finally { setSyncingId(null); }
   };
-  const submitSimpleFin = async () => {
-    if (!setupToken.trim()) { setError('Paste your SimpleFIN Setup Token.'); return; }
-    setError(''); setBusy(true);
-    try {
-      const data = await apiCall('/api/accounts/simplefin/link', { method: 'POST', body: JSON.stringify({ setup_token: setupToken.trim() }) }, token);
-      onConfirm(data?.accounts || []);
-      await refresh();
-      setMode('menu');
-      setMessage(`Linked ${data?.linked_count || 0} accounts.`);
-    } catch (e: any) { setError(e?.message || 'Could not link SimpleFIN.'); }
-    finally { setBusy(false); }
-  };
   const submitFile = async () => pickAndImport(token, async (msg) => { setMessage(msg); await refresh(); onConfirm([]); setMode('menu'); }, (err) => setError(err), setBusy);
   const submitRequest = async () => {
     if (!institution.trim()) { setError('Enter an institution name.'); return; }
@@ -2910,7 +2853,7 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
     finally { setBusy(false); }
   };
   return (
-    <Sheet visible={visible} close={close} title={mode === 'menu' ? 'Linked accounts' : mode === 'simplefin' ? 'Auto-sync (SimpleFIN)' : mode === 'file' ? 'Import statement' : mode === 'guides' ? 'How to download from your bank' : 'Request an institution'} subtitle={mode === 'menu' ? 'Refresh, remove, or add a new account.' : ''}>
+    <Sheet visible={visible} close={close} title={mode === 'menu' ? 'Linked accounts' : mode === 'file' ? 'Import statement' : mode === 'guides' ? 'How to download from your bank' : 'Request an institution'} subtitle={mode === 'menu' ? 'Refresh, remove, or add a new account.' : ''}>
       {mode === 'menu' && (
         <View style={{ gap: 10 }}>
           {existing && existing.length > 0 && (
@@ -2950,7 +2893,6 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
             { id: 'file', icon: 'cloud-upload-outline' as const, label: 'Import statement (recommended)', sub: 'Upload CSV, OFX, QFX, or QBO from any bank.' },
             { id: 'guides', icon: 'library-outline' as const, label: 'How to download from your bank', sub: 'Step-by-step guides for 10+ major banks.' },
             { id: 'request', icon: 'help-circle-outline' as const, label: 'Request an unsupported institution', sub: 'Tell us who to add next.' },
-            { id: 'simplefin', icon: 'sync-outline' as const, label: 'Advanced · Auto-sync via SimpleFIN', sub: 'Optional. Paid third-party service ($1.50/mo, billed by SimpleFIN).' },
           ].map((row) => (
             <Pressable key={row.id} testID={`link-mode-${row.id}`} onPress={() => setMode(row.id as any)} style={s.moreGridBtn}>
               <View style={s.moreGridIcon}><Ionicons name={row.icon} size={20} color={C.goldEyebrow} /></View>
@@ -2961,21 +2903,6 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
               <Ionicons name="chevron-forward" size={16} color="#aaa39a" />
             </Pressable>
           ))}
-        </View>
-      )}
-      {mode === 'simplefin' && (
-        <View>
-          <Text style={{ color: '#817b72', fontSize: 11, marginBottom: 6, lineHeight: 16 }}>
-            <Text style={{ fontWeight: '800' }}>Optional third-party service.</Text> SimpleFIN offers automatic syncing for ~$1.50/mo, billed directly by SimpleFIN — not by Jaleter. Prefer to skip the fee? Use {'"Import statement"'} instead.
-          </Text>
-          <Text style={{ color: '#817b72', fontSize: 11, marginBottom: 10, lineHeight: 16 }}>
-            Visit <Text style={{ fontWeight: '700', color: C.goldEyebrow }}>beta-bridge.simplefin.org</Text>, tap <Text style={{ fontWeight: '700' }}>Create Setup Token</Text>, and paste it below.
-          </Text>
-          <TextInput testID="link-setup-token" style={[s.input, { minHeight: 90 }]} value={setupToken} onChangeText={setSetupToken} multiline autoCapitalize="none" autoCorrect={false} placeholder="Paste your Setup Token here…" />
-          {error ? <Text testID="link-error" style={s.formError}>{error}</Text> : null}
-          <View style={{ marginTop: 14 }}>
-            <GoldButton label={busy ? 'Linking…' : 'Link account'} onPress={submitSimpleFin} disabled={busy || !setupToken.trim()} testID="link-submit" />
-          </View>
         </View>
       )}
       {mode === 'file' && (
