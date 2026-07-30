@@ -1,0 +1,40 @@
+{
+  "summary": "Retest of the Excel freeze-panes fix from iteration_21. Confirmed the intended source code fix IS applied at all 3 required locations in /app/frontend/app/index.tsx (ws1['!views'] at 1176 for Budget Summary, ws3['!views'] at 1249 for Annual Grid, ws4['!views'] at 1281 for Transactions), each with {state:'frozen', xSplit, ySplit}. However, the end-to-end result FAILS: after logging in (alex+test1@jaleter.app), navigating to Budget → Export → tapping Export Budget Workbook (.xlsx), the downloaded Jaleter_Budget_2026_2026-07-30.xlsx still reports freeze_panes=None on all 3 target sheets when opened with openpyxl (expected 'A5', 'B5', 'A2'). Root cause is NOT the source code but the xlsx package version: xlsx@0.18.5 (SheetJS CE on npm) has parse-only support for freeze panes — its write_ws_xml_sheetviews() function (node_modules/xlsx/xlsx.js:14753) only emits <sheetView workbookViewId=\"0\"/> and NEVER reads ws['!views'] on write. Confirmed by unzipping the output xlsx and finding <sheetViews><sheetView workbookViewId=\"0\"/></sheetViews> with no <pane/> element on any of the 3 sheets. So the SheetJS-doc-compliant syntax is correct — the shipped library just does not implement pane-writing. Regression check: sheet order (Budget Summary → Monthly Budget → Annual Grid → Transactions), dimensions, headers, and Transactions columns are all unchanged from iteration_21. Login/nav/Export menu/Excel download flow all still work.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "exportBudgetXlsx — freeze panes (still not applied)",
+        "issue": "Fix in place (ws['!views']=[{state:'frozen', xSplit, ySplit}]) is the correct SheetJS API, but xlsx@0.18.5 CE from npm does NOT implement freeze-pane writing. Its writer (node_modules/xlsx/xlsx.js line 14753 write_ws_xml_sheetviews) emits only <sheetView workbookViewId=\"0\"/> and ignores ws['!views'] on export. Verified by (a) opening the downloaded workbook with openpyxl → freeze_panes=None on Budget Summary, Annual Grid, and Transactions; (b) unzipping the .xlsx and inspecting xl/worksheets/sheet[1,3,4].xml → no <pane/> tag present, only the default <sheetView workbookViewId=\"0\"/>. To actually get freeze panes on export the app must either (1) upgrade to a newer SheetJS build (community edition from https://cdn.sheetjs.com/ v0.20+, which added !views write support — cannot be installed from public npm), or (2) switch to `exceljs` (npm) which fully supports frozen views on write, or (3) post-process the xlsx bytes to inject <pane/> XML manually. Reference: /app/frontend/app/index.tsx:1176, 1249, 1281 + /app/frontend/node_modules/xlsx/xlsx.js:14753.",
+        "testID": "export-workbook",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/tmp/dl2/retest_workbook.xlsx (fresh export used for verification)",
+    "/tmp/dl2/unz/xl/worksheets/sheet1.xml, sheet3.xml, sheet4.xml (unzipped XML — no <pane/>)"
+  ],
+  "action_items": [
+    "Fix is functionally still broken despite the correct !views syntax. Choose ONE remediation path:",
+    "  (A) Replace xlsx@0.18.5 with exceljs. exceljs is on npm and supports sheet.views=[{state:'frozen', xSplit, ySplit, topLeftCell, activePane:'bottomRight'}] out of the box. This is the cleanest option but requires rewriting exportBudgetXlsx() around exceljs's fluent API (workbook.addWorksheet, worksheet.addRow, cell.numFmt='$#,##0.00', etc.) and awaiting workbook.xlsx.writeBuffer().",
+    "  (B) Switch xlsx dependency to SheetJS's newer CE build from https://cdn.sheetjs.com/ (0.20.x tgz) — supports !views on write. Note: cannot be added via `yarn add xlsx@0.20…` because that version is not published on npm; would need to install the tgz URL directly (yarn add https://cdn.sheetjs.com/xlsx-latest/xlsx-latest.tgz).",
+    "  (C) After XLSX.write to Uint8Array, unzip in-browser with jszip, edit sheet[1,3,4].xml to inject <pane xSplit=\"…\" ySplit=\"…\" topLeftCell=\"…\" activePane=\"bottomLeft\" state=\"frozen\"/><selection pane=\"bottomLeft\"/> inside <sheetView>, then re-zip. Adds a dependency and complexity — least recommended.",
+    "Recommended: option (A) exceljs — it also solves the Monthly Budget full-month-names nit trivially and gives real cell styling/border support if needed later.",
+    "Optional/minor (carried over from iteration_21): Monthly Budget sheet still uses JAN/FEB/…/DEC instead of JANUARY…DECEMBER (line 1191 m.toUpperCase() where MONTHS[i]='Jan')."
+  ],
+  "critical_code_review_comments": [
+    "The syntax ws['!views']=[{state:'frozen', xSplit, ySplit}] is exactly what SheetJS Pro docs say — the code is not wrong, the library on npm just does not implement it. A quick way to detect this pre-emptively in the future is: grep node_modules/xlsx/xlsx.js for 'xSplit'/'topLeftCell' inside a write_ function — those tokens are absent in 0.18.5.",
+    "All 3 !views assignments use `as any` — TypeScript is not helping here since the property is silently dropped. exceljs has proper typings for sheet.views."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "0% for this targeted retest — freeze panes still absent on all 3 target sheets. Ancillary flows (login/nav/export/download/sheet content) unchanged and still pass."},
+  "seed_data_creation": "No new seed data. Downloaded the workbook against the default (empty) budget state for this user. Freeze-pane behaviour is independent of data content, so this is sufficient.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "After main agent implements a real fix (likely swapping to exceljs — option A above), re-download Jaleter_Budget_2026_YYYY-MM-DD.xlsx and run: from openpyxl import load_workbook; wb=load_workbook(path); assert wb['Budget Summary'].freeze_panes=='A5'; assert wb['Annual Grid'].freeze_panes=='B5'; assert wb['Transactions'].freeze_panes=='A2'; assert wb['Monthly Budget'].freeze_panes in (None,''). Also unzip and check xl/worksheets/sheet*.xml for a <pane .../> element inside <sheetView>. Login flow unchanged: 3 initial iframes → click #btnLogin in landing (frame with that selector), refresh page.frames afterwards (the 1×1 hidden iframe you see is a decoy — find the frame containing [data-testid=\"login-email\"]), fill login-email/login-password, click login-submit, then nav-budget → budget-export → export-workbook with page.expect_download(). Full spec-conformance for sheet content was already verified in iteration_21; only freeze panes remain.",
+  "rca_of_issue": "iteration_22 RCA: The intended fix (ws['!views']=[{state:'frozen',xSplit,ySplit}]) is the correct API PER SHEETJS PRO DOCUMENTATION, but the shipped npm package xlsx@0.18.5 (SheetJS Community Edition, last published on npm in Apr-2022) does not implement pane-writing at all. In /app/frontend/node_modules/xlsx/xlsx.js the function write_ws_xml_sheetviews (line 14753) reads: `function write_ws_xml_sheetviews(ws, opts, idx, wb){var sview={workbookViewId:\"0\"}; …; return writextag(\"sheetViews\", writextag(\"sheetView\", null, sview), {});}` — it never inspects ws['!views'] and never emits <pane/>. Freeze-pane writing was added to SheetJS only in newer builds distributed via cdn.sheetjs.com (0.20+), which the SheetJS team removed from npm during their transition. So changing '!freeze' → '!views' fixes the KEY name mismatch but does nothing because the writer for that key simply doesn't exist in the CE version we depend on. Reproduction: yarn build → login → export → openpyxl → freeze_panes=None on Budget Summary/Annual Grid/Transactions. Mitigation: switch to exceljs (npm, supports frozen views on write via worksheet.views=[{state:'frozen',xSplit,ySplit,topLeftCell,activeCell,activePane:'bottomRight'}]) or upgrade xlsx to the tgz on cdn.sheetjs.com."
+}

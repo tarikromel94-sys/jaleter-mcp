@@ -1173,7 +1173,7 @@ async function exportBudgetXlsx(categories: Category[], incomeSources: any[], tr
 
   const ws1 = XLSX.utils.aoa_to_sheet(summaryRows);
   ws1['!cols'] = [{ wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
-  ws1['!freeze'] = { xSplit: 0, ySplit: 4 };
+  ws1['!views'] = [{ state: 'frozen', xSplit: 0, ySplit: 4 }] as any;
   // Apply $ format to numeric columns C-E (0-indexed 2, 3, 4)
   const rangeS = XLSX.utils.decode_range(ws1['!ref'] || 'A1');
   for (let R = 4; R <= rangeS.e.r; ++R) {
@@ -1246,7 +1246,7 @@ async function exportBudgetXlsx(categories: Category[], incomeSources: any[], tr
   });
   const ws3 = XLSX.utils.aoa_to_sheet(gridRows);
   ws3['!cols'] = [{ wch: 28 }, ...MONTHS.map(() => ({ wch: 11 })), { wch: 14 }];
-  ws3['!freeze'] = { xSplit: 1, ySplit: 4 };
+  ws3['!views'] = [{ state: 'frozen', xSplit: 1, ySplit: 4 }] as any;
   const rangeG = XLSX.utils.decode_range(ws3['!ref'] || 'A1');
   for (let R = 4; R <= rangeG.e.r; ++R) {
     for (let col = 1; col <= 13; col++) {
@@ -1278,7 +1278,7 @@ async function exportBudgetXlsx(categories: Category[], incomeSources: any[], tr
   });
   const ws4 = XLSX.utils.aoa_to_sheet(txRows);
   ws4['!cols'] = [{ wch: 12 }, { wch: 36 }, { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 18 }];
-  ws4['!freeze'] = { xSplit: 0, ySplit: 1 };
+  ws4['!views'] = [{ state: 'frozen', xSplit: 0, ySplit: 1 }] as any;
   const rangeT = XLSX.utils.decode_range(ws4['!ref'] || 'A1');
   for (let R = 1; R <= rangeT.e.r; ++R) {
     const cell = ws4[XLSX.utils.encode_cell({ r: R, c: 4 })];
