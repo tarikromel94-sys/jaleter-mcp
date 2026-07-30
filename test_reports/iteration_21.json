@@ -1,0 +1,49 @@
+{
+  "summary": "Tested the new Excel Budget Export feature end-to-end on web preview. Logged in via WebView iframe with alex+test1@jaleter.app, seeded W-2=$5000, Tithe budget=$500, and a $50 Jul Tithe expense transaction, then downloaded both files from the new Export sheet. Old 'Export to Excel' button is gone; new sheet correctly offers 'Export Budget Workbook (.xlsx)' and 'Export Transactions (.csv)'. Both files download with correct filenames (Jaleter_Budget_2026_2026-07-30.xlsx, Jaleter_Transactions_2026-07-30.csv). Workbook has all 4 sheets in the correct order (Budget Summary, Monthly Budget, Annual Grid, Transactions) with correct Jaleter section grouping (EARN/GIVE/STEWARD/GROW/ENJOY), one-row-per-category (no old Budget/Actual split), section totals, OVERALL block, 12 month blocks in Monthly Budget, correct Annual Grid columns (Category + Jan..Dec + Annual Total), and correct Transactions columns (Date | Merchant / Description | Category | Jaleter Section | Amount | Account). Currency format ($#,##0.00 accounting) is applied to all numeric cells and column widths are correctly set. Seeded numbers match: Tithe row = ['Give','Tithe',500,50,450]; OVERALL Actual Net=-50; Annual Grid Tithe·Jul=500; Transactions R2=['2026-07-30','Church Tithe Test','Tithe','Give',50,'Manual']. CSV columns exactly match spec. FOUND ONE REAL BUG: freeze panes are NOT applied in any sheet — code uses ws['!freeze'] but SheetJS/xlsx expects ws['!views']=[{state:'frozen', xSplit, ySplit, ...}], so the property is silently dropped (openpyxl reports freeze_panes=None on all 3 sheets that should be frozen). Also one minor: Monthly Budget uses short month codes (JAN/FEB/...) instead of full month names (JANUARY/FEBRUARY/...), which is a soft-spec deviation. Regression check: Budget cards + login flow via iframe both still work.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "exportBudgetXlsx — freeze panes",
+        "issue": "Header freeze panes are NOT applied in the output workbook. Code sets ws1['!freeze']={xSplit:0,ySplit:4}, ws3['!freeze']={xSplit:1,ySplit:4}, ws4['!freeze']={xSplit:0,ySplit:1}, but SheetJS ignores '!freeze' — the supported key is '!views'. Verified by opening the downloaded file with openpyxl: Budget Summary/Annual Grid/Transactions all report freeze_panes=None. Fix: replace each ws['!freeze']=… with ws['!views']=[{state:'frozen', xSplit, ySplit, topLeftCell:'…', activePane:'bottomRight'}]. Reference: /app/frontend/app/index.tsx:1176, 1249, 1281",
+        "testID": "export-workbook",
+        "priority": "HIGH"
+      },
+      {
+        "component": "exportBudgetXlsx — Monthly Budget block titles",
+        "issue": "Monthly Budget sheet labels the 12 blocks with short codes (JAN, FEB, ... DEC) rather than full month names (JANUARY ... DECEMBER). This comes from the shared MONTHS constant which uses 3-letter codes. The user spec reads '12 month blocks (January through December)'. Consider mapping to full names via toLocaleString or a lookup when building the Monthly Budget header rows only. Reference: /app/frontend/app/index.tsx:1191 (m.toUpperCase() where MONTHS[i] is 'Jan'…) and MONTHS at line 190.",
+        "testID": "export-workbook",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/tmp/verify_xlsx.py (structure verifier)",
+    "/tmp/dl/Jaleter_Budget_2026_2026-07-30.xlsx (empty-data run)",
+    "/tmp/dl/seeded_Jaleter_Budget_2026_2026-07-30.xlsx (with W-2 5000, Tithe 500, tx 50)",
+    "/tmp/dl/seeded_Jaleter_Transactions_2026-07-30.csv"
+  ],
+  "action_items": [
+    "Replace ws['!freeze'] with ws['!views']=[{state:'frozen', xSplit, ySplit, topLeftCell, activePane:'bottomRight'}] on all 3 sheets in /app/frontend/app/index.tsx (Budget Summary line ~1176, Annual Grid ~1249, Transactions ~1281). Then re-open a fresh export in Excel/Numbers/Sheets to confirm the headers are pinned when scrolling.",
+    "OPTIONAL/MINOR: In the Monthly Budget sheet only, render full month names (JANUARY..DECEMBER) instead of MONTHS[i].toUpperCase() (JAN..DEC) to match the spec wording."
+  ],
+  "critical_code_review_comments": [
+    "exportBudgetXlsx (1119–1311) and exportTransactionsCsv (1313–1350) both pull from the same categories/incomeSources/transactions props — no parallel calculations, confirmed by seeded values matching UI (Tithe $50/$500/$450 shows up unchanged in Budget Summary R12).",
+    "OVERALL block in Budget Summary uses two rows (Total Planned Expenses, Total Actual Expenses) with the opposite column left blank; this reads cleanly in Excel but a reviewer might prefer a single 'Total Expenses' row with both Planned and Actual populated in cols C/D. Not a bug — just a design nit.",
+    "Transactions sheet writes tx.date as slice(0,10) so it's stored as text 'YYYY-MM-DD' rather than an Excel date serial. Fine for display, but sorting by date works only lexicographically — currently that matches ISO ordering so the sort-desc is correct.",
+    "Monthly Budget section totals use 'Income Total' / 'Expense Total' rather than 'Monthly Income Total' / 'Monthly Expense Total' — matches the spec bullet already."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "93%"},
+  "seed_data_creation": "Ran through the UI as the test user alex+test1@jaleter.app: set W-2 Income budgeted=$5000, Give→Tithe budgeted=$500, added expense transaction 'Church Tithe Test' $50 (Give→Tithe, Jul). These state changes are stored client-side (React state) only for the duration of the session; no backend seed data was written.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Everything about the .xlsx export EXCEPT freeze panes is spec-compliant and verified with real seeded numbers. When retesting after the freeze fix, download the workbook and open with openpyxl — freeze_panes should be 'A5' on Budget Summary, 'B5' on Annual Grid, 'A2' on Transactions (or equivalent xSplit/ySplit representation). Login via WebView iframe: page → wait for <iframe> → contentFrame → click '#btnLogin' → fill [data-testid=login-email/password/submit]. Budget seed testIDs: budget-earn-w2 → earn-edit-amount/save, budget-sub-tithe → budget-edit-amount/save. Transaction: nav-transactions → tx-add → tx-name/tx-amount/tx-group-give/tx-sub-tithe/tx-save. Export: nav-budget → budget-export → export-workbook OR export-transactions-csv (Playwright expect_download works).",
+  "rca_of_issue": "Freeze panes bug root cause: SheetJS (xlsx@0.18.5) writes freeze information from worksheet['!views'] (an array of View objects with state:'frozen', xSplit, ySplit). It does NOT recognise a top-level ws['!freeze'] key. The current code sets ws['!freeze']={xSplit,ySplit}, which is silently ignored on XLSX.write(), so the resulting file has no <sheetViews><pane/></sheetViews> element. Reproduction: (1) log in and export budget workbook, (2) open with openpyxl → sheet.freeze_panes is None on Budget Summary, Annual Grid, and Transactions; opening in Excel shows the header row scrolling with the data. Mitigation: change to ws1['!views']=[{state:'frozen', xSplit:0, ySplit:4, topLeftCell:'A5', activePane:'bottomLeft'}] etc."
+}

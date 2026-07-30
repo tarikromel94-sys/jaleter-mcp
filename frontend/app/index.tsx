@@ -1116,25 +1116,219 @@ function toCsv(rows: (string | number)[][]): string {
   };
   return rows.map(r => r.map(esc).join(',')).join('\n');
 }
-async function exportBudgetCsv(categories: Category[], incomeSources: any[], transactions: any[], onToast: (m: string) => void) {
-  const header = ['Type', 'Category', 'Subcategory', ...MONTHS, 'Annual Total'];
-  const rows: (string | number)[][] = [header];
+async function exportBudgetXlsx(categories: Category[], incomeSources: any[], transactions: any[], onToast: (m: string) => void) {
+  const XLSX = await import('xlsx');
+  const yearLabel = new Date().getFullYear();
+  const dollarFmt = '_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)';
+
+  // Helpers to compute the same totals used across the app
+  const incomeActualForMonth = (srcId: string, mi: number) => transactions.filter((t: Tx) => t.type === 'income' && t.groupId === srcId && t.period === MONTHS[mi]).reduce((s: number, t: Tx) => s + t.amount, 0);
+  const expenseActualForMonth = (subId: string, mi: number) => transactions.filter((t: Tx) => t.type === 'expense' && t.detailId === subId && t.period === MONTHS[mi]).reduce((s: number, t: Tx) => s + t.amount, 0);
+  const incomeAnnualActual = (srcId: string) => MONTHS.reduce((sum: number, _: string, i: number) => sum + incomeActualForMonth(srcId, i), 0);
+  const expenseAnnualActual = (subId: string) => MONTHS.reduce((sum: number, _: string, i: number) => sum + expenseActualForMonth(subId, i), 0);
+  const incomePlannedAnnual = (src: any) => (src.budgeted || 0) * 12;
+
+  const wb = XLSX.utils.book_new();
+
+  // ---------- Sheet 1: Budget Summary ----------
+  const summaryRows: any[][] = [];
+  summaryRows.push(['Jaleter — Budget Summary'], [`Year ${yearLabel}`], []);
+  summaryRows.push(['Section', 'Category', 'Planned', 'Actual', 'Remaining']);
+
+  let grandPlannedIncome = 0, grandActualIncome = 0;
+  let grandPlannedExpense = 0, grandActualExpense = 0;
+
+  // Earn section
+  summaryRows.push(['EARN']);
   incomeSources.forEach((src: any) => {
-    const monthly = src.budgeted;
-    const monthActuals = MONTHS.map((m: string) => transactions.filter((t: Tx) => t.type === 'income' && t.groupId === src.id && t.period === m).reduce((s: number, t: Tx) => s + t.amount, 0));
-    rows.push(['Earn', 'Earn', src.name, ...MONTHS.map(() => monthly), monthly * 12]);
-    rows.push(['Actual', 'Earn', src.name, ...monthActuals, monthActuals.reduce((s, x) => s + x, 0)]);
+    const p = incomePlannedAnnual(src);
+    const a = incomeAnnualActual(src.id);
+    grandPlannedIncome += p; grandActualIncome += a;
+    summaryRows.push(['Earn', src.name, p, a, a - p]);
   });
+  summaryRows.push(['', 'Earn Total', grandPlannedIncome, grandActualIncome, grandActualIncome - grandPlannedIncome]);
+  summaryRows.push([]);
+
+  // Expense sections (Give / Steward / Grow / Enjoy — plus any custom)
   categories.forEach((c: Category) => {
+    summaryRows.push([c.name.toUpperCase()]);
+    let secPlanned = 0, secActual = 0;
     c.subcategories.forEach((sub: Subcategory) => {
-      const perMonth = MONTHS.map((_: string, i: number) => monthlyAmount(sub, i));
-      const perMonthActual = MONTHS.map((m: string) => transactions.filter((t: Tx) => t.type === 'expense' && (t.detailId === sub.id) && t.period === m).reduce((s: number, t: Tx) => s + t.amount, 0));
-      rows.push(['Budget', c.name, sub.name, ...perMonth, annualAmount(sub)]);
-      rows.push(['Actual', c.name, sub.name, ...perMonthActual, perMonthActual.reduce((s, x) => s + x, 0)]);
+      const p = annualAmount(sub);
+      const a = expenseAnnualActual(sub.id);
+      secPlanned += p; secActual += a;
+      grandPlannedExpense += p; grandActualExpense += a;
+      summaryRows.push([c.name, sub.name, p, a, p - a]);
+    });
+    summaryRows.push(['', `${c.name} Total`, secPlanned, secActual, secPlanned - secActual]);
+    summaryRows.push([]);
+  });
+
+  summaryRows.push(['OVERALL']);
+  summaryRows.push(['', 'Total Income', grandPlannedIncome, grandActualIncome, grandActualIncome - grandPlannedIncome]);
+  summaryRows.push(['', 'Total Planned Expenses', grandPlannedExpense, '', '']);
+  summaryRows.push(['', 'Total Actual Expenses', '', grandActualExpense, '']);
+  summaryRows.push(['', 'Planned Net (Income − Planned Exp)', grandPlannedIncome, grandPlannedExpense, grandPlannedIncome - grandPlannedExpense]);
+  summaryRows.push(['', 'Actual Net (Income − Actual Exp)', '', '', grandActualIncome - grandActualExpense]);
+
+  const ws1 = XLSX.utils.aoa_to_sheet(summaryRows);
+  ws1['!cols'] = [{ wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+  ws1['!freeze'] = { xSplit: 0, ySplit: 4 };
+  // Apply $ format to numeric columns C-E (0-indexed 2, 3, 4)
+  const rangeS = XLSX.utils.decode_range(ws1['!ref'] || 'A1');
+  for (let R = 4; R <= rangeS.e.r; ++R) {
+    for (const col of [2, 3, 4]) {
+      const cell = ws1[XLSX.utils.encode_cell({ r: R, c: col })];
+      if (cell && typeof cell.v === 'number') cell.z = dollarFmt;
+    }
+  }
+  XLSX.utils.book_append_sheet(wb, ws1, 'Budget Summary');
+
+  // ---------- Sheet 2: Monthly Budget (one sheet, all 12 months stacked) ----------
+  const monthlyRows: any[][] = [];
+  monthlyRows.push(['Jaleter — Monthly Budget'], [`Year ${yearLabel}`], []);
+  MONTHS.forEach((m: string, mi: number) => {
+    monthlyRows.push([m.toUpperCase()]);
+    monthlyRows.push(['Section', 'Category', 'Planned', 'Actual', 'Remaining']);
+    let monthPlannedIncome = 0, monthActualIncome = 0;
+    let monthPlannedExpense = 0, monthActualExpense = 0;
+    // Earn
+    incomeSources.forEach((src: any) => {
+      const p = src.budgeted || 0;
+      const a = incomeActualForMonth(src.id, mi);
+      monthPlannedIncome += p; monthActualIncome += a;
+      monthlyRows.push(['Earn', src.name, p, a, a - p]);
+    });
+    // Expense categories
+    categories.forEach((c: Category) => {
+      c.subcategories.forEach((sub: Subcategory) => {
+        const p = monthlyAmount(sub, mi);
+        const a = expenseActualForMonth(sub.id, mi);
+        monthPlannedExpense += p; monthActualExpense += a;
+        monthlyRows.push([c.name, sub.name, p, a, p - a]);
+      });
+    });
+    monthlyRows.push(['', 'Income Total', monthPlannedIncome, monthActualIncome, monthActualIncome - monthPlannedIncome]);
+    monthlyRows.push(['', 'Expense Total', monthPlannedExpense, monthActualExpense, monthPlannedExpense - monthActualExpense]);
+    monthlyRows.push(['', 'Net (Actual)', '', '', monthActualIncome - monthActualExpense]);
+    monthlyRows.push([]);
+  });
+  const ws2 = XLSX.utils.aoa_to_sheet(monthlyRows);
+  ws2['!cols'] = [{ wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+  const rangeM = XLSX.utils.decode_range(ws2['!ref'] || 'A1');
+  for (let R = 3; R <= rangeM.e.r; ++R) {
+    for (const col of [2, 3, 4]) {
+      const cell = ws2[XLSX.utils.encode_cell({ r: R, c: col })];
+      if (cell && typeof cell.v === 'number') cell.z = dollarFmt;
+    }
+  }
+  XLSX.utils.book_append_sheet(wb, ws2, 'Monthly Budget');
+
+  // ---------- Sheet 3: Annual Grid ----------
+  const gridRows: any[][] = [];
+  gridRows.push(['Jaleter — Annual Grid'], [`Year ${yearLabel}`], []);
+  gridRows.push(['Category', ...MONTHS, 'Annual Total']);
+  // Earn
+  gridRows.push(['EARN']);
+  incomeSources.forEach((src: any) => {
+    const monthly = src.budgeted || 0;
+    const months = MONTHS.map(() => monthly);
+    gridRows.push([`Earn · ${src.name}`, ...months, monthly * 12]);
+  });
+  // Expenses grouped by category
+  categories.forEach((c: Category) => {
+    gridRows.push([c.name.toUpperCase()]);
+    c.subcategories.forEach((sub: Subcategory) => {
+      const monthsArr = MONTHS.map((_: string, i: number) => monthlyAmount(sub, i));
+      const total = monthsArr.reduce((s: number, x: number) => s + x, 0);
+      gridRows.push([`${c.name} · ${sub.name}`, ...monthsArr, total]);
     });
   });
+  const ws3 = XLSX.utils.aoa_to_sheet(gridRows);
+  ws3['!cols'] = [{ wch: 28 }, ...MONTHS.map(() => ({ wch: 11 })), { wch: 14 }];
+  ws3['!freeze'] = { xSplit: 1, ySplit: 4 };
+  const rangeG = XLSX.utils.decode_range(ws3['!ref'] || 'A1');
+  for (let R = 4; R <= rangeG.e.r; ++R) {
+    for (let col = 1; col <= 13; col++) {
+      const cell = ws3[XLSX.utils.encode_cell({ r: R, c: col })];
+      if (cell && typeof cell.v === 'number') cell.z = dollarFmt;
+    }
+  }
+  XLSX.utils.book_append_sheet(wb, ws3, 'Annual Grid');
+
+  // ---------- Sheet 4: Transactions ----------
+  const catNameById: Record<string, string> = {};
+  const sectionByDetail: Record<string, string> = {};
+  categories.forEach((c: Category) => {
+    c.subcategories.forEach((sub: Subcategory) => {
+      catNameById[sub.id] = sub.name;
+      sectionByDetail[sub.id] = c.name;
+    });
+  });
+  const incNameById: Record<string, string> = {};
+  incomeSources.forEach((src: any) => { incNameById[src.id] = src.name; });
+  const txRows: any[][] = [['Date', 'Merchant / Description', 'Category', 'Jaleter Section', 'Amount', 'Account']];
+  const sorted = [...transactions].sort((a: any, b: any) => (b.date || '').localeCompare(a.date || ''));
+  sorted.forEach((tx: any) => {
+    let categoryName = ''; let sectionName = '';
+    if (tx.type === 'income') { categoryName = incNameById[tx.groupId] || 'Income'; sectionName = 'Earn'; }
+    else { categoryName = catNameById[tx.detailId] || (tx.detailId || ''); sectionName = sectionByDetail[tx.detailId] || ''; }
+    const dateStr = tx.date ? (typeof tx.date === 'string' ? tx.date.slice(0, 10) : new Date(tx.date).toISOString().slice(0, 10)) : '';
+    txRows.push([dateStr, tx.name || '', categoryName, sectionName, tx.amount || 0, tx.origin || 'Manual']);
+  });
+  const ws4 = XLSX.utils.aoa_to_sheet(txRows);
+  ws4['!cols'] = [{ wch: 12 }, { wch: 36 }, { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 18 }];
+  ws4['!freeze'] = { xSplit: 0, ySplit: 1 };
+  const rangeT = XLSX.utils.decode_range(ws4['!ref'] || 'A1');
+  for (let R = 1; R <= rangeT.e.r; ++R) {
+    const cell = ws4[XLSX.utils.encode_cell({ r: R, c: 4 })];
+    if (cell && typeof cell.v === 'number') cell.z = dollarFmt;
+  }
+  XLSX.utils.book_append_sheet(wb, ws4, 'Transactions');
+
+  // Emit and share/download
+  const filename = `Jaleter_Budget_${yearLabel}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  try {
+    if (Platform.OS === 'web') {
+      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+      onToast('Downloaded Excel workbook.');
+    } else {
+      const FileSystem = await import('expo-file-system');
+      const Sharing = await import('expo-sharing');
+      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
+      const uri = `${FileSystem.cacheDirectory}${filename}`;
+      await FileSystem.writeAsStringAsync(uri, wbout, { encoding: FileSystem.EncodingType.Base64 });
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) { await Sharing.shareAsync(uri, { mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', dialogTitle: 'Export Budget Workbook' }); onToast('Ready to share.'); }
+      else { onToast('Saved to app cache.'); }
+    }
+  } catch (e: any) { onToast(e?.message || 'Export failed.'); }
+}
+
+async function exportTransactionsCsv(categories: Category[], incomeSources: any[], transactions: any[], onToast: (m: string) => void) {
+  const catNameById: Record<string, string> = {};
+  const sectionByDetail: Record<string, string> = {};
+  categories.forEach((c: Category) => {
+    c.subcategories.forEach((sub: Subcategory) => { catNameById[sub.id] = sub.name; sectionByDetail[sub.id] = c.name; });
+  });
+  const incNameById: Record<string, string> = {};
+  incomeSources.forEach((src: any) => { incNameById[src.id] = src.name; });
+  const rows: (string | number)[][] = [['Date', 'Merchant', 'Category', 'Jaleter Section', 'Type', 'Amount', 'Account', 'Month']];
+  const sorted = [...transactions].sort((a: any, b: any) => (b.date || '').localeCompare(a.date || ''));
+  sorted.forEach((tx: any) => {
+    let categoryName = ''; let sectionName = '';
+    if (tx.type === 'income') { categoryName = incNameById[tx.groupId] || 'Income'; sectionName = 'Earn'; }
+    else { categoryName = catNameById[tx.detailId] || (tx.detailId || ''); sectionName = sectionByDetail[tx.detailId] || ''; }
+    const dateStr = tx.date ? (typeof tx.date === 'string' ? tx.date.slice(0, 10) : new Date(tx.date).toISOString().slice(0, 10)) : '';
+    rows.push([dateStr, tx.name || '', categoryName, sectionName, tx.type || '', tx.amount || 0, tx.origin || 'Manual', tx.period || '']);
+  });
   const csv = toCsv(rows);
-  const filename = `Jaleter_Budget_${new Date().toISOString().slice(0, 10)}.csv`;
+  const filename = `Jaleter_Transactions_${new Date().toISOString().slice(0, 10)}.csv`;
   try {
     if (Platform.OS === 'web') {
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -1142,14 +1336,14 @@ async function exportBudgetCsv(categories: Category[], incomeSources: any[], tra
       const a = document.createElement('a');
       a.href = url; a.download = filename; a.click();
       URL.revokeObjectURL(url);
-      onToast('Downloaded budget CSV.');
+      onToast('Downloaded transactions CSV.');
     } else {
       const FileSystem = await import('expo-file-system');
       const Sharing = await import('expo-sharing');
       const uri = `${FileSystem.cacheDirectory}${filename}`;
       await FileSystem.writeAsStringAsync(uri, csv, { encoding: FileSystem.EncodingType.UTF8 });
       const canShare = await Sharing.isAvailableAsync();
-      if (canShare) { await Sharing.shareAsync(uri, { mimeType: 'text/csv', dialogTitle: 'Export Budget' }); onToast('Ready to share.'); }
+      if (canShare) { await Sharing.shareAsync(uri, { mimeType: 'text/csv', dialogTitle: 'Export Transactions' }); onToast('Ready to share.'); }
       else { onToast('Saved to app cache.'); }
     }
   } catch (e: any) { onToast(e?.message || 'Export failed.'); }
@@ -1166,6 +1360,7 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
   const [editingEarn, setEditingEarn] = useState<any>(null);
   const [addingEarn, setAddingEarn] = useState(false);
   const [addingCategory, setAddingCategory] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [newEarnName, setNewEarnName] = useState('');
   const [newCatName, setNewCatName] = useState('');
   const [newCatTagline, setNewCatTagline] = useState('');
@@ -1309,11 +1504,31 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
           <Ionicons name="add-circle-outline" size={15} color="#9a6d32" />
           <Text style={s.budgetActionText}>Add Category</Text>
         </Pressable>
-        <Pressable style={s.budgetActionBtn} onPress={() => exportBudgetCsv(categories, incomeSources, transactions, setToast)} testID="budget-export">
+        <Pressable style={s.budgetActionBtn} onPress={() => setExportMenuOpen(true)} testID="budget-export">
           <Ionicons name="download-outline" size={15} color="#9a6d32" />
-          <Text style={s.budgetActionText}>Export to Excel</Text>
+          <Text style={s.budgetActionText}>Export</Text>
         </Pressable>
       </View>
+      <Sheet visible={exportMenuOpen} close={() => setExportMenuOpen(false)} title="Export" subtitle="Choose a format. All numbers come from your current Budget + Transactions.">
+        <View>
+          <Pressable style={s.moreGridBtn} onPress={async () => { setExportMenuOpen(false); await exportBudgetXlsx(categories, incomeSources, transactions, setToast); }} testID="export-workbook">
+            <View style={s.moreGridIcon}><Ionicons name="grid-outline" size={20} color={C.goldEyebrow} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 12, fontWeight: '700' }}>Export Budget Workbook (.xlsx)</Text>
+              <Text style={{ fontSize: 9, color: C.muted2 }}>Formatted workbook · Budget Summary, Monthly Budget, Annual Grid, Transactions.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#aaa39a" />
+          </Pressable>
+          <Pressable style={s.moreGridBtn} onPress={async () => { setExportMenuOpen(false); await exportTransactionsCsv(categories, incomeSources, transactions, setToast); }} testID="export-transactions-csv">
+            <View style={s.moreGridIcon}><Ionicons name="document-text-outline" size={20} color={C.goldEyebrow} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 12, fontWeight: '700' }}>Export Transactions (.csv)</Text>
+              <Text style={{ fontSize: 9, color: C.muted2 }}>Raw transaction rows only — for spreadsheets or accounting software.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#aaa39a" />
+          </Pressable>
+        </View>
+      </Sheet>
 
       {view === 'cards' ? (
         <>
