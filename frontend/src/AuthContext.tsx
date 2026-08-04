@@ -13,6 +13,7 @@ export type AuthUser = {
   email: string;
   provider: 'password' | 'google';
   picture?: string | null;
+  is_admin?: boolean;
 };
 
 type AuthState = {

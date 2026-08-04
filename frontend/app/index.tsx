@@ -15,6 +15,8 @@ import { AuthProvider, useAuth, apiCall } from '@/src/AuthContext';
 import { C, D, F } from '@/src/jaleterTheme';
 import { dailyQuote, MONEY, EXACT, QuoteType } from '@/src/quoteLibrary';
 import { WELCOME_HTML } from '@/src/welcomeHtml';
+import { ConnectPlaidButton } from '@/src/PlaidLink';
+import { SupportSheet } from '@/src/SupportSheet';
 
 const STORAGE_KEY = 'jaleter-state-v2';
 // One-time migration: any legacy v1 cache (which was seeded with mock $ figures) must be discarded.
@@ -2695,6 +2697,7 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
   const [confirmReset, setConfirmReset] = useState(false);
   const rows: [string, string, string, any][] = [
     ['accounts', 'Linked Accounts', `${linkedAccounts.length} connected`, 'link-outline'],
+    ['support', 'Help & Support', 'Contact us, FAQs, ticket history', 'help-buoy-outline'],
     ['notifications', 'Notification Details', 'Manage every reminder', 'notifications-outline'],
     ['terms', 'Terms of Use', 'Membership terms', 'document-text-outline'],
     ['privacy', 'Privacy Policy', 'Bank-data protection', 'lock-closed-outline'],
@@ -2816,6 +2819,7 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
       <LegalSheet visible={sheet === 'privacy'} close={() => setSheet(null)} type="Privacy Policy" />
       <NotificationsSheet visible={sheet === 'notifications'} close={() => setSheet(null)} onSave={(m: string) => { setSheet(null); setToast(m); }} />
       <AccountLinkSheet visible={sheet === 'accounts'} close={() => setSheet(null)} onConfirm={(accs: any[]) => { addLinked(accs); setSheet(null); setToast('Accounts connected and syncing.'); }} />
+      <SupportSheet visible={sheet === 'support'} close={() => setSheet(null)} />
       {toast ? <Toast message={toast} onHide={() => setToast('')} /> : null}
     </ScrollView>
   );
@@ -3030,11 +3034,14 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
     } catch { setExisting([]); }
   };
   useEffect(() => { if (visible) { setMode('menu'); setError(''); setMessage(''); setInstitution(''); setNotes(''); setBusy(false); refresh(); } }, [visible]);
-  const syncOne = async (link_id: string) => {
+  const syncOne = async (link_id: string, provider?: string) => {
     if (!link_id) return;
     setSyncingId(link_id); setError('');
     try {
-      const data = await apiCall(`/api/accounts/link/${link_id}/sync`, { method: 'POST' }, token);
+      const path = provider === 'plaid'
+        ? `/api/plaid/sync?item_id=${encodeURIComponent(link_id)}`
+        : `/api/accounts/link/${link_id}/sync`;
+      const data = await apiCall(path, { method: 'POST' }, token);
       setMessage(`Refreshed. ${data?.synced ?? 0} new transactions.`);
       await refresh();
     } catch (e: any) { setError(e?.message || 'Sync failed.'); }
@@ -3044,8 +3051,9 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
     if (!link_id) return;
     setSyncingId(link_id); setError('');
     try {
-      const path = provider === 'file' ? `/api/accounts/link/${link_id}` : `/api/accounts/link/${link_id}`;
-      // Both providers use the same DELETE path in this backend.
+      const path = provider === 'plaid'
+        ? `/api/plaid/item/${encodeURIComponent(link_id)}`
+        : `/api/accounts/link/${link_id}`;
       await apiCall(path, { method: 'DELETE' }, token);
       setMessage('Account removed.');
       await refresh();
@@ -3074,17 +3082,17 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
               {existing.map((row: any, i: number) => {
                 const key = row.link_id || `${row.provider}-${i}`;
                 const isSyncing = syncingId === row.link_id;
-                const canSync = row.provider === 'simplefin' && !!row.link_id;
+                const canSync = (row.provider === 'simplefin' || row.provider === 'plaid') && !!row.link_id;
                 return (
                   <View key={key} style={s.linkedRow}>
-                    <View style={s.linkedIcon}><Ionicons name={row.provider === 'file' ? 'document-attach-outline' : row.provider === 'snaptrade' ? 'trending-up' : 'card-outline'} size={16} color={C.goldEyebrow} /></View>
+                    <View style={s.linkedIcon}><Ionicons name={row.provider === 'file' ? 'document-attach-outline' : row.provider === 'snaptrade' ? 'trending-up' : row.provider === 'plaid' ? 'business-outline' : 'card-outline'} size={16} color={C.goldEyebrow} /></View>
                     <View style={{ flex: 1 }}>
                       <Text style={{ fontSize: 11, fontWeight: '700', color: C.ink }}>{row.name || row.account_name || 'Account'}</Text>
-                      <Text style={{ fontSize: 8, color: C.muted2 }}>{row.org_name || (row.provider === 'file' ? 'Imported' : row.provider === 'snaptrade' ? 'SnapTrade' : 'Linked')}{row.balance !== undefined ? ` · ${MONEY(row.balance)}` : ''}</Text>
+                      <Text style={{ fontSize: 8, color: C.muted2 }}>{row.org_name || (row.provider === 'file' ? 'Imported' : row.provider === 'snaptrade' ? 'SnapTrade' : row.provider === 'plaid' ? 'Plaid' : 'Linked')}{row.balance !== undefined ? ` · ${MONEY(row.balance)}` : ''}</Text>
                       {row.error ? <Text style={{ fontSize: 8, color: C.danger }}>{row.error}</Text> : null}
                     </View>
                     {canSync && (
-                      <Pressable testID={`link-sync-${row.link_id}`} onPress={() => syncOne(row.link_id)} disabled={isSyncing} style={s.linkedBtn}>
+                      <Pressable testID={`link-sync-${row.link_id}`} onPress={() => syncOne(row.link_id, row.provider)} disabled={isSyncing} style={s.linkedBtn}>
                         <Ionicons name={isSyncing ? 'hourglass-outline' : 'refresh-outline'} size={16} color={C.ink3} />
                       </Pressable>
                     )}
@@ -3101,6 +3109,17 @@ const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
             </View>
           )}
           <Text style={{ fontSize: 9, fontWeight: '700', color: C.muted, letterSpacing: 1.2, marginTop: 4 }}>ADD AN ACCOUNT</Text>
+          <ConnectPlaidButton
+            token={token}
+            testID="plaid-connect"
+            onLinked={async (name: string) => {
+              setMessage(`Connected ${name}. Refreshing…`);
+              // Kick off a sync so transactions land in bank_transactions immediately.
+              try { await apiCall('/api/plaid/sync', { method: 'POST' }, token); } catch { /* silent */ }
+              await refresh();
+              onConfirm([]);
+            }}
+          />
           {[
             { id: 'file', icon: 'cloud-upload-outline' as const, label: 'Import statement (recommended)', sub: 'Upload CSV, OFX, QFX, or QBO from any bank.' },
             { id: 'guides', icon: 'library-outline' as const, label: 'How to download from your bank', sub: 'Step-by-step guides for 10+ major banks.' },

@@ -33,6 +33,15 @@ from simplefin_service import (
     fetch_accounts as sf_fetch_accounts,
     map_transaction as sf_map_transaction,
 )
+import plaid_service
+from plaid_service import PlaidError
+import support_service
+from support_service import (
+    TicketCreate,
+    ReplyCreate,
+    AdminUpdate,
+    AdminNoteCreate,
+)
 from providers import ProviderError, build_registry, catalog as provider_catalog
 from fastapi import File, UploadFile, Form
 from payments_service import (
@@ -92,6 +101,7 @@ class UserPublic(BaseModel):
     email: EmailStr
     provider: str  # 'password' | 'google'
     picture: Optional[str] = None
+    is_admin: bool = False
 
 
 class AuthResponse(BaseModel):
@@ -154,6 +164,7 @@ def public_user(u: dict) -> UserPublic:
         email=u['email'],
         provider=u.get('provider', 'password'),
         picture=u.get('picture'),
+        is_admin=bool(u.get('is_admin')),
     )
 
 
@@ -213,6 +224,25 @@ async def _startup():
     await db.payment_transactions.create_index([('user_id', 1), ('created_at', -1)])
     await db.coaching_bookings.create_index('booking_id', unique=True)
     await db.coaching_bookings.create_index([('user_id', 1), ('scheduled_at', -1)])
+    # Plaid
+    await db.plaid_items.create_index('item_id', unique=True)
+    await db.plaid_items.create_index([('user_id', 1)])
+    # Support tickets
+    await db.support_tickets.create_index('ticket_id', unique=True)
+    await db.support_tickets.create_index([('user_id', 1), ('created_at', -1)])
+    await db.support_tickets.create_index([('status', 1), ('created_at', -1)])
+    # Seed the primary admin account (idempotent)
+    try:
+        await support_service.ensure_admin_seed(
+            db,
+            hash_password=hash_password,
+            new_user_id=new_user_id,
+            email='support@jaleter.com',
+            password='Tarik0731!',
+            name='Jaleter Support',
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning('Support admin seed skipped: %s', e)
 
 
 @app.on_event('shutdown')
@@ -749,6 +779,13 @@ async def list_all_accounts(current_user: dict = Depends(get_current_user)):
                 combined.append({**row, 'provider': pid, 'kind': 'investment' if pid == 'snaptrade' else 'file'})
         except Exception as e:  # noqa: BLE001
             combined.append({'provider': pid, 'error': str(e)})
+    # Plaid
+    try:
+        rows = await _plaid_list_accounts_for_user(current_user['user_id'])
+        for row in rows:
+            combined.append({**row, 'provider': 'plaid', 'kind': 'bank'})
+    except Exception as e:  # noqa: BLE001
+        combined.append({'provider': 'plaid', 'error': str(e)})
     return {'accounts': combined}
 
 
@@ -873,6 +910,276 @@ async def download_asset(key: str):
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="File missing")
     return _FileResponse(path, media_type=media, filename=filename)
+
+
+# ============================================================================
+# PLAID BANKING INTEGRATION
+# ============================================================================
+class PlaidExchangeRequest(BaseModel):
+    public_token: str
+    institution_name: Optional[str] = None
+    institution_id: Optional[str] = None
+
+
+def _plaid_webhook_url(request: Request) -> Optional[str]:
+    """Best-effort public webhook URL derived from the incoming request."""
+    forwarded_proto = request.headers.get('x-forwarded-proto') or request.url.scheme
+    forwarded_host = request.headers.get('x-forwarded-host') or request.headers.get('host') or ''
+    if not forwarded_host or 'localhost' in forwarded_host or '127.0.0.1' in forwarded_host:
+        return None
+    return f'{forwarded_proto}://{forwarded_host}/api/plaid/webhook'
+
+
+async def _plaid_list_accounts_for_user(user_id: str) -> list[dict]:
+    cursor = db.plaid_items.find({'user_id': user_id})
+    items = await cursor.to_list(length=100)
+    rows: list[dict] = []
+    for item in items:
+        item_id = item.get('item_id')
+        try:
+            token = plaid_service.decrypt(item['access_token_encrypted'])
+            accts = await plaid_service.fetch_accounts(token)
+        except PlaidError as e:
+            rows.append({'link_id': item_id, 'org_name': item.get('institution_name'), 'error': str(e)})
+            continue
+        org_name = item.get('institution_name') or 'Bank'
+        org_domain = item.get('institution_domain')
+        last_sync = item.get('last_sync_at')
+        for a in accts:
+            balances = a.get('balances') or {}
+            balance = balances.get('current')
+            if balance is None:
+                balance = balances.get('available') or 0
+            try:
+                balance = float(balance or 0)
+            except (TypeError, ValueError):
+                balance = 0.0
+            rows.append({
+                'link_id': item_id,
+                'account_id': a.get('account_id'),
+                'name': a.get('name') or a.get('official_name') or 'Account',
+                'currency': balances.get('iso_currency_code') or 'USD',
+                'balance': balance,
+                'balance_date': None,
+                'org_name': org_name,
+                'org_domain': org_domain,
+                'last_sync_at': last_sync.isoformat() if isinstance(last_sync, datetime) else last_sync,
+                'mask': a.get('mask'),
+                'subtype': a.get('subtype'),
+                'type': a.get('type'),
+            })
+    return rows
+
+
+@api_router.get('/plaid/status')
+async def plaid_status():
+    return {
+        'configured': plaid_service.is_configured(),
+        'env': plaid_service.PLAID_ENV,
+        'products': plaid_service.PLAID_PRODUCTS,
+        'country_codes': plaid_service.PLAID_COUNTRY_CODES,
+    }
+
+
+@api_router.post('/plaid/link-token')
+@limiter.limit('20/minute')
+async def plaid_link_token(request: Request, current_user: dict = Depends(get_current_user)):
+    webhook = _plaid_webhook_url(request)
+    try:
+        data = await plaid_service.create_link_token(current_user['user_id'], webhook_url=webhook)
+    except PlaidError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return data
+
+
+@api_router.post('/plaid/exchange-public-token')
+async def plaid_exchange(payload: PlaidExchangeRequest, current_user: dict = Depends(get_current_user)):
+    if not payload.public_token:
+        raise HTTPException(status_code=400, detail='public_token is required')
+    try:
+        exchange = await plaid_service.exchange_public_token(payload.public_token)
+    except PlaidError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    access_token = exchange['access_token']
+    item_id = exchange['item_id']
+    try:
+        encrypted = plaid_service.encrypt(access_token)
+    except PlaidError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    # Enrich institution info if id was provided
+    inst_name = (payload.institution_name or '').strip() or None
+    inst_domain = None
+    if payload.institution_id:
+        info = await plaid_service.fetch_institution(payload.institution_id)
+        inst_name = inst_name or info.get('name')
+        inst_domain = (info.get('url') or '').replace('https://', '').replace('http://', '').split('/', 1)[0] or None
+    now = datetime.now(timezone.utc)
+    await db.plaid_items.update_one(
+        {'item_id': item_id},
+        {'$set': {
+            'user_id': current_user['user_id'],
+            'item_id': item_id,
+            'access_token_encrypted': encrypted,
+            'institution_id': payload.institution_id,
+            'institution_name': inst_name or 'Bank',
+            'institution_domain': inst_domain,
+            'cursor': '',
+            'created_at': now,
+            'updated_at': now,
+            'last_sync_at': None,
+        }},
+        upsert=True,
+    )
+    return {'item_id': item_id, 'institution_name': inst_name or 'Bank'}
+
+
+@api_router.get('/plaid/accounts')
+async def plaid_accounts(current_user: dict = Depends(get_current_user)):
+    rows = await _plaid_list_accounts_for_user(current_user['user_id'])
+    return {'accounts': rows}
+
+
+async def _plaid_sync_item(user_id: str, item: dict) -> dict:
+    try:
+        token = plaid_service.decrypt(item['access_token_encrypted'])
+    except PlaidError as e:
+        return {'item_id': item.get('item_id'), 'error': str(e)}
+    try:
+        result = await plaid_service.sync_transactions(token, item.get('cursor') or '')
+    except PlaidError as e:
+        return {'item_id': item.get('item_id'), 'error': str(e)}
+    org_name = item.get('institution_name') or 'Bank'
+    item_id = item['item_id']
+    added = 0
+    for txn in (result['added'] or []) + (result['modified'] or []):
+        mapped = plaid_service.map_plaid_transaction(user_id, item_id, txn.get('account_id') or '', org_name, txn)
+        try:
+            up = await db.bank_transactions.update_one(
+                {'user_id': mapped['user_id'], 'account_id': mapped['account_id'], 'external_id': mapped['external_id']},
+                {'$set': mapped},
+                upsert=True,
+            )
+            if up.upserted_id:
+                added += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning('bank_transactions upsert failed (plaid): %s', e)
+    for txn in result['removed'] or []:
+        try:
+            await db.bank_transactions.delete_one({
+                'user_id': user_id, 'account_id': txn.get('account_id') or '', 'external_id': txn.get('transaction_id') or ''
+            })
+        except Exception as e:  # noqa: BLE001
+            logger.warning('bank_transactions delete failed (plaid): %s', e)
+    await db.plaid_items.update_one(
+        {'item_id': item_id},
+        {'$set': {'cursor': result['cursor'], 'last_sync_at': datetime.now(timezone.utc), 'updated_at': datetime.now(timezone.utc)}},
+    )
+    return {'item_id': item_id, 'synced': added}
+
+
+@api_router.post('/plaid/sync')
+async def plaid_sync(current_user: dict = Depends(get_current_user), item_id: Optional[str] = None):
+    query: dict = {'user_id': current_user['user_id']}
+    if item_id:
+        query['item_id'] = item_id
+    items = await db.plaid_items.find(query).to_list(length=50)
+    results = []
+    for item in items:
+        results.append(await _plaid_sync_item(current_user['user_id'], item))
+    total_added = sum(r.get('synced', 0) for r in results)
+    return {'synced': total_added, 'items': results}
+
+
+@api_router.delete('/plaid/item/{item_id}')
+async def plaid_unlink(item_id: str, current_user: dict = Depends(get_current_user)):
+    doc = await db.plaid_items.find_one({'item_id': item_id, 'user_id': current_user['user_id']})
+    if not doc:
+        raise HTTPException(status_code=404, detail='Linked item not found')
+    # Best-effort remote revoke; we always delete locally.
+    try:
+        token = plaid_service.decrypt(doc['access_token_encrypted'])
+        await plaid_service._post('/item/remove', {'access_token': token})
+    except Exception as e:  # noqa: BLE001
+        logger.info('plaid /item/remove failed (non-fatal): %s', e)
+    await db.plaid_items.delete_one({'item_id': item_id, 'user_id': current_user['user_id']})
+    return {'ok': True}
+
+
+@api_router.post('/plaid/webhook')
+async def plaid_webhook(request: Request):
+    """Plaid webhook receiver. Fast-ACKs, then background-syncs the item.
+
+    Note: In production, verify the Plaid-Signature JWT against the raw body.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail='invalid webhook body')
+    item_id = payload.get('item_id')
+    webhook_type = payload.get('webhook_type')
+    if item_id and webhook_type in {
+        'SYNC_UPDATES_AVAILABLE', 'DEFAULT_UPDATE', 'INITIAL_UPDATE',
+        'HISTORICAL_UPDATE', 'TRANSACTIONS_REMOVED',
+    }:
+        item = await db.plaid_items.find_one({'item_id': item_id})
+        if item:
+            try:
+                await _plaid_sync_item(item['user_id'], item)
+            except Exception as e:  # noqa: BLE001
+                logger.warning('plaid webhook sync failed: %s', e)
+    return {'ok': True}
+
+
+# ============================================================================
+# CUSTOMER SUPPORT SYSTEM
+# ============================================================================
+@api_router.post('/support/tickets')
+@limiter.limit('20/minute')
+async def support_create_ticket(payload: TicketCreate, request: Request, current_user: dict = Depends(get_current_user)):
+    return await support_service.create_ticket(db, current_user, payload)
+
+
+@api_router.get('/support/tickets')
+async def support_list_tickets(current_user: dict = Depends(get_current_user)):
+    return {'tickets': await support_service.list_user_tickets(db, current_user)}
+
+
+@api_router.get('/support/tickets/{ticket_id}')
+async def support_get_ticket(ticket_id: str, current_user: dict = Depends(get_current_user)):
+    return await support_service.get_ticket_for_user(db, current_user, ticket_id)
+
+
+@api_router.post('/support/tickets/{ticket_id}/reply')
+@limiter.limit('30/minute')
+async def support_reply_ticket(ticket_id: str, payload: ReplyCreate, request: Request, current_user: dict = Depends(get_current_user)):
+    return await support_service.add_user_reply(db, current_user, ticket_id, payload)
+
+
+# ---- Admin endpoints -------------------------------------------------------
+@api_router.get('/support/admin/tickets')
+async def support_admin_list(current_user: dict = Depends(get_current_user), status_filter: Optional[str] = None, limit: int = 100):
+    return {'tickets': await support_service.admin_list_tickets(db, current_user, status=status_filter, limit=limit)}
+
+
+@api_router.get('/support/admin/tickets/{ticket_id}')
+async def support_admin_get(ticket_id: str, current_user: dict = Depends(get_current_user)):
+    return await support_service.admin_get_ticket(db, current_user, ticket_id)
+
+
+@api_router.patch('/support/admin/tickets/{ticket_id}')
+async def support_admin_update(ticket_id: str, payload: AdminUpdate, current_user: dict = Depends(get_current_user)):
+    return await support_service.admin_update_ticket(db, current_user, ticket_id, payload)
+
+
+@api_router.post('/support/admin/tickets/{ticket_id}/reply')
+async def support_admin_reply(ticket_id: str, payload: ReplyCreate, current_user: dict = Depends(get_current_user)):
+    return await support_service.admin_add_reply(db, current_user, ticket_id, payload, private=False)
+
+
+@api_router.post('/support/admin/tickets/{ticket_id}/note')
+async def support_admin_note(ticket_id: str, payload: AdminNoteCreate, current_user: dict = Depends(get_current_user)):
+    reply_payload = ReplyCreate(message=payload.note)
+    return await support_service.admin_add_reply(db, current_user, ticket_id, reply_payload, private=True)
 
 
 app.include_router(api_router)
