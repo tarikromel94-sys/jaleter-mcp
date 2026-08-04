@@ -8,7 +8,8 @@ Abstract `Provider` interface at `/app/backend/providers/base.py`. Registry at `
 
 | Provider | Kinds | Status | Path |
 |---|---|---|---|
-| **SimpleFIN** | checking / savings / credit / loan | LIVE (real Bridge demo verified) | `simplefin_service.py` |
+| **Plaid** | checking / savings / credit / loan | LIVE (sandbox — real link tokens issued, 48 sandbox tx synced in tests) | `plaid_service.py` |
+| **SimpleFIN** | checking / savings / credit / loan | LIVE backend, hidden in UI (migration to Plaid) | `simplefin_service.py` |
 | **SnapTrade** | brokerage / retirement / investment | INERT — activates when `SNAPTRADE_CLIENT_ID` + `SNAPTRADE_CONSUMER_KEY` set | `providers/snaptrade_provider.py` |
 | **File** | csv / ofx / qfx / qbo | LIVE (multipart upload, ofxparse + csv) | `providers/file_provider.py` |
 
@@ -31,19 +32,43 @@ MX / Finicity can drop in by implementing the same interface — no user-facing 
 - `GET  /api/accounts/transactions?limit=N` — normalized transaction list
 
 ### Support
-- `POST /api/support/requests` — user requests an unsupported institution; if SendGrid is configured, admin is also emailed
-- `GET  /api/support/requests` — user's own requests
+- `POST /api/support/requests` — user requests an unsupported institution (legacy path; still used for institution requests)
+- `GET  /api/support/requests` — user's own institution requests
+
+### Support Ticketing (Phase 1 — new)
+- `POST /api/support/tickets` — create ticket `{subject, category, priority, description, attachments[]}`; attachments are base64 (PNG/JPEG/PDF, ≤5 MB each). Ticket-numbers auto-increment via `support_counters`.
+- `GET  /api/support/tickets` — user's own tickets (list, no bodies)
+- `GET  /api/support/tickets/{id}` — full detail (private admin notes stripped)
+- `POST /api/support/tickets/{id}/reply` — user reply (auto-transitions `waiting_on_user`/`resolved` → `in_progress`)
+- `GET  /api/support/admin/tickets[?status_filter=…]` — admin dashboard list (all users)
+- `GET  /api/support/admin/tickets/{id}` — admin detail (includes private notes)
+- `PATCH /api/support/admin/tickets/{id}` — update `status` / `priority` / `assigned_to`
+- `POST /api/support/admin/tickets/{id}/reply` — public admin reply (auto-transitions → `waiting_on_user`)
+- `POST /api/support/admin/tickets/{id}/note` — private admin-only note
+- Admin gating: `users.is_admin === true`. Seed user `support@jaleter.com / Tarik0731!` is created idempotently on backend startup.
+
+### Plaid (new)
+- `GET  /api/plaid/status` — public status (configured/env/products/country_codes)
+- `POST /api/plaid/link-token` — issues a short-lived `link_token` (rate-limited 20/min)
+- `POST /api/plaid/exchange-public-token` — swaps `public_token` for a Fernet-encrypted `access_token` stored in `plaid_items`
+- `GET  /api/plaid/accounts` — returns accounts across all Plaid items (balances, name, mask, subtype)
+- `POST /api/plaid/sync[?item_id=…]` — runs `/transactions/sync` pagination + cursor persistence; upserts into `bank_transactions` with `provider:'plaid'`; deletes removed txns
+- `DELETE /api/plaid/item/{item_id}` — best-effort remote `/item/remove` + local delete
+- `POST /api/plaid/webhook` — accepts Plaid webhooks; background-syncs items on `SYNC_UPDATES_AVAILABLE`, `DEFAULT_UPDATE`, `TRANSACTIONS_REMOVED`, etc.
 
 ## MongoDB Collections
-- `users`, `user_sessions`, `password_resets`
-- `linked_accounts` (indexed on `user_id`; secondary on `user_id + provider`)
-- `bank_transactions` (unique on `user_id+account_id+external_id`; secondary on `user_id+provider+external_id` for file dedup, and `user_id+date`)
+- `users` (now includes `is_admin: bool`), `user_sessions`, `password_resets`
+- `linked_accounts` (SimpleFIN), `plaid_items` (unique on `item_id`, indexed on `user_id`)
+- `bank_transactions` (unique on `user_id+account_id+external_id`; secondary on `user_id+provider+external_id`, and `user_id+date`)
 - `snaptrade_users`, `snaptrade_accounts`
-- `support_requests`
+- `support_requests` (legacy institution requests)
+- `support_tickets` (unique on `ticket_id`; secondary on `user_id+created_at`, `status+created_at`)
+- `support_counters` (auto-incrementing ticket numbers)
 
 ## Env (`/app/backend/.env`)
 - `MONGO_URL`, `DB_NAME`, `JWT_SECRET`, `ACCESS_TOKEN_EXPIRE_MINUTES`
-- `SIMPLEFIN_ENC_KEY` (Fernet — encrypts Access URLs at rest)
+- `SIMPLEFIN_ENC_KEY` (Fernet — encrypts SimpleFIN Access URLs and, by fallback, Plaid access tokens)
+- `PLAID_CLIENT_ID`, `PLAID_SANDBOX_SECRET`, `PLAID_ENV=sandbox`, `PLAID_PRODUCTS=auth,transactions`, `PLAID_COUNTRY_CODES=US`
 - `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, `SENDGRID_FROM_NAME` (empty = dev-fallback)
 - `SNAPTRADE_CLIENT_ID`, `SNAPTRADE_CONSUMER_KEY` (empty = inert)
 
