@@ -12,12 +12,14 @@
  * has `is_admin: true` (see AuthContext / /api/auth/me).
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, ActivityIndicator, Platform, Image, Alert } from 'react-native';
+import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, ActivityIndicator, Platform, Image, Alert, Linking } from 'react-native';
+import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
 import { apiCall, useAuth } from '@/src/AuthContext';
 import { C } from '@/src/jaleterTheme';
+import { BANK_IMPORT_GUIDES } from '@/src/bankGuides';
 
 type Attachment = {
   filename: string;
@@ -140,7 +142,15 @@ function PriorityPicker({ value, onChange }: { value: string; onChange: (v: stri
 
 /* ---------- Modes ---------- */
 
-function HubMode({ tickets, loading, goNew, goList, goAdmin, isAdmin }: { tickets: Ticket[]; loading: boolean; goNew: () => void; goList: () => void; goAdmin: () => void; isAdmin: boolean }) {
+const HELP_ACTIONS: { id: string; label: string; sub: string; icon: any }[] = [
+  { id: 'bank_help', label: 'Bank Help Center', sub: 'Connect a bank + import guides', icon: 'card-outline' },
+  { id: 'bug', label: 'Report a Bug', sub: "Something isn't working", icon: 'bug-outline' },
+  { id: 'billing', label: 'Billing Help', sub: 'Payments and subscriptions', icon: 'wallet-outline' },
+  { id: 'privacy', label: 'Privacy Request', sub: 'Export / correct / delete data', icon: 'shield-checkmark-outline' },
+  { id: 'delete', label: 'Delete Account', sub: 'Close your Jaleter account', icon: 'trash-outline' },
+];
+
+function HubMode({ tickets, loading, goNew, goList, goAdmin, goHelp, isAdmin }: { tickets: Ticket[]; loading: boolean; goNew: () => void; goList: () => void; goAdmin: () => void; goHelp: (id: string) => void; isAdmin: boolean }) {
   const open = tickets.filter(t => !['resolved', 'closed'].includes(t.status)).length;
   return (
     <View style={{ gap: 12 }}>
@@ -148,15 +158,27 @@ function HubMode({ tickets, loading, goNew, goList, goAdmin, isAdmin }: { ticket
         <Ionicons name="help-buoy-outline" size={22} color={C.goldEyebrow} />
         <View style={{ flex: 1 }}>
           <Text style={styles.heroTitle}>How can we help?</Text>
-          <Text style={styles.heroSub}>Contact support, browse FAQs, or check on a request.</Text>
+          <Text style={styles.heroSub}>Pick a topic below, or open a general ticket.</Text>
         </View>
+      </View>
+
+      {/* Icon grid — specialized help flows */}
+      <Text style={styles.sectionLabel}>GET HELP</Text>
+      <View style={styles.grid}>
+        {HELP_ACTIONS.map((a) => (
+          <Pressable key={a.id} onPress={() => goHelp(a.id)} style={styles.gridBtn} testID={`support-help-${a.id}`}>
+            <View style={styles.gridIcon}><Ionicons name={a.icon} size={20} color={C.goldEyebrow} /></View>
+            <Text style={styles.gridLabel} numberOfLines={1}>{a.label}</Text>
+            <Text style={styles.gridSub} numberOfLines={2}>{a.sub}</Text>
+          </Pressable>
+        ))}
       </View>
 
       <Pressable testID="support-new" onPress={goNew} style={styles.action}>
         <View style={styles.actionIcon}><Ionicons name="create-outline" size={20} color={C.goldEyebrow} /></View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.actionTitle}>Contact Support</Text>
-          <Text style={styles.actionSub}>Open a new request — attach screenshots if needed.</Text>
+          <Text style={styles.actionTitle}>Contact Support (general)</Text>
+          <Text style={styles.actionSub}>Open a general request — attach screenshots if needed.</Text>
         </View>
         <Ionicons name="chevron-forward" size={16} color="#aaa39a" />
       </Pressable>
@@ -551,11 +573,372 @@ function AdminMode({ token, onOpen, refreshAll, back }: { token: string | null; 
   );
 }
 
+/* ---------- Specialized help modes (Phase 2/3/4) ---------- */
+
+/**
+ * Helper to submit a specialized ticket with a nicely-structured description.
+ * Body-parts is a list of {label, value} rendered as "**Label**: value" lines.
+ */
+async function submitStructuredTicket(
+  token: string | null,
+  subject: string,
+  category: string,
+  priority: string,
+  parts: { label: string; value: string }[],
+  attachments: Attachment[],
+): Promise<Ticket> {
+  const description = parts
+    .filter((p) => p.value && p.value.trim().length > 0)
+    .map((p) => `${p.label}:\n${p.value.trim()}`)
+    .join('\n\n');
+  return apiCall('/api/support/tickets', {
+    method: 'POST',
+    body: JSON.stringify({
+      subject: subject.trim(),
+      category, priority,
+      description: description || subject.trim(),
+      attachments,
+    }),
+  }, token);
+}
+
+function AttachmentPicker({ attachments, setAttachments, error }: { attachments: Attachment[]; setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>; error?: string }) {
+  const attach = async () => {
+    try {
+      const a = await pickAttachment();
+      if (a) setAttachments((prev) => [...prev, a]);
+    } catch (e: any) {
+      Alert.alert('Attach failed', e?.message || 'Could not read the file.');
+    }
+  };
+  return (
+    <View>
+      <Pressable onPress={attach} style={styles.attachBtn}>
+        <Ionicons name="attach-outline" size={16} color={C.goldEyebrow} />
+        <Text style={styles.attachBtnText}>Attach screenshot / PDF (5 MB max)</Text>
+      </Pressable>
+      {attachments.map((a, i) => (
+        <View key={`${a.filename}-${i}`} style={styles.attachRow}>
+          <Ionicons name={a.mime_type.startsWith('image/') ? 'image-outline' : 'document-outline'} size={14} color={C.goldEyebrow} />
+          <Text numberOfLines={1} style={{ flex: 1, fontSize: 10 }}>{a.filename}</Text>
+          <Pressable onPress={() => setAttachments((p) => p.filter((_, idx) => idx !== i))}>
+            <Ionicons name="close-circle" size={14} color="#b0453d" />
+          </Pressable>
+        </View>
+      ))}
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+    </View>
+  );
+}
+
+function BugReportMode({ token, onCreated, back }: { token: string | null; onCreated: (t: Ticket) => void; back: () => void }) {
+  const [summary, setSummary] = useState('');
+  const [steps, setSteps] = useState('');
+  const [expected, setExpected] = useState('');
+  const [actual, setActual] = useState('');
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const deviceInfo = useMemo(() => {
+    const appVersion = Constants.expoConfig?.version || Constants.nativeAppVersion || '—';
+    return `${Platform.OS} ${Platform.Version} · Jaleter ${appVersion}`;
+  }, []);
+
+  const submit = async () => {
+    if (summary.trim().length < 4) { setError('Please add a short summary.'); return; }
+    setError(''); setBusy(true);
+    try {
+      const t = await submitStructuredTicket(
+        token,
+        `[Bug] ${summary.trim()}`,
+        'bug',
+        'high',
+        [
+          { label: 'Summary', value: summary },
+          { label: 'Steps to reproduce', value: steps },
+          { label: 'Expected behavior', value: expected },
+          { label: 'Actual behavior', value: actual },
+          { label: 'Device / version', value: deviceInfo },
+        ],
+        attachments,
+      );
+      onCreated(t);
+    } catch (e: any) { setError(e?.message || 'Could not send.'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <View style={{ gap: 10 }}>
+      <Pressable onPress={back} testID="support-back" style={{ alignSelf: 'flex-start' }}><Text style={styles.backLink}>← Back</Text></Pressable>
+      <Text style={styles.formLabel}>Short summary</Text>
+      <TextInput testID="bug-summary" value={summary} onChangeText={setSummary} placeholder="e.g. Budget totals not updating on iPad" style={styles.input} />
+      <Text style={styles.formLabel}>Steps to reproduce</Text>
+      <TextInput testID="bug-steps" value={steps} onChangeText={setSteps} multiline placeholder={'1. Go to Budget\n2. Tap …\n3. See error'} style={[styles.input, { minHeight: 80, textAlignVertical: 'top' }]} />
+      <Text style={styles.formLabel}>Expected behavior</Text>
+      <TextInput testID="bug-expected" value={expected} onChangeText={setExpected} multiline placeholder="What should have happened?" style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]} />
+      <Text style={styles.formLabel}>Actual behavior</Text>
+      <TextInput testID="bug-actual" value={actual} onChangeText={setActual} multiline placeholder="What actually happened?" style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]} />
+      <View style={styles.metaBox}>
+        <Text style={styles.metaLabel}>Auto-attached</Text>
+        <Text style={styles.metaValue}>{deviceInfo}</Text>
+      </View>
+      <AttachmentPicker attachments={attachments} setAttachments={setAttachments} error={error} />
+      <Pressable testID="bug-submit" onPress={submit} disabled={busy} style={[styles.primary, busy && { opacity: 0.6 }]}>
+        <Text style={styles.primaryText}>{busy ? 'Sending…' : 'Submit bug report'}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+const PRIVACY_ACTIONS = [
+  { id: 'export', label: 'Export my data', hint: 'Get a copy of the data we hold about you.' },
+  { id: 'correct', label: 'Correct my data', hint: 'Ask us to fix incorrect information.' },
+  { id: 'restrict', label: 'Restrict processing', hint: 'Pause certain uses of your data.' },
+  { id: 'delete', label: 'Delete my data', hint: 'Request full deletion of your account data.' },
+];
+
+function PrivacyMode({ token, onCreated, back }: { token: string | null; onCreated: (t: Ticket) => void; back: () => void }) {
+  const [action, setAction] = useState('export');
+  const [details, setDetails] = useState('');
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async () => {
+    setError(''); setBusy(true);
+    try {
+      const chosen = PRIVACY_ACTIONS.find((p) => p.id === action);
+      const t = await submitStructuredTicket(
+        token,
+        `[Privacy] ${chosen?.label || 'Request'}`,
+        'privacy', 'high',
+        [
+          { label: 'Requested action', value: `${chosen?.label} — ${chosen?.hint}` },
+          { label: 'Additional context', value: details || '(none provided)' },
+        ],
+        attachments,
+      );
+      onCreated(t);
+    } catch (e: any) { setError(e?.message || 'Could not send.'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <View style={{ gap: 10 }}>
+      <Pressable onPress={back} testID="support-back" style={{ alignSelf: 'flex-start' }}><Text style={styles.backLink}>← Back</Text></Pressable>
+      <View style={styles.hero}>
+        <Ionicons name="shield-checkmark-outline" size={22} color={C.goldEyebrow} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.heroTitle}>Privacy request</Text>
+          <Text style={styles.heroSub}>We respond within 30 days per our privacy policy.</Text>
+        </View>
+      </View>
+      <Text style={styles.formLabel}>What would you like us to do?</Text>
+      {PRIVACY_ACTIONS.map((p) => (
+        <Pressable key={p.id} onPress={() => setAction(p.id)} style={[styles.radioRow, action === p.id && styles.radioRowActive]} testID={`privacy-${p.id}`}>
+          <View style={[styles.radioDot, action === p.id && styles.radioDotActive]} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.radioLabel}>{p.label}</Text>
+            <Text style={styles.radioHint}>{p.hint}</Text>
+          </View>
+        </Pressable>
+      ))}
+      <Text style={styles.formLabel}>Additional context (optional)</Text>
+      <TextInput value={details} onChangeText={setDetails} multiline placeholder="Anything else that would help us process your request." style={[styles.input, { minHeight: 80, textAlignVertical: 'top' }]} />
+      <AttachmentPicker attachments={attachments} setAttachments={setAttachments} error={error} />
+      <Pressable testID="privacy-submit" onPress={submit} disabled={busy} style={[styles.primary, busy && { opacity: 0.6 }]}>
+        <Text style={styles.primaryText}>{busy ? 'Sending…' : 'Submit privacy request'}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function DeleteAccountMode({ token, onCreated, back }: { token: string | null; onCreated: (t: Ticket) => void; back: () => void }) {
+  const { user } = useAuth();
+  const [reason, setReason] = useState('');
+  const [confirmText, setConfirmText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const needed = 'DELETE';
+  const confirmed = confirmText.trim() === needed;
+
+  const submit = async () => {
+    if (!confirmed) { setError(`Please type ${needed} to confirm.`); return; }
+    setError(''); setBusy(true);
+    try {
+      const t = await submitStructuredTicket(
+        token,
+        '[Delete Account] Close my Jaleter account',
+        'delete_account',
+        'urgent',
+        [
+          { label: 'Confirmation', value: `User typed ${needed} to confirm account closure request.` },
+          { label: 'Reason (optional)', value: reason || '(none provided)' },
+          { label: 'Account', value: `${user?.name || ''} · ${user?.email || ''}` },
+          { label: 'Process', value: 'We will confirm your identity, then permanently delete your account data within 30 days per our privacy policy. You may cancel any time before then by replying to this ticket.' },
+        ],
+        [],
+      );
+      onCreated(t);
+    } catch (e: any) { setError(e?.message || 'Could not send.'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <View style={{ gap: 10 }}>
+      <Pressable onPress={back} testID="support-back" style={{ alignSelf: 'flex-start' }}><Text style={styles.backLink}>← Back</Text></Pressable>
+      <View style={[styles.hero, { backgroundColor: '#f8ecec', borderColor: '#e3caca' }]}>
+        <Ionicons name="warning-outline" size={22} color="#b0453d" />
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.heroTitle, { color: '#b0453d' }]}>Delete your account</Text>
+          <Text style={styles.heroSub}>This starts a review process. Deletion completes within 30 days.</Text>
+        </View>
+      </View>
+      <Text style={styles.formLabel}>Reason (optional)</Text>
+      <TextInput value={reason} onChangeText={setReason} multiline placeholder="Help us improve by sharing why." style={[styles.input, { minHeight: 80, textAlignVertical: 'top' }]} />
+      <Text style={styles.formLabel}>Type <Text style={{ fontWeight: '800' }}>{needed}</Text> to confirm</Text>
+      <TextInput testID="delete-confirm" value={confirmText} onChangeText={setConfirmText} autoCapitalize="characters" placeholder="DELETE" style={styles.input} />
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+      <Pressable testID="delete-submit" onPress={submit} disabled={busy || !confirmed} style={[styles.danger, (busy || !confirmed) && { opacity: 0.6 }]}>
+        <Text style={styles.dangerText}>{busy ? 'Sending…' : 'Request account deletion'}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+const BILLING_ISSUE_TYPES = [
+  { id: 'refund', label: 'Request a refund' },
+  { id: 'invoice', label: 'Need an invoice / receipt' },
+  { id: 'renewal', label: 'Cancel renewal' },
+  { id: 'plan_change', label: 'Change my plan' },
+  { id: 'other', label: 'Something else' },
+];
+
+function BillingMode({ token, onCreated, back }: { token: string | null; onCreated: (t: Ticket) => void; back: () => void }) {
+  const [issue, setIssue] = useState('other');
+  const [amount, setAmount] = useState('');
+  const [ref, setRef] = useState('');
+  const [details, setDetails] = useState('');
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const openBillingSite = async () => {
+    try { await Linking.openURL('https://jaleter.com/billing'); } catch { /* ignore */ }
+  };
+
+  const submit = async () => {
+    setError(''); setBusy(true);
+    try {
+      const issueLabel = BILLING_ISSUE_TYPES.find((b) => b.id === issue)?.label || 'Billing question';
+      const t = await submitStructuredTicket(
+        token,
+        `[Billing] ${issueLabel}`,
+        'billing', 'high',
+        [
+          { label: 'Issue type', value: issueLabel },
+          { label: 'Amount (USD)', value: amount ? `$${amount}` : '(not provided)' },
+          { label: 'Transaction / invoice #', value: ref || '(not provided)' },
+          { label: 'Details', value: details || '(none provided)' },
+        ],
+        attachments,
+      );
+      onCreated(t);
+    } catch (e: any) { setError(e?.message || 'Could not send.'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <View style={{ gap: 10 }}>
+      <Pressable onPress={back} testID="support-back" style={{ alignSelf: 'flex-start' }}><Text style={styles.backLink}>← Back</Text></Pressable>
+      <View style={styles.hero}>
+        <Ionicons name="wallet-outline" size={22} color={C.goldEyebrow} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.heroTitle}>Billing help</Text>
+          <Text style={styles.heroSub}>Payments and subscriptions are managed at jaleter.com.</Text>
+        </View>
+      </View>
+      <Pressable onPress={openBillingSite} style={styles.linkBanner} testID="billing-open-web">
+        <Ionicons name="globe-outline" size={16} color={C.goldEyebrow} />
+        <Text style={styles.linkBannerText}>Open jaleter.com/billing</Text>
+        <Ionicons name="open-outline" size={14} color={C.goldEyebrow} />
+      </Pressable>
+      <Text style={styles.formLabel}>Issue type</Text>
+      <View style={styles.chipRow}>
+        {BILLING_ISSUE_TYPES.map((b) => (
+          <Pressable key={b.id} onPress={() => setIssue(b.id)} style={[styles.selectPill, issue === b.id && styles.selectPillActive]} testID={`billing-issue-${b.id}`}>
+            <Text style={[styles.selectPillText, issue === b.id && styles.selectPillTextActive]}>{b.label}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={styles.formLabel}>Amount (USD)</Text>
+      <TextInput value={amount} onChangeText={setAmount} keyboardType="decimal-pad" placeholder="e.g. 29.00" style={styles.input} />
+      <Text style={styles.formLabel}>Transaction / invoice #</Text>
+      <TextInput value={ref} onChangeText={setRef} placeholder="Optional, from your email receipt" style={styles.input} />
+      <Text style={styles.formLabel}>Details</Text>
+      <TextInput value={details} onChangeText={setDetails} multiline placeholder="Tell us what happened or what you need." style={[styles.input, { minHeight: 80, textAlignVertical: 'top' }]} />
+      <AttachmentPicker attachments={attachments} setAttachments={setAttachments} error={error} />
+      <Pressable testID="billing-submit" onPress={submit} disabled={busy} style={[styles.primary, busy && { opacity: 0.6 }]}>
+        <Text style={styles.primaryText}>{busy ? 'Sending…' : 'Submit billing request'}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function BankHelpMode({ token, onOpenTicket, back }: { token: string | null; onOpenTicket: () => void; back: () => void }) {
+  return (
+    <View style={{ gap: 10 }}>
+      <Pressable onPress={back} testID="support-back" style={{ alignSelf: 'flex-start' }}><Text style={styles.backLink}>← Back</Text></Pressable>
+      <View style={styles.hero}>
+        <Ionicons name="card-outline" size={22} color={C.goldEyebrow} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.heroTitle}>Bank Help Center</Text>
+          <Text style={styles.heroSub}>Two ways to add accounts, plus per-bank export guides.</Text>
+        </View>
+      </View>
+
+      <View style={styles.tipCard}>
+        <Text style={styles.tipTitle}>1) Real-time via Plaid</Text>
+        <Text style={styles.tipBody}>
+          The fastest way: Settings → Linked Accounts → &quot;Connect a bank (Plaid)&quot;. Uses bank-grade encryption; 11,000+ US institutions supported. Balances and transactions sync automatically.
+        </Text>
+      </View>
+      <View style={styles.tipCard}>
+        <Text style={styles.tipTitle}>2) Manual CSV/OFX import</Text>
+        <Text style={styles.tipBody}>
+          If your bank isn&apos;t supported or you prefer not to link: download a statement from your bank and upload it in Settings → Linked Accounts → &quot;Import statement&quot;. CSV, OFX, QFX and QBO all work.
+        </Text>
+      </View>
+
+      <Text style={styles.sectionLabel}>PER-BANK EXPORT GUIDES</Text>
+      {BANK_IMPORT_GUIDES.map((g) => (
+        <View key={g.name} style={styles.guideCard}>
+          <Text style={styles.guideTitle}>{g.name}</Text>
+          {g.steps.map((step, i) => (
+            <Text key={i} style={styles.guideStep}>{i + 1}. {step}</Text>
+          ))}
+          <Text style={styles.guideFmt}>Format: {g.format}</Text>
+        </View>
+      ))}
+
+      <Pressable onPress={onOpenTicket} style={styles.action} testID="bankhelp-open-ticket">
+        <View style={styles.actionIcon}><Ionicons name="create-outline" size={20} color={C.goldEyebrow} /></View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.actionTitle}>Still stuck? Open a support ticket</Text>
+          <Text style={styles.actionSub}>Tell us which bank + what you tried; we&apos;ll help.</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color="#aaa39a" />
+      </Pressable>
+    </View>
+  );
+}
+
 /* ---------- Root sheet ---------- */
 export function SupportSheet({ visible, close }: { visible: boolean; close: () => void }) {
   const { token, user } = useAuth();
   const isAdmin = !!user?.is_admin;
-  const [mode, setMode] = useState<'hub' | 'new' | 'list' | 'detail' | 'admin'>('hub');
+  const [mode, setMode] = useState<'hub' | 'new' | 'list' | 'detail' | 'admin' | 'bug' | 'privacy' | 'delete' | 'billing' | 'bank_help'>('hub');
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeTicketId, setActiveTicketId] = useState<string | null>(null);
@@ -575,12 +958,22 @@ export function SupportSheet({ visible, close }: { visible: boolean; close: () =
   }, [visible, refresh]);
 
   const openTicket = (t: Ticket) => { setActiveTicketId(t.ticket_id); setMode('detail'); };
+  const onTicketCreated = (t: Ticket) => {
+    setTickets((prev) => [t, ...prev]);
+    setActiveTicketId(t.ticket_id);
+    setMode('detail');
+  };
 
   const title = useMemo(() => {
     if (mode === 'new') return 'Contact Support';
     if (mode === 'list') return 'My Support Requests';
     if (mode === 'detail') return 'Ticket';
     if (mode === 'admin') return 'Admin Dashboard';
+    if (mode === 'bug') return 'Report a Bug';
+    if (mode === 'privacy') return 'Privacy Request';
+    if (mode === 'delete') return 'Delete Account';
+    if (mode === 'billing') return 'Billing Help';
+    if (mode === 'bank_help') return 'Bank Help Center';
     return 'Help & Support';
   }, [mode]);
 
@@ -601,19 +994,27 @@ export function SupportSheet({ visible, close }: { visible: boolean; close: () =
                 goNew={() => setMode('new')}
                 goList={() => setMode('list')}
                 goAdmin={() => setMode('admin')}
+                goHelp={(id) => setMode(id as any)}
                 isAdmin={isAdmin}
               />
             )}
             {mode === 'new' && (
-              <NewMode
-                token={token}
-                back={() => setMode('hub')}
-                onCreated={(t) => {
-                  setTickets((prev) => [t, ...prev]);
-                  setActiveTicketId(t.ticket_id);
-                  setMode('detail');
-                }}
-              />
+              <NewMode token={token} back={() => setMode('hub')} onCreated={onTicketCreated} />
+            )}
+            {mode === 'bug' && (
+              <BugReportMode token={token} back={() => setMode('hub')} onCreated={onTicketCreated} />
+            )}
+            {mode === 'privacy' && (
+              <PrivacyMode token={token} back={() => setMode('hub')} onCreated={onTicketCreated} />
+            )}
+            {mode === 'delete' && (
+              <DeleteAccountMode token={token} back={() => setMode('hub')} onCreated={onTicketCreated} />
+            )}
+            {mode === 'billing' && (
+              <BillingMode token={token} back={() => setMode('hub')} onCreated={onTicketCreated} />
+            )}
+            {mode === 'bank_help' && (
+              <BankHelpMode token={token} back={() => setMode('hub')} onOpenTicket={() => setMode('new')} />
             )}
             {mode === 'list' && (
               <ListMode
@@ -717,4 +1118,49 @@ const styles = StyleSheet.create({
   bubbleTime: { fontSize: 8, color: '#8a7f70', marginTop: 4 },
 
   adminBox: { padding: 10, borderRadius: 12, borderWidth: 1, borderColor: '#b28a4c', backgroundColor: '#f7edd5' },
+
+  /* Phase 2/3/4 additions */
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  gridBtn: {
+    width: '48%',
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#efe6d3',
+    backgroundColor: '#fbf6ec',
+    gap: 6,
+  },
+  gridIcon: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#f2e6c9', alignItems: 'center', justifyContent: 'center' },
+  gridLabel: { fontSize: 12, fontWeight: '800', color: '#2a2620', marginTop: 4 },
+  gridSub: { fontSize: 9, color: '#8a7f70' },
+
+  radioRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderRadius: 12, borderWidth: 1, borderColor: '#efe6d3', backgroundColor: '#fff' },
+  radioRowActive: { borderColor: '#b28a4c', backgroundColor: '#fbf6ec' },
+  radioDot: { width: 16, height: 16, borderRadius: 8, borderWidth: 2, borderColor: '#c9c1b0' },
+  radioDotActive: { borderColor: '#b28a4c', backgroundColor: '#b28a4c' },
+  radioLabel: { fontSize: 11, fontWeight: '700', color: C.ink },
+  radioHint: { fontSize: 9, color: '#8a7f70', marginTop: 2 },
+
+  metaBox: { padding: 8, borderRadius: 10, backgroundColor: '#f8f2e6', borderWidth: 1, borderColor: '#efe6d3' },
+  metaLabel: { fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 1 },
+  metaValue: { fontSize: 10, color: '#615b52', marginTop: 3 },
+
+  danger: { backgroundColor: '#b0453d', paddingVertical: 12, borderRadius: 12, alignItems: 'center' },
+  dangerText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+
+  linkBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12,
+    borderWidth: 1, borderColor: '#e8dcc4', backgroundColor: '#fbf6ec',
+  },
+  linkBannerText: { flex: 1, fontSize: 11, color: C.ink, fontWeight: '700' },
+
+  tipCard: { padding: 10, borderRadius: 12, borderWidth: 1, borderColor: '#efe6d3', backgroundColor: '#fbf6ec' },
+  tipTitle: { fontSize: 11, fontWeight: '800', color: C.ink, marginBottom: 4 },
+  tipBody: { fontSize: 10, color: '#615b52', lineHeight: 15 },
+
+  guideCard: { padding: 10, borderRadius: 12, borderWidth: 1, borderColor: '#e8dcc4', backgroundColor: '#fff' },
+  guideTitle: { fontSize: 12, fontWeight: '800', color: C.ink, marginBottom: 4 },
+  guideStep: { fontSize: 10, color: '#615b52', marginBottom: 2, lineHeight: 14 },
+  guideFmt: { fontSize: 9, color: '#a97c39', fontStyle: 'italic', marginTop: 4 },
 });

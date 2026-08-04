@@ -1,0 +1,33 @@
+{
+  "summary": "Regression + feature test for Support Phase 2/3/4 + Legacy overhaul + Reports screen. Backend: 8/8 new tests passed (bug/privacy/delete_account/billing ticket creation with structured descriptions, admin gating, admin status patch). Frontend Playwright drove full flows on mobile viewport 390x844: login → Legacy (all 8 pills present including new 30yr, cumulative toggle works, in-app nav persistence verified via screenshot after nav-home→nav-legacy), Reports screen (all 6 window pills, INCOME/EXPENSE/NET tiles, 5 sections in correct order, proper empty states), Support hub (5 help testIDs + support-new + support-list), Bug/Privacy/Delete/Billing all submit and produce tickets with correct structured description labels, Bank Help Center renders both tip cards + full guide list (Chase, BofA, Wells Fargo…) + open-ticket CTA. Delete-submit is correctly disabled (opacity 0.6, aria-disabled=true) until user types DELETE (opacity 1). billing-open-web link banner is visible. No red screens, no unhandled errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration23_support_regression.py",
+    "/app/test_reports/pytest/iteration23_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "SupportSheet.tsx is now 1167 lines — approaching the 700-line splittability threshold. Consider extracting each specialized mode (BugReportMode, PrivacyMode, DeleteAccountMode, BillingMode, BankHelpMode, HubMode) into its own file under src/support/ for maintainability. Not a functional bug.",
+    "app/index.tsx is 3572 lines. It has been long but the recent lift of Legacy state to MainApp was correct — timeframe/contribution/hypothetical/cumulative are all persisted via STORAGE_KEY. Consider splitting screens into src/screens/ in a follow-up.",
+    "Delete Account submit correctly disabled (opacity 0.6, aria-disabled=true) until confirmText === 'DELETE'; verified end-to-end.",
+    "billing-open-web uses Linking.openURL which is safe; test did not actually open the URL.",
+    "Reports screen uses react-native-svg with hand-rolled pie + bar charts; on web it renders as <svg>. Empty states are handled per-section ('No expenses in this range.', 'No transactions in this range.', 'No data.', 'No expenses to analyze.') — no crashes with zero transactions.",
+    "bankGuides.ts is a clean shared module (129 lines) — good DRY extraction from index.tsx."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration23_support_regression.py (new)",
+    "/app/test_reports/pytest/iteration23_results.xml (new)"
+  ],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "100% of executable checks (all testIDs present, all specialized flows produce correctly-labeled tickets, empty states render safely)"},
+  "seed_data_creation": "Created 4 new support tickets via backend pytest (subjects prefixed 'TEST_iter23' — bug/privacy/delete/billing) + 5 more via frontend Playwright (bug, privacy, delete_account, billing, general via bank-help CTA path was not exercised). No transactions were seeded — Reports screen was verified with real user data + empty-state fallbacks. Alex user has 12 tickets in the DB after this run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Regression file: /app/backend/tests/test_iteration23_support_regression.py — covers the 4 new specialized ticket categories + admin gating. Frontend testIDs to reuse: support-help-{bank_help,bug,billing,privacy,delete}, bug-{summary,steps,expected,actual,submit}, privacy-{export,correct,restrict,delete,submit}, delete-{confirm,submit}, billing-issue-{refund,invoice,renewal,plan_change,other}, billing-{open-web,submit}, bankhelp-open-ticket, more-reports, reports-back, reports-window-{1M,3M,6M,12M,YTD,All}, legacy-period-{1yr..30yr,Retirement}, legacy-cumulative-toggle, legacy-hypo-open, legacy-hypo-save. Note: mcp_browser_automation launches a fresh browser context per invocation so full-page-reload persistence cannot be verified across sessions; verified in-app navigation persistence within a single session (screenshot f4 confirms 30yr + cumulative preserved after nav-home → nav-legacy). Reports section headings render UPPERCASE via letter-spacing/text-transform, so case-sensitive text asserts should use uppercase strings ('INCOME VS EXPENSE', 'WHERE THE MONEY WENT (BY CATEGORY)', 'TOP SUBCATEGORIES', 'MONTHLY TREND (INCOME VS EXPENSE)', 'TOP MERCHANTS / SOURCES').",
+  "rca_of_issue": "n/a — no defects found."
+}

@@ -17,6 +17,8 @@ import { dailyQuote, MONEY, EXACT, QuoteType } from '@/src/quoteLibrary';
 import { WELCOME_HTML } from '@/src/welcomeHtml';
 import { ConnectPlaidButton } from '@/src/PlaidLink';
 import { SupportSheet } from '@/src/SupportSheet';
+import { ReportsScreen } from '@/src/ReportsScreen';
+import { BANK_IMPORT_GUIDES } from '@/src/bankGuides';
 
 const STORAGE_KEY = 'jaleter-state-v2';
 // One-time migration: any legacy v1 cache (which was seeded with mock $ figures) must be discarded.
@@ -2430,16 +2432,13 @@ const WorthCard = ({ title, total, rows, hidden, onRowPress, onAdd }: any) => {
 };
 
 /* ---------------- Legacy / Coaching / Membership / Settings / More ---------------- */
-const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet }: any) => {
+const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTimeframe, contribution, setContribution, hypothetical, setHypothetical, cumulative, setCumulative }: any) => {
   const t = useThemed();
-  const [timeframe, setTimeframe] = useState('Retirement');
-  const [contribution, setContribution] = useState(0);
-  const [hypothetical, setHypothetical] = useState('');
   const [editingHypo, setEditingHypo] = useState(false);
   const [hypoDraft, setHypoDraft] = useState('');
   const rate = 8;
   const shortTimeframes: Record<string, number> = { '1yr': 1, '2yr': 2, '3yr': 3, '5yr': 5 };
-  const longTimeframes: Record<string, number> = { '10yr': 10, '20yr': 20, 'Retirement': 33 };
+  const longTimeframes: Record<string, number> = { '10yr': 10, '20yr': 20, '30yr': 30, 'Retirement': 33 };
   const isShort = timeframe in shortTimeframes;
   const years = isShort ? shortTimeframes[timeframe] : longTimeframes[timeframe];
   const hypoValue = Math.max(0, Number((hypothetical || '').replace(/[^0-9.]/g, '')) || 0);
@@ -2447,9 +2446,26 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet }: any) => {
 
   // Short-horizon (1-5yr): uses REAL cash + real monthly net income, no compounding assumed
   // Long-horizon (10yr+/Retirement): compounding at 8% + optional recurring contribution
-  const projection = isShort
-    ? Math.round(totalCash + totalInvested + monthlyNet * 12 * years)
-    : Math.round(totalInvested * Math.pow(1 + rate / 100, years) + contribution * 12 * ((Math.pow(1 + rate / 100, years) - 1) / (rate / 100)));
+  const projectionAtYear = (n: number): number => {
+    if (isShort) {
+      return Math.round(totalCash + totalInvested + monthlyNet * 12 * n);
+    }
+    // Compound at 8% + monthly contribution treated as annual lump
+    return Math.round(totalInvested * Math.pow(1 + rate / 100, n) + contribution * 12 * ((Math.pow(1 + rate / 100, n) - 1) / (rate / 100)));
+  };
+  const projection = projectionAtYear(years);
+
+  // Cumulative year-by-year rows (up to selected timeframe)
+  const cumulativeRows = useMemo(() => {
+    const rows: { year: number; value: number; delta: number }[] = [];
+    let prev = isShort ? (totalCash + totalInvested) : totalInvested;
+    for (let y = 1; y <= years; y++) {
+      const v = projectionAtYear(y);
+      rows.push({ year: y, value: v, delta: v - prev });
+      prev = v;
+    }
+    return rows;
+  }, [years, isShort, totalCash, totalInvested, contribution]);
 
   const commitHypo = () => {
     const clean = Math.max(0, Math.round(Number(hypoDraft.replace(/[^0-9.]/g, '')) || 0));
@@ -2461,7 +2477,7 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet }: any) => {
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Your Legacy" subtitle="See what consistent stewardship can become." />
-      <PeriodPills values={['1yr','2yr','3yr','5yr','10yr','20yr','Retirement']} value={timeframe} onChange={setTimeframe} testID="legacy-period" />
+      <PeriodPills values={['1yr','2yr','3yr','5yr','10yr','20yr','30yr','Retirement']} value={timeframe} onChange={setTimeframe} testID="legacy-period" />
       <View style={s.projectionCard}>
         <Text style={{ color: '#caa465', fontSize: 9, letterSpacing: 1.3, textAlign: 'center' }}>PROJECTED TOTAL ({timeframe})</Text>
         <Text style={s.projectionStrong}>{MONEY(projection)}</Text>
@@ -2477,8 +2493,38 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet }: any) => {
         </View>
       </View>
 
+      {/* Cumulative-year toggle: shows a year-by-year breakdown table. */}
+      <Pressable onPress={() => setCumulative(!cumulative)} style={[s.assumptionsCard, t.cardBg, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]} testID="legacy-cumulative-toggle">
+        <View style={{ flex: 1 }}>
+          <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Cumulative year-by-year</Text>
+          <Text style={[{ fontSize: 9, marginTop: 2 }, t.textMuted]}>Show growth for every year up to {timeframe}.</Text>
+        </View>
+        <View style={[{ width: 34, height: 20, borderRadius: 10, backgroundColor: cumulative ? '#b28a4c' : '#e5decf', padding: 2 }]}>
+          <View style={[{ width: 16, height: 16, borderRadius: 8, backgroundColor: '#fff', transform: [{ translateX: cumulative ? 14 : 0 }] }]} />
+        </View>
+      </Pressable>
+
+      {cumulative && (
+        <View style={[s.assumptionsCard, t.cardBg]}>
+          <View style={{ flexDirection: 'row', paddingBottom: 6, borderBottomWidth: 1, borderColor: t.dark ? '#333' : '#f0e7d1' }}>
+            <Text style={[{ flex: 1, fontSize: 9, fontWeight: '800', color: '#a97c39', letterSpacing: 0.6 }]}>YEAR</Text>
+            <Text style={[{ flex: 1, fontSize: 9, fontWeight: '800', color: '#a97c39', letterSpacing: 0.6, textAlign: 'right' }]}>TOTAL</Text>
+            <Text style={[{ flex: 1, fontSize: 9, fontWeight: '800', color: '#a97c39', letterSpacing: 0.6, textAlign: 'right' }]}>Δ</Text>
+          </View>
+          {cumulativeRows.map((r) => (
+            <View key={r.year} style={{ flexDirection: 'row', paddingVertical: 4 }}>
+              <Text style={[{ flex: 1, fontSize: 10 }, t.textInk]}>Year {r.year}</Text>
+              <Text style={[{ flex: 1, fontSize: 10, fontWeight: '700', textAlign: 'right' }, t.textInk]}>{MONEY(r.value)}</Text>
+              <Text style={[{ flex: 1, fontSize: 10, textAlign: 'right' }, { color: r.delta >= 0 ? '#4c8b56' : '#b0453d' }]}>
+                {r.delta >= 0 ? '+' : ''}{MONEY(r.delta)}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+
       <View style={[s.assumptionsCard, t.cardBg]}>
-        <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 0.4 }, t.textInk]}>WHAT WE'RE PROJECTING FROM</Text>
+        <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 0.4 }, t.textInk]}>WHAT WE&apos;RE PROJECTING FROM</Text>
         <View style={{ marginTop: 8, gap: 6 }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
             <Text style={[{ fontSize: 10 }, t.textMuted]}>Current investments (synced)</Text>
@@ -2675,6 +2721,7 @@ const MoreScreen = ({ navigate, linkedCount, onBack }: any) => {
         {[
           ['coaching','Book Coaching','Schedule + pay at jaleter.com','chatbubble-outline'],
           ['membership','Membership','Manage at jaleter.com','sparkles-outline'],
+          ['reports','Reports','Income & expense breakdowns','stats-chart-outline'],
           ['settings','Settings',`${linkedCount} linked accounts`,'settings-outline'],
         ].map(([id, name, sub, icon]) => (
           <Pressable key={id} style={[s.moreGridBtn, t.cardBg]} onPress={() => navigate(id)} testID={`more-${id}`}>
@@ -2885,136 +2932,6 @@ const NotificationsSheet = ({ visible, close, onSave }: any) => {
   );
 };
 
-// Bank-specific import guides — how to export CSV/OFX from major US institutions.
-const BANK_IMPORT_GUIDES: { name: string; steps: string[]; format: string }[] = [
-  {
-    name: 'Chase',
-    steps: [
-      'Sign in at chase.com from a browser.',
-      'Open the account you want to export.',
-      'Click the download arrow icon (top right of transactions list).',
-      'Choose the date range, then select "Spreadsheet (Excel, CSV)".',
-      'Save the file, then import it in Jaleter.',
-    ],
-    format: 'CSV',
-  },
-  {
-    name: 'Bank of America',
-    steps: [
-      'Log in at bankofamerica.com.',
-      'Open the account, then click "Download".',
-      'Choose "Microsoft Excel" or "Comma-delimited (CSV)".',
-      'Select a date range and download.',
-      'Upload the file into Jaleter.',
-    ],
-    format: 'CSV',
-  },
-  {
-    name: 'Wells Fargo',
-    steps: [
-      'Sign in at wellsfargo.com.',
-      'Open the account and go to "Download Account Activity".',
-      'Choose date range and "Comma Delimited" format.',
-      'Save and import into Jaleter.',
-    ],
-    format: 'CSV',
-  },
-  {
-    name: 'Capital One',
-    steps: [
-      'Sign in at capitalone.com.',
-      'Open your account, click the three-dot menu next to Transactions.',
-      'Choose "Download transactions".',
-      'Pick a date range and CSV format.',
-      'Import into Jaleter.',
-    ],
-    format: 'CSV',
-  },
-  {
-    name: 'Citi',
-    steps: [
-      'Sign in at citi.com.',
-      'Choose the account and open "Statements".',
-      'Click "Download activity" and choose CSV.',
-      'Select date range and save.',
-      'Import into Jaleter.',
-    ],
-    format: 'CSV',
-  },
-  {
-    name: 'US Bank',
-    steps: [
-      'Log in at usbank.com.',
-      'Open the account, click "Manage" then "Export transactions".',
-      'Choose Excel/CSV.',
-      'Save the export and upload it in Jaleter.',
-    ],
-    format: 'CSV',
-  },
-  {
-    name: 'PNC',
-    steps: [
-      'Log in at pnc.com.',
-      'Open the account and click "Activity".',
-      'Click the download icon and choose CSV.',
-      'Select date range and save.',
-      'Import into Jaleter.',
-    ],
-    format: 'CSV',
-  },
-  {
-    name: 'Discover Card',
-    steps: [
-      'Log in at discover.com.',
-      'Go to "Account Details" then "Download activity".',
-      'Choose CSV format and date range.',
-      'Save and import into Jaleter.',
-    ],
-    format: 'CSV',
-  },
-  {
-    name: 'American Express',
-    steps: [
-      'Log in at americanexpress.com.',
-      'Open your card and go to "Statements & Activity".',
-      'Click "Download" (icon near recent activity).',
-      'Choose "CSV" and a date range.',
-      'Save and import into Jaleter.',
-    ],
-    format: 'CSV',
-  },
-  {
-    name: 'USAA',
-    steps: [
-      'Sign in at usaa.com.',
-      'Open the account and click "Export".',
-      'Choose "Comma Separated Values (CSV)" or "Quicken (QFX)".',
-      'Save the file and upload it into Jaleter.',
-    ],
-    format: 'CSV or QFX',
-  },
-  {
-    name: 'Truist',
-    steps: [
-      'Log in at truist.com.',
-      'Open the account, click the download icon on the transactions list.',
-      'Choose CSV and select your date range.',
-      'Save and import into Jaleter.',
-    ],
-    format: 'CSV',
-  },
-  {
-    name: 'Credit Union / Other',
-    steps: [
-      'Log in to your credit union or bank on a browser.',
-      'Look for "Download", "Export", or a download-arrow icon on the transactions/statements page.',
-      'Choose CSV (preferred), OFX, QFX, or QBO — Jaleter supports all four.',
-      'Save the file and upload it in Jaleter.',
-      'If your bank has no export at all, use "Request an institution" to let us know.',
-    ],
-    format: 'CSV / OFX / QFX / QBO',
-  },
-];
 
 const AccountLinkSheet = ({ visible, close, onConfirm }: any) => {
   const { token } = useAuth();
@@ -3223,6 +3140,12 @@ function MainApp() {
   const [linkedAccounts, setLinkedAccounts] = useState<any[]>([]);
   const [focusCategory, setFocusCategory] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<{ enabled: boolean; threshold: number; perCategory: Record<string, { p50: boolean; p80: boolean; exceeded: boolean }> }>({ enabled: true, threshold: 80, perCategory: {} });
+  // Legacy screen state — hoisted here so timeframe, contribution, and hypothetical
+  // amount survive navigation and app reloads (previously reset on every visit).
+  const [legacyTimeframe, setLegacyTimeframe] = useState<string>('Retirement');
+  const [legacyContribution, setLegacyContribution] = useState<number>(0);
+  const [legacyHypothetical, setLegacyHypothetical] = useState<string>('');
+  const [legacyCumulative, setLegacyCumulative] = useState<boolean>(false);
 
   // Hydrate persisted UI state (auth is separate)
   useEffect(() => {
@@ -3249,6 +3172,10 @@ function MainApp() {
           }
           if (Array.isArray(data.assets) && data.assets.length > 0) setAssets(data.assets);
           if (Array.isArray(data.liabilities) && data.liabilities.length > 0) setLiabilities(data.liabilities);
+          if (typeof data.legacyTimeframe === 'string') setLegacyTimeframe(data.legacyTimeframe);
+          if (typeof data.legacyContribution === 'number') setLegacyContribution(data.legacyContribution);
+          if (typeof data.legacyHypothetical === 'string') setLegacyHypothetical(data.legacyHypothetical);
+          if (typeof data.legacyCumulative === 'boolean') setLegacyCumulative(data.legacyCumulative);
         }
       } catch {}
       setHydrated(true);
@@ -3257,8 +3184,8 @@ function MainApp() {
   // Persist on change (skip auth-managed fields)
   useEffect(() => {
     if (!hydrated) return;
-    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities })).catch(() => {});
-  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities]);
+    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyCumulative })).catch(() => {});
+  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyCumulative]);
 
   // Listen for SnapTrade OAuth callback deep link (jaleter://snaptrade-callback).
   useEffect(() => {
@@ -3382,7 +3309,8 @@ function MainApp() {
           {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} openLinkSheet={() => { setActive('settings'); }} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={linkedAccounts.length} onBack={() => setActive('home')} />}
-          {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} />}
+          {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} />}
+          {active === 'reports' && <ReportsScreen transactions={transactions} categories={categories} back={() => nav('more')} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}
           {active === 'settings' && <SettingsScreen initials={displayInitials} experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} categories={categories} appLock={appLock} setAppLock={(next: any) => setAppLock({ ...appLock, ...next })} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} onResetAppData={async () => {
