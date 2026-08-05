@@ -182,7 +182,7 @@ function MonthlyChart({ data, height = 130 }: { data: { key: string; income: num
   );
 }
 
-export function ReportsScreen({ transactions, categories, back }: { transactions: Transaction[]; categories: Category[]; back: () => void }) {
+export function ReportsScreen({ transactions, categories, incomeSources = [], back }: { transactions: Transaction[]; categories: Category[]; incomeSources?: { id: string; name: string }[]; back: () => void }) {
   const [windowIdx, setWindowIdx] = useState(2); // default 6M
   // Custom date range (YYYY-MM-DD) — used when the selected window is 'Custom'.
   // `today` is stable across renders so useMemo dependencies stay clean.
@@ -255,6 +255,30 @@ export function ReportsScreen({ transactions, categories, back }: { transactions
       .slice(0, 10)
       .map(([label, value], i) => ({ label, value, color: PIE_COLORS[i % PIE_COLORS.length] }));
   }, [filtered, categories]);
+
+  // Income sources — mirrors the category pie for expenses, but on the income
+  // side. Uses `incomeSources` to resolve source ids → readable names when
+  // transactions carry a `subcategory` that matches an income source id;
+  // otherwise falls back to merchant/name/origin so unclassified income is
+  // still attributed.
+  const incomePie = useMemo(() => {
+    const srcNames = new Map<string, string>();
+    (incomeSources || []).forEach((src) => srcNames.set(src.id, src.name));
+    const map = new Map<string, number>();
+    filtered.forEach((t) => {
+      const amt = Number(t.amount) || 0;
+      if (amt <= 0) return; // income only
+      const key =
+        srcNames.get(t.subcategory || '') ||
+        (t.merchant || t.name || t.origin || 'Other income').trim() ||
+        'Other income';
+      map.set(key, (map.get(key) || 0) + amt);
+    });
+    return Array.from(map.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([label, value], i) => ({ label, value, color: PIE_COLORS[i % PIE_COLORS.length] }));
+  }, [filtered, incomeSources]);
 
   const subcategoryBars = useMemo(() => {
     const subMap = new Map<string, number>();
@@ -365,6 +389,16 @@ export function ReportsScreen({ transactions, categories, back }: { transactions
           <Pie data={incomeVsExpense} />
           <View style={{ flex: 1 }}><Legend data={incomeVsExpense} /></View>
         </View>
+      </Section>
+
+      {/* income sources — where the money came from (by source / merchant) */}
+      <Section title="Where the money came from (by source)">
+        {incomePie.length === 0 ? <Text style={styles.empty}>No income in this range.</Text> : (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <Pie data={incomePie} />
+            <View style={{ flex: 1 }}><Legend data={incomePie} /></View>
+          </View>
+        )}
       </Section>
 
       {/* category pie */}

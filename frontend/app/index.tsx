@@ -1030,13 +1030,33 @@ const Paywall = ({ onContinue }: any) => {
 };
 
 /* ---------------- Home ---------------- */
-const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, budgetUsage, alertsEnabled, navigate }: any) => {
+// Shared legacy math — kept next to Home so both Home and Legacy show the
+// exact same numbers for the checkpoint cards. Rate stays at 7% here to match
+// the assumption printed on the Legacy screen.
+const LEGACY_RATE = 7;
+function shortTermCash(totalCash: number, investmentTotal: number, hypothetical: number, monthlyNet: number, year: number): number {
+  return Math.round(totalCash + investmentTotal + hypothetical + monthlyNet * 12 * year);
+}
+function longTermInvestment(investmentTotal: number, hypothetical: number, monthlyContribution: number, year: number): number {
+  const totalInvested = investmentTotal + hypothetical;
+  const r = LEGACY_RATE / 100;
+  return Math.round(totalInvested * Math.pow(1 + r, year) + monthlyContribution * 12 * ((Math.pow(1 + r, year) - 1) / r));
+}
+
+const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, totalCash, monthlyNet, legacyContribution, legacyHypothetical, budgetUsage, alertsEnabled, navigate }: any) => {
   const t = useThemed();
   const q = dailyQuote(experience as QuoteType, new Date());
-  // Same math as the Legacy screen: compound the user's real investment total at 8% over 33 years.
-  // If they have no linked investments, show the "Start your legacy" CTA.
-  const projected = investmentTotal > 0 ? Math.round(investmentTotal * Math.pow(1.08, 33)) : 0;
+  const hypoValue = Math.max(0, Number((legacyHypothetical || '').replace(/[^0-9.]/g, '')) || 0);
+  // Same math as the Legacy screen: compound the user's real investment total at 7% (LEGACY_RATE) over 33 years.
+  const projected = investmentTotal > 0 ? longTermInvestment(investmentTotal, hypoValue, legacyContribution || 0, 33) : 0;
   const hasProjection = projected > 0;
+  // Legacy snapshot values — mirror the Legacy tab exactly.
+  const cashY1 = shortTermCash(totalCash || 0, investmentTotal || 0, hypoValue, monthlyNet || 0, 1);
+  const cashY5 = shortTermCash(totalCash || 0, investmentTotal || 0, hypoValue, monthlyNet || 0, 5);
+  const cashY10 = shortTermCash(totalCash || 0, investmentTotal || 0, hypoValue, monthlyNet || 0, 10);
+  const invest20 = longTermInvestment(investmentTotal || 0, hypoValue, legacyContribution || 0, 20);
+  const invest30 = longTermInvestment(investmentTotal || 0, hypoValue, legacyContribution || 0, 30);
+  const showSnapshot = (totalCash || 0) > 0 || (investmentTotal || 0) > 0 || (monthlyNet || 0) > 0;
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
@@ -1097,7 +1117,7 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, bud
           <>
             <Text style={s.legacyStrong}>{MONEY(projected)}</Text>
             <Text style={{ color: '#aaa297', fontSize: 10, lineHeight: 15, marginBottom: 14 }}>
-              33-year compounding of your current investments.
+              33-year compounding of your current investments at {LEGACY_RATE}%.
             </Text>
             <View style={s.teaserBarsFlow}>
               {[28, 36, 44, 57, 70, 88].map((h, i) => (
@@ -1118,6 +1138,42 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, bud
           </>
         )}
       </Pressable>
+
+      {/* Legacy Snapshot — mirrors the exact same numbers as the Legacy tab so
+          Home and Legacy never disagree. Only rendered when the user has data;
+          skipped when everything is zero to keep the empty state clean. */}
+      {showSnapshot && (
+        <Pressable style={[s.assumptionsCard, t.cardBg, { marginTop: 12 }]} onPress={() => navigate('legacy')} testID="home-legacy-snapshot">
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <Text style={[{ fontSize: 11, fontWeight: '800', letterSpacing: 0.4 }, t.textInk]}>LEGACY SNAPSHOT</Text>
+            <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#aaa39a'} />
+          </View>
+          <Text style={[{ fontSize: 9, marginBottom: 8 }, t.textMuted]}>Cash checkpoints + retirement — matches your Legacy tab.</Text>
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            {[
+              { label: 'Y1', v: cashY1 },
+              { label: 'Y5', v: cashY5 },
+              { label: 'Y10', v: cashY10 },
+            ].map((row) => (
+              <View key={row.label} style={{ flex: 1, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: t.dark ? '#3a342b' : '#f0e7d1', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
+                <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8 }}>{row.label} CASH</Text>
+                <Text style={[{ fontSize: 11, fontWeight: '800', marginTop: 3 }, t.textInk]} numberOfLines={1}>{MONEY(row.v)}</Text>
+              </View>
+            ))}
+          </View>
+          <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
+            {[
+              { label: '20yr Retirement', v: invest20 },
+              { label: '30yr Retirement', v: invest30 },
+            ].map((row) => (
+              <View key={row.label} style={{ flex: 1, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: t.dark ? '#3a342b' : '#f0e7d1', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
+                <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8 }}>{row.label.toUpperCase()}</Text>
+                <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 3 }, t.textInk]} numberOfLines={1}>{MONEY(row.v)}</Text>
+              </View>
+            ))}
+          </View>
+        </Pressable>
+      )}
     </ScrollView>
   );
 };
@@ -1367,7 +1423,7 @@ async function exportTransactionsCsv(categories: Category[], incomeSources: any[
 }
 
 /* ---------------- Budget Screen ---------------- */
-const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSources, transactions, focusCategory, clearFocus, alerts }: any) => {
+const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSources, transactions, focusCategory, clearFocus, alerts, budgetYear, onSwitchYear }: any) => {
   const t = useThemed();
   const [period, setPeriod] = useState<string>(currentMonth());
   const [view, setView] = useState<'cards' | 'grid'>('cards');
@@ -1501,10 +1557,35 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
           <Pressable onPress={() => setView('grid')} style={[s.viewTogglePill, view === 'grid' && s.viewTogglePillActive]} testID="budget-view-grid"><Ionicons name="grid-outline" size={13} color={view === 'grid' ? C.goldEyebrow : (t.dark ? D.textMuted : C.muted2)} /></Pressable>
         </View>
       } />
+      {/* Year selector — lets users build and switch between multiple year budgets.
+          Snapshotting is handled by MainApp.switchBudgetYear so numbers persist
+          per year across app reloads. */}
+      {onSwitchYear && (
+        <View style={s.yearSelectorRow}>
+          <Text style={s.yearSelectorLabel}>YEAR</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+            {(() => {
+              const nowY = new Date().getFullYear();
+              const years: number[] = [];
+              for (let y = nowY; y <= nowY + 4; y++) years.push(y);
+              return years.map((y) => (
+                <Pressable
+                  key={y}
+                  onPress={() => onSwitchYear(y)}
+                  style={[s.yearPill, budgetYear === y && s.yearPillActive]}
+                  testID={`budget-year-${y}`}
+                >
+                  <Text style={[s.yearPillText, budgetYear === y && s.yearPillTextActive]}>{y}</Text>
+                </Pressable>
+              ));
+            })()}
+          </ScrollView>
+        </View>
+      )}
       <PeriodPills values={[...MONTHS, 'Year']} value={period} onChange={setPeriod} testID="budget-period" />
       {annual && (
         <View style={s.yearTotalTop}>
-          <Text style={s.yearTotalEyebrow}>TOTAL INCOME · {new Date().getFullYear()}</Text>
+          <Text style={s.yearTotalEyebrow}>TOTAL INCOME · {budgetYear || new Date().getFullYear()}</Text>
           <Text style={s.yearTotalStrong}>{MONEY(actualIncome)}</Text>
           <Text style={s.yearTotalSub}>Expected {MONEY(plannedIncome)} · {plannedIncome > 0 ? Math.round((actualIncome / plannedIncome) * 100) : 0}% received</Text>
         </View>
@@ -2452,7 +2533,8 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
   const t = useThemed();
   const [editingHypo, setEditingHypo] = useState(false);
   const [hypoDraft, setHypoDraft] = useState('');
-  const rate = 8;
+  // Rate assumption used across ALL long-horizon projections + mirrored on Home.
+  const rate = 7;
   const shortTimeframes: Record<string, number> = { '1yr': 1, '2yr': 2, '3yr': 3, '5yr': 5 };
   const longTimeframes: Record<string, number> = { '10yr': 10, '20yr': 20, '30yr': 30, 'Retirement': 33 };
   const isShort = timeframe in shortTimeframes;
@@ -2466,7 +2548,7 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
     if (isShort) {
       return Math.round(totalCash + totalInvested + monthlyNet * 12 * n);
     }
-    // Compound at 8% + monthly contribution treated as annual lump
+    // Compound at `rate`% + monthly contribution treated as annual lump
     return Math.round(totalInvested * Math.pow(1 + rate / 100, n) + contribution * 12 * ((Math.pow(1 + rate / 100, n) - 1) / (rate / 100)));
   };
   const projection = projectionAtYear(years);
@@ -2500,7 +2582,7 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
         <Text style={{ color: '#b4ada3', fontSize: 12, textAlign: 'center', maxWidth: 270, alignSelf: 'center' }}>
           {isShort
             ? 'Current cash + investments + your budgeted monthly net over the period.'
-            : 'What you build faithfully can support generations you may never meet.'}
+            : `Assumes ${rate}% annual return. Compounds your investment total + monthly contributions.`}
         </Text>
         <View style={s.growthChart}>
           {(isShort ? [.30,.42,.56,.72,.86,1] : [.16,.24,.34,.48,.66,.84,1]).map((f, i) => (
@@ -2576,6 +2658,25 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
           <Text style={{ fontSize: 18, fontWeight: '700', color: '#9a6d32', marginLeft: 12 }}>{hypoValue > 0 ? MONEY(hypoValue) : '+ Add'}</Text>
         </View>
       </Pressable>
+
+      {/* Short-horizon checkpoints (Y1 / Y2 / Y5 / Y10) — highlight cards.
+          Always visible regardless of the selected timeframe so users can
+          reason about multiple milestones at a glance. */}
+      <View style={[s.assumptionsCard, t.cardBg]}>
+        <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 0.4 }, t.textInk]}>CHECKPOINTS (SHORT-TERM CASH)</Text>
+        <Text style={[{ fontSize: 9, marginTop: 2 }, t.textMuted]}>Cash + investments + budgeted monthly net, carried forward.</Text>
+        <View style={{ flexDirection: 'row', gap: 6, marginTop: 10 }}>
+          {[1, 2, 5, 10].map((yr) => {
+            const val = Math.round(totalCash + totalInvested + monthlyNet * 12 * yr);
+            return (
+              <View key={yr} style={{ flex: 1, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: t.dark ? '#3a342b' : '#f0e7d1', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
+                <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8 }}>YEAR {yr}</Text>
+                <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 3 }, t.textInk]} numberOfLines={1}>{MONEY(val)}</Text>
+              </View>
+            );
+          })}
+        </View>
+      </View>
 
       {!isShort && (
         <View style={[s.assumptionsCard, t.cardBg]}>
@@ -3170,6 +3271,13 @@ function MainApp() {
   const [appearance, setAppearance] = useState('Light');
   const [active, setActive] = useState('home');
   const [categories, setCategories] = useState(initialCategories);
+  // Multi-year budget: current `categories` always represents the year that
+  // matches `budgetYear`. When the user switches years, we snapshot the
+  // current categories into `categoriesByYear[oldYear]` and load the target
+  // year (or clone from current as a starting template if untouched).
+  const _currentYear = new Date().getFullYear();
+  const [budgetYear, setBudgetYear] = useState<number>(_currentYear);
+  const [categoriesByYear, setCategoriesByYear] = useState<Record<string, any[]>>({});
   const [incomeSources, setIncomeSources] = useState(initialIncome);
   const [restrictedBuckets, setRestrictedBuckets] = useState<Array<{ id: string; name: string; amount: number }>>([]);
   const [transactions, setTransactions] = useState<Tx[]>(initialTx);
@@ -3214,6 +3322,8 @@ function MainApp() {
           if (typeof data.legacyContribution === 'number') setLegacyContribution(data.legacyContribution);
           if (typeof data.legacyHypothetical === 'string') setLegacyHypothetical(data.legacyHypothetical);
           if (typeof data.legacyCumulative === 'boolean') setLegacyCumulative(data.legacyCumulative);
+          if (typeof data.budgetYear === 'number') setBudgetYear(data.budgetYear);
+          if (data.categoriesByYear && typeof data.categoriesByYear === 'object') setCategoriesByYear(data.categoriesByYear);
         }
       } catch {}
       setHydrated(true);
@@ -3222,8 +3332,8 @@ function MainApp() {
   // Persist on change (skip auth-managed fields)
   useEffect(() => {
     if (!hydrated) return;
-    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyCumulative })).catch(() => {});
-  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyCumulative]);
+    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyCumulative, budgetYear, categoriesByYear })).catch(() => {});
+  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyCumulative, budgetYear, categoriesByYear]);
 
   // Listen for SnapTrade OAuth callback deep link (jaleter://snaptrade-callback).
   useEffect(() => {
@@ -3314,6 +3424,23 @@ function MainApp() {
   const budgetUsage = monthlyBudget > 0 ? (expense / monthlyBudget) * 100 : 0;
   const nav = (screen: string, category: string | null = null) => { setActive(screen); if (category) setFocusCategory(category); };
 
+  // Multi-year budget: snapshot the current year's categories into the map,
+  // then load the target year (or clone from current if untouched). This
+  // keeps a single `categories` state as the "active year" for every consumer
+  // downstream while letting users build multiple years side-by-side.
+  const switchBudgetYear = (nextYear: number) => {
+    if (nextYear === budgetYear) return;
+    setCategoriesByYear((prev) => {
+      const merged = { ...prev, [String(budgetYear)]: categories };
+      const target = merged[String(nextYear)];
+      // Load the target year's snapshot; if none exists, clone from current
+      // as a starter template (structure preserved, amounts kept).
+      setCategories(target ? target : JSON.parse(JSON.stringify(categories)));
+      return merged;
+    });
+    setBudgetYear(nextYear);
+  };
+
   if (!hydrated || auth.loading) return <View style={{ flex: 1, backgroundColor: C.cream }} testID="auth-loading" />;
 
   const bg = isDark ? D.bg : C.cream;
@@ -3342,13 +3469,13 @@ function MainApp() {
       )}
       {auth.user && stage === 'app' && !(appLock.enabled && appLock.locked) && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
-          {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
-          {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} />}
+          {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} legacyContribution={legacyContribution} legacyHypothetical={legacyHypothetical} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
+          {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} budgetYear={budgetYear} onSwitchYear={switchBudgetYear} />}
           {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} openLinkSheet={() => { setActive('settings'); }} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={linkedAccounts.length} onBack={() => setActive('home')} />}
           {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} />}
-          {active === 'reports' && <ReportsScreen transactions={transactions} categories={categories} back={() => nav('more')} />}
+          {active === 'reports' && <ReportsScreen transactions={transactions} categories={categories} incomeSources={incomeSources} back={() => nav('more')} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}
           {active === 'settings' && <SettingsScreen initials={displayInitials} experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} categories={categories} appLock={appLock} setAppLock={(next: any) => setAppLock({ ...appLock, ...next })} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} onResetAppData={async () => {
@@ -3518,6 +3645,12 @@ const s = StyleSheet.create({
   categoryMeta: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
   subcategoryList: { marginTop: 14, paddingTop: 4, borderTopWidth: 1, borderTopColor: C.border2 },
   yearTotalTop: { backgroundColor: '#0f0e0c', borderRadius: 18, padding: 20, marginTop: 12, marginBottom: 4 },
+  yearSelectorRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
+  yearSelectorLabel: { fontSize: 9, fontWeight: '800', color: '#a97c39', letterSpacing: 1.2 },
+  yearPill: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: '#e5decf', backgroundColor: '#fff' },
+  yearPillActive: { backgroundColor: '#b28a4c', borderColor: '#b28a4c' },
+  yearPillText: { fontSize: 11, fontWeight: '800', color: '#615b52', letterSpacing: 0.4 },
+  yearPillTextActive: { color: '#fff' },
   yearTotalBottom: { backgroundColor: '#fbf6ec', borderRadius: 18, padding: 20, marginTop: 12, borderWidth: 1, borderColor: '#e8dcc4' },
   yearTotalEyebrow: { color: '#c9a56c', fontSize: 9, fontWeight: '800', letterSpacing: 1.4 },
   yearTotalStrong: { color: '#EED7AB', fontSize: 32, fontWeight: '700', marginTop: 4, fontFamily: Platform.select({ ios: 'Georgia', default: 'serif' }) },

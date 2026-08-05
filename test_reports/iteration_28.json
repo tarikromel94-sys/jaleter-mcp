@@ -1,0 +1,22 @@
+{
+  "summary": "Frontend-only regression for Tarik's 5 gap-closing changes on Jaleter. Logged in as alex+test1@jaleter.app and verified all 5 items pass. (1) Legacy retirement rate changed 8%->7% — 'Assumes 7% annual return' text confirmed on Legacy card at every long-horizon pill (10yr/20yr/30yr/Retirement); no '8%' present anywhere on screen; the underlying constant `rate = 7` was confirmed in code at index.tsx:2537. Retirement math with $10k investment shows $93,253 which matches $10,000 * 1.07^33 exactly (Retirement pill uses 33yr window as seen in Home teaser text). (2) Home Legacy Snapshot: correctly HIDDEN for the fresh test user (all values zero), and correctly RENDERED after adding $10k investment via Net Worth. testID='home-legacy-snapshot' present, tile labels are Y1/Y5/Y10 CASH + 20YR/30YR RETIREMENT, tap navigates to Legacy screen. Y1/Y5/Y10 CASH values (all $10,000 for the no-monthly-net case) match the Legacy CHECKPOINTS (SHORT-TERM CASH) tiles exactly. (3) Reports adds new 'Where the money came from (by source)' section between 'Income vs Expense' and 'Where the money went (by category)' — visually confirmed in the correct order. Empty state 'No income in this range.' renders when there are no income transactions, no crashes. (4) Legacy CHECKPOINTS card with YEAR 1/2/5/10 mini-tiles renders regardless of selected timeframe, above the Cumulative toggle. Toggle regression: expanding produces the year-by-year table with 'Year 1' rows as before. (5) Budget YEAR selector row renders above month/Year pills with testIDs budget-year-2026..2030; default active = 2026; tapping 2027/2028 flips gold background rgb(178,138,76)==#b28a4c, others go to #fff/inactive; page reload persists selected year (2028 remained active after reload) confirming localStorage-backed budgetYear persistence via MainApp state. Regression checks all pass: home-bell visible in BOTH light and dark modes (verified via Settings->Appearance->Dark), Support hub opens from Settings, Reports opens from More (accessed via home-profile avatar), Powered-by-jaleter footer visible on More/Support. No red screens, no console errors beyond harmless shadow* deprecation warning.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iteration_28.json"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "/app/frontend/app/index.tsx is 3742 lines — well above the 700-line threshold in the code review guidelines. Consider splitting Legacy/Budget/Home/Settings/Welcome into separate module files for future maintainability. Not blocking for this iteration."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100%"},
+  "seed_data_creation": "Added a $10,000 investment amount via Net Worth -> Investments row for the alex+test1 user to trigger the Home Legacy Snapshot render path. This is stored client-side (AsyncStorage) so it is per-browser-session and does not affect other users.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Login via Welcome iframe requires posting `window.postMessage('navigate:login', '*')` to bypass the iframe sandbox and get to the login form. The bottom nav has no 'More' tab — More is opened via the AW avatar in the home header (testID='home-profile'). Budget year selector persistence uses localStorage via MainApp storage.setItem; reload preserves both selected year and per-year budgets (categoriesByYear map). Legacy Home Snapshot only renders when totalCash > 0 OR investmentTotal > 0 OR monthlyNet > 0.",
+  "rca_of_issue": "No issues found; all 5 gap-closing changes verified working end-to-end."
+}
