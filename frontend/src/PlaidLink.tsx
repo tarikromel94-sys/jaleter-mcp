@@ -82,7 +82,23 @@ export function ConnectPlaidButton({ token, onLinked, compact, testID }: Props) 
   const [busy, setBusy] = useState(false);
   const [webToken, setWebToken] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [env, setEnv] = useState<string>('');
   const linkedOnce = useRef(false);
+
+  // Fetch the current Plaid environment on mount so we can warn the user
+  // that real phone numbers won't work in sandbox mode.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await apiCall('/api/plaid/status', { method: 'GET' }, token);
+        if (!cancelled) setEnv(status?.env || '');
+      } catch { /* silent — button still works if status fails */ }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const isSandbox = env === 'sandbox';
 
   const exchange = useCallback(async (publicToken: string, metadata: any) => {
     try {
@@ -151,6 +167,21 @@ export function ConnectPlaidButton({ token, onLinked, compact, testID }: Props) 
 
   return (
     <View style={{ gap: 8 }}>
+      {isSandbox ? (
+        <View style={styles.sandboxBanner} testID="plaid-sandbox-banner">
+          <Ionicons name="flask-outline" size={14} color="#a97c39" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.sandboxTitle}>Plaid is in sandbox (test) mode</Text>
+            <Text style={styles.sandboxBody}>
+              Real bank credentials and phone numbers will be rejected. To test, use{' '}
+              <Text style={{ fontWeight: '800' }}>user_good</Text> /{' '}
+              <Text style={{ fontWeight: '800' }}>pass_good</Text>, phone{' '}
+              <Text style={{ fontWeight: '800' }}>+14155550000</Text>, SMS code{' '}
+              <Text style={{ fontWeight: '800' }}>1234</Text>. Switch to production keys to accept real banks.
+            </Text>
+          </View>
+        </View>
+      ) : null}
       <Pressable
         testID={testID || 'plaid-connect-btn'}
         onPress={onPress}
@@ -163,9 +194,11 @@ export function ConnectPlaidButton({ token, onLinked, compact, testID }: Props) 
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>{busy ? 'Connecting…' : 'Connect a bank (Plaid)'}</Text>
           <Text style={styles.sub}>
-            {Platform.OS === 'web'
-              ? 'Secure, encrypted bank link with 11,000+ institutions.'
-              : 'Secure bank link — works in your published/native build.'}
+            {isSandbox
+              ? 'Sandbox mode — use test credentials only.'
+              : Platform.OS === 'web'
+                ? 'Secure, encrypted bank link with 11,000+ institutions.'
+                : 'Secure bank link — works in your published/native build.'}
           </Text>
         </View>
         {busy ? <ActivityIndicator size="small" color={C.goldEyebrow} /> : <Ionicons name="chevron-forward" size={16} color="#aaa39a" />}
@@ -211,4 +244,16 @@ const styles = StyleSheet.create({
   sub: { fontSize: 9, color: '#8a7f70', marginTop: 2 },
   hint: { fontSize: 10, color: '#8a7f70', marginTop: 4, textAlign: 'center' },
   error: { fontSize: 10, color: '#b0453d', marginTop: 4 },
+  sandboxBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e8d5a4',
+    backgroundColor: '#fdf6e1',
+  },
+  sandboxTitle: { fontSize: 11, fontWeight: '800', color: '#8a6a1e' },
+  sandboxBody: { fontSize: 9, color: '#7a6a4a', marginTop: 2, lineHeight: 13 },
 });

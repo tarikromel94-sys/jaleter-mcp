@@ -22,8 +22,20 @@ logger = logging.getLogger(__name__)
 
 # ---- Env / config -----------------------------------------------------------
 PLAID_CLIENT_ID = os.environ.get('PLAID_CLIENT_ID', '').strip()
-PLAID_SECRET = os.environ.get('PLAID_SANDBOX_SECRET', '').strip() or os.environ.get('PLAID_SECRET', '').strip()
 PLAID_ENV = (os.environ.get('PLAID_ENV', 'sandbox') or 'sandbox').strip().lower()
+# Environment-specific secret selection: production > development > sandbox,
+# with an explicit override via PLAID_SECRET (matches Plaid dashboard naming).
+_ENV_TO_SECRET_KEY = {
+    'production': 'PLAID_PRODUCTION_SECRET',
+    'development': 'PLAID_DEVELOPMENT_SECRET',
+    'sandbox': 'PLAID_SANDBOX_SECRET',
+}
+_env_secret_name = _ENV_TO_SECRET_KEY.get(PLAID_ENV, 'PLAID_SANDBOX_SECRET')
+PLAID_SECRET = (
+    os.environ.get('PLAID_SECRET', '').strip()
+    or os.environ.get(_env_secret_name, '').strip()
+    or os.environ.get('PLAID_SANDBOX_SECRET', '').strip()  # safety fallback
+)
 PLAID_PRODUCTS = [p.strip() for p in (os.environ.get('PLAID_PRODUCTS', 'transactions') or '').split(',') if p.strip()]
 PLAID_COUNTRY_CODES = [c.strip() for c in (os.environ.get('PLAID_COUNTRY_CODES', 'US') or '').split(',') if c.strip()]
 
