@@ -14,6 +14,7 @@ export type AuthUser = {
   provider: 'password' | 'google';
   picture?: string | null;
   is_admin?: boolean;
+  email_verified?: boolean;
 };
 
 type AuthState = {

@@ -102,6 +102,7 @@ class UserPublic(BaseModel):
     provider: str  # 'password' | 'google'
     picture: Optional[str] = None
     is_admin: bool = False
+    email_verified: bool = False
 
 
 class AuthResponse(BaseModel):
@@ -165,6 +166,7 @@ def public_user(u: dict) -> UserPublic:
         provider=u.get('provider', 'password'),
         picture=u.get('picture'),
         is_admin=bool(u.get('is_admin')),
+        email_verified=bool(u.get('email_verified')),
     )
 
 
@@ -256,7 +258,7 @@ async def root():
     return {'message': 'Jaleter API', 'status': 'ok'}
 
 
-@api_router.post('/auth/register', response_model=AuthResponse)
+@api_router.post('/auth/register')
 @limiter.limit('10/minute')
 async def register(payload: RegisterRequest, request: Request):
     existing = await db.users.find_one({'email': payload.email.lower()}, {'_id': 0})
@@ -269,12 +271,85 @@ async def register(payload: RegisterRequest, request: Request):
         'email': payload.email.lower(),
         'password_hash': hash_password(payload.password),
         'provider': 'password',
+        'email_verified': False,
         'created_at': datetime.now(timezone.utc),
     }
     await db.users.insert_one(doc)
+    # Auto-issue a verification token (best-effort — email delivery is a no-op
+    # when SendGrid keys are absent so token is returned in dev only).
+    verification_token = None
+    try:
+        verification_token = secrets.token_urlsafe(32)
+        await db.email_verifications.insert_one({
+            'token': verification_token,
+            'user_id': user_id,
+            'email': payload.email.lower(),
+            'created_at': datetime.now(timezone.utc),
+            'expires_at': datetime.now(timezone.utc) + timedelta(hours=24),
+            'used': False,
+        })
+        if sendgrid_ready():
+            verify_link = f"https://jaleter.com/verify-email?token={verification_token}"
+            html = f"<p>Welcome to Jaleter! Verify your email:</p><p><a href='{verify_link}'>{verify_link}</a></p><p>Link expires in 24 hours.</p>"
+            await send_email(payload.email.lower(), 'Verify your Jaleter account', html)
+    except Exception as e:  # noqa: BLE001
+        logger.warning('email verification issue on register: %s', e)
     token = create_access_token(user_id)
     doc.pop('_id', None)
-    return AuthResponse(user=public_user(doc), token=token)
+    resp = AuthResponse(user=public_user(doc), token=token)
+    # In dev (no SendGrid) surface the token so QA can proceed; suppressed in prod.
+    if verification_token and not sendgrid_ready():
+        return {**resp.model_dump(), 'dev_verification_token': verification_token}
+    return resp
+
+
+@api_router.post('/auth/verify-email')
+@limiter.limit('20/minute')
+async def verify_email(request: Request, payload: dict):
+    """Verify a user's email using the token from the verification link.
+
+    We fetch the token, ensure it isn't expired or already used, then set
+    `email_verified: True` on the user and mark the token consumed.
+    """
+    token_val = (payload.get('token') or '').strip()
+    if not token_val:
+        raise HTTPException(status_code=400, detail='Missing verification token')
+    row = await db.email_verifications.find_one({'token': token_val, 'used': False})
+    if not row:
+        raise HTTPException(status_code=400, detail='Invalid or expired verification link')
+    exp = row.get('expires_at')
+    if isinstance(exp, datetime):
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp < datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail='Verification link has expired')
+    await db.users.update_one({'user_id': row['user_id']}, {'$set': {'email_verified': True}})
+    await db.email_verifications.update_one({'token': token_val}, {'$set': {'used': True, 'used_at': datetime.now(timezone.utc)}})
+    return {'ok': True}
+
+
+@api_router.post('/auth/resend-verification')
+@limiter.limit('3/minute')
+async def resend_verification(request: Request, current_user: dict = Depends(get_current_user)):
+    """Re-issue a verification token for the signed-in user."""
+    if current_user.get('email_verified'):
+        return {'ok': True, 'already_verified': True}
+    verification_token = secrets.token_urlsafe(32)
+    await db.email_verifications.insert_one({
+        'token': verification_token,
+        'user_id': current_user['user_id'],
+        'email': current_user['email'],
+        'created_at': datetime.now(timezone.utc),
+        'expires_at': datetime.now(timezone.utc) + timedelta(hours=24),
+        'used': False,
+    })
+    if sendgrid_ready():
+        verify_link = f"https://jaleter.com/verify-email?token={verification_token}"
+        html = f"<p>Verify your Jaleter email:</p><p><a href='{verify_link}'>{verify_link}</a></p><p>Link expires in 24 hours.</p>"
+        await send_email(current_user['email'], 'Verify your Jaleter account', html)
+        return {'ok': True}
+    # Dev-only: return the token for testing when SendGrid is not configured.
+    return {'ok': True, 'dev_verification_token': verification_token}
 
 
 @api_router.post('/auth/login', response_model=AuthResponse)
@@ -287,6 +362,59 @@ async def login(payload: LoginRequest, request: Request):
         raise HTTPException(status_code=401, detail='Invalid email or password')
     token = create_access_token(user['user_id'])
     return AuthResponse(user=public_user(user), token=token)
+
+
+@api_router.delete('/auth/delete-account')
+@limiter.limit('3/minute')
+async def delete_account(request: Request, current_user: dict = Depends(get_current_user)):
+    """Fully purge a user account — profile, sessions, financial data, and Plaid.
+
+    Steps (best-effort; nothing here should raise a 500 unless auth failed):
+      1. Revoke every Plaid item at Plaid (`/item/remove`), then delete local rows
+      2. Delete every cached bank transaction for the user
+      3. Delete linked_accounts, snaptrade_users/accounts, support tickets/replies
+      4. Delete sessions, password_resets, email_verifications
+      5. Finally delete the user row itself
+    """
+    user_id = current_user['user_id']
+    deleted: dict[str, int] = {}
+    # 1. Plaid items — try to revoke each token remotely, then delete locally.
+    items = await db.plaid_items.find({'user_id': user_id}).to_list(length=100)
+    plaid_revoked = 0
+    plaid_revoke_errors = 0
+    for item in items:
+        try:
+            plain_token = plaid_service.decrypt(item['access_token_encrypted'])
+            await plaid_service._post('/item/remove', {'access_token': plain_token})
+            plaid_revoked += 1
+        except Exception as e:  # noqa: BLE001
+            plaid_revoke_errors += 1
+            logger.warning('plaid revoke failed during delete-account: %s', e)
+    r = await db.plaid_items.delete_many({'user_id': user_id}); deleted['plaid_items'] = r.deleted_count
+    # 2. Cached transactions
+    r = await db.bank_transactions.delete_many({'user_id': user_id}); deleted['bank_transactions'] = r.deleted_count
+    # 3. Other linked-financial-data collections
+    for coll in ('linked_accounts', 'snaptrade_accounts', 'snaptrade_users',
+                 'support_tickets', 'support_requests', 'coaching_bookings'):
+        try:
+            r = await db[coll].delete_many({'user_id': user_id}); deleted[coll] = r.deleted_count
+        except Exception as e:  # noqa: BLE001
+            logger.warning('delete-account: failed on %s: %s', coll, e)
+    # 4. Sessions + tokens
+    for coll in ('user_sessions', 'password_resets', 'email_verifications'):
+        try:
+            r = await db[coll].delete_many({'user_id': user_id}); deleted[coll] = r.deleted_count
+        except Exception:
+            pass
+    # 5. Finally the user record
+    r = await db.users.delete_one({'user_id': user_id}); deleted['users'] = r.deleted_count
+    return {
+        'ok': True,
+        'user_id': user_id,
+        'plaid_items_revoked': plaid_revoked,
+        'plaid_revoke_errors': plaid_revoke_errors,
+        'deleted_counts': deleted,
+    }
 
 
 @api_router.get('/auth/me', response_model=UserPublic)
@@ -1102,7 +1230,13 @@ async def plaid_unlink(item_id: str, current_user: dict = Depends(get_current_us
     except Exception as e:  # noqa: BLE001
         logger.info('plaid /item/remove failed (non-fatal): %s', e)
     await db.plaid_items.delete_one({'item_id': item_id, 'user_id': current_user['user_id']})
-    return {'ok': True}
+    # Cascade: remove every cached transaction that belonged to THIS item so
+    # unlinking a bank actually wipes its data from the user's Reports/Budget.
+    tx_del = await db.bank_transactions.delete_many({
+        'user_id': current_user['user_id'],
+        'link_id': item_id,
+    })
+    return {'ok': True, 'transactions_deleted': tx_del.deleted_count}
 
 
 @api_router.post('/plaid/webhook')

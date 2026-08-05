@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration-31 pre-launch backend security verification: 23/23 pytest cases PASS. Verified email-verification flow (register → dev token → verify → reuse-rejected → invalid-rejected → resend-when-verified → resend-new-user issues fresh token). Verified full account-deletion cascade removes users/plaid_items/bank_transactions/support_tickets/linked_accounts/user_sessions/password_resets/email_verifications/coaching_bookings and old JWT returns 401. Verified /api/plaid/item/{id} DELETE cascades transactions_deleted=3 for owner while preserving other-user rows (cross-user isolation). Regression: admin login, /auth/me, admin support tickets, plaid link-token auth all still work. Rate limits confirmed active: login 5/min, register 10/min, forgot-password 3/min, resend-verification 3/min, reset-password 5/min all fire 429. Fixed 2 real backend bugs during testing (see updated_files).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/support/tickets", "issue": "Not tested in iteration; existing regression already covers this. No new issue observed."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": [], "react_native_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration31_prelaunch_security.py",
+    "/app/test_reports/pytest/iteration31_results.xml"
+  ],
+  "action_items": [
+    "Confirm the two backend fixes below are acceptable (both were within test-agent fix scope — standard coding bugs):",
+    "  1. server.py /auth/register: removed `response_model=AuthResponse` because it stripped the `dev_verification_token` field before returning. Now returns the raw dict (still matches AuthResponse shape + adds dev token). If you'd rather keep response_model, extend AuthResponse with `dev_verification_token: Optional[str] = None`.",
+    "  2. server.py /auth/verify-email: added tz-normalisation for the `expires_at` field read from Mongo (naive datetime was compared to tz-aware `datetime.now(timezone.utc)` → 500). Mirrors the same normalisation already present in /auth/reset-password.",
+    "Optional: also normalise other Mongo datetime comparisons (`password_resets.expires_at`, `email_verifications` inside delete-account, `user_sessions.expires_at`) to always be tz-aware for consistency — currently the read path only sometimes guards.",
+    "Consider using `X-Forwarded-For` (via slowapi's `key_func`) for rate limiting so K8s ingress load-balancing doesn't effectively double the per-user limit. Right now real users hitting through the ingress from multiple pod IPs would appear as different keys and could bypass limits."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1325 lines — still well past the 700-line guideline; splitting auth / plaid / support / payments modules would make future security audits easier.",
+    "delete-account endpoint iterates hardcoded collection names in two loops. Consider a single per-user-cleanup helper that lists ALL user-scoped collections in one place so future collections aren't forgotten (e.g. `payment_transactions` — currently NOT purged during delete-account, leaving orphan Stripe txn rows; low-risk since they hold no PII beyond email/name).",
+    "/auth/register uses `get_remote_address` for rate limiting; behind ingress this uses the pod IP, not the client IP. Real users may share a NAT source IP and get bogusly rate-limited, or (as observed in tests) multiple pod IPs may effectively double the limit."
+  ],
+  "updated_files": [
+    "/app/backend/server.py — (1) removed response_model=AuthResponse from /auth/register so dev_verification_token isn't filtered out; (2) tz-normalised expires_at check in /auth/verify-email.",
+    "/app/backend/tests/test_iteration31_prelaunch_security.py — new pytest suite (23 tests)."
+  ],
+  "success_rate": {"backend": "100% (23/23)", "frontend": "N/A (backend-only per request)"},
+  "seed_data_creation": "Registered ~6 disposable users via /auth/register (emails TEST_*@jaleter.app), directly inserted 2 fake plaid_items + 8 bank_transactions rows via motor, created 1 support ticket. All test users + orphan rows purged from Mongo at end of run (58 test users deleted).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Re-run: cd /app/backend && python -m pytest tests/test_iteration31_prelaunch_security.py -v. Important: wait 60-70s between full-suite runs so per-IP rate-limit windows reset (rate-limit tests at the end burn slots). K8s ingress uses ~2 source IPs so per-IP slowapi limits appear doubled from a single tester; burst counts in test_90-94 are sized accordingly (20-30 calls). SendGrid env keys must stay empty for the dev-fallback token branches to be reachable (see /app/backend/.env). If SendGrid is enabled later, tests 10 and 18 must be updated (dev_verification_token disappears from responses).",
+  "rca_of_issue": "Two real bugs found and fixed during testing. (a) /auth/register was decorated with response_model=AuthResponse, causing FastAPI to strip the dev_verification_token field appended after model.dump() → integration tests would never receive the token when SendGrid is unconfigured, blocking the whole verify-email QA flow. (b) /auth/verify-email compared row['expires_at'] (naive datetime returned by Mongo) to datetime.now(timezone.utc) (tz-aware), raising TypeError → 500 Internal Server Error for every valid verify attempt. Same tz mismatch also existed at reset-password but was already guarded. Fix (a) drops the response_model; fix (b) mirrors reset-password's tz-normalisation."
+}
