@@ -12,7 +12,7 @@
  * has `is_admin: true` (see AuthContext / /api/auth/me).
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, ActivityIndicator, Platform, Image, Alert, Linking } from 'react-native';
+import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, ActivityIndicator, Platform, Image, Alert } from 'react-native';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
@@ -20,6 +20,8 @@ import { File } from 'expo-file-system';
 import { apiCall, useAuth } from '@/src/AuthContext';
 import { C } from '@/src/jaleterTheme';
 import { BANK_IMPORT_GUIDES } from '@/src/bankGuides';
+import { openJaleter } from '@/src/jaleterLinks';
+import { PoweredByJaleter } from '@/src/PoweredByJaleter';
 
 type Attachment = {
   filename: string;
@@ -210,6 +212,12 @@ function HubMode({ tickets, loading, goNew, goList, goAdmin, goHelp, isAdmin }: 
           <Text style={styles.faqA}>{f.a}</Text>
         </View>
       ))}
+      <Pressable onPress={() => openJaleter('support')} style={styles.linkBanner} testID="support-visit-website">
+        <Ionicons name="globe-outline" size={16} color={C.goldEyebrow} />
+        <Text style={styles.linkBannerText}>Visit our full Help Center at jaleter.com/support</Text>
+        <Ionicons name="open-outline" size={14} color={C.goldEyebrow} />
+      </Pressable>
+      <PoweredByJaleter />
     </View>
   );
 }
@@ -825,7 +833,7 @@ function BillingMode({ token, onCreated, back }: { token: string | null; onCreat
   const [error, setError] = useState('');
 
   const openBillingSite = async () => {
-    try { await Linking.openURL('https://jaleter.com/billing'); } catch { /* ignore */ }
+    await openJaleter('billing');
   };
 
   const submit = async () => {

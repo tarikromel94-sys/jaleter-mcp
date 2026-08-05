@@ -19,6 +19,8 @@ import { ConnectPlaidButton } from '@/src/PlaidLink';
 import { SupportSheet } from '@/src/SupportSheet';
 import { ReportsScreen } from '@/src/ReportsScreen';
 import { BANK_IMPORT_GUIDES } from '@/src/bankGuides';
+import { openJaleter } from '@/src/jaleterLinks';
+import { PoweredByJaleter } from '@/src/PoweredByJaleter';
 
 const STORAGE_KEY = 'jaleter-state-v2';
 // One-time migration: any legacy v1 cache (which was seeded with mock $ figures) must be discarded.
@@ -385,23 +387,29 @@ const Sparkle = ({ size = 20, color = C.goldGlow, style }: any) => (
 
 /* ---------------- Billing Website Notice (external web billing) ---------------- */
 // All Stripe checkout has moved to jaleter.com to bypass App Store fees.
-// Per Apple/Google in-app rules, this shows text-only guidance (no clickable link on iOS).
-const BillingWebsiteNotice = ({ compact = false }: { compact?: boolean }) => {
+// Tapping opens jaleter.com/billing in the platform's best browser.
+const BillingWebsiteNotice = ({ compact = false, target = 'billing' as 'billing' | 'coaching' | 'membership' }: { compact?: boolean; target?: 'billing' | 'coaching' | 'membership' }) => {
   const t = useThemed();
+  const label = target === 'coaching' ? 'Book & pay at jaleter.com' : target === 'membership' ? 'Manage membership at jaleter.com' : 'Billing lives at jaleter.com';
   return (
-    <View style={[billingNoticeStyles.card, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
+    <Pressable
+      testID={`billing-notice-${target}`}
+      onPress={() => openJaleter(target)}
+      style={[billingNoticeStyles.card, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}
+    >
       <View style={billingNoticeStyles.iconWrap}>
         <Ionicons name="globe-outline" size={16} color={C.goldEyebrow} />
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={[billingNoticeStyles.title, t.textInk]}>Billing lives at jaleter.com</Text>
+        <Text style={[billingNoticeStyles.title, t.textInk]}>{label}</Text>
         <Text style={[billingNoticeStyles.body, t.textMuted]}>
           {compact
-            ? 'Manage payments and subscriptions on our website.'
-            : 'To keep prices honest and avoid App Store fees, all payments and subscription management happen on our secure website. Visit jaleter.com on any browser to purchase or renew.'}
+            ? 'Tap to open on our website.'
+            : 'To keep prices honest and avoid App Store fees, all payments and subscription management happen on our secure website. Tap here to open jaleter.com in your browser.'}
         </Text>
       </View>
-    </View>
+      <Ionicons name="open-outline" size={16} color={C.goldEyebrow} />
+    </Pressable>
   );
 };
 const billingNoticeStyles = StyleSheet.create({
@@ -781,7 +789,13 @@ const Signup = ({ back, onCreated, goLogin }: any) => {
         <TextInput testID="signup-password" style={s.input} value={form.password} onChangeText={t => setForm({ ...form, password: t })} placeholder="At least 8 characters" secureTextEntry />
         <Pressable testID="signup-terms" onPress={() => setForm({ ...form, terms: !form.terms })} style={s.checkRow}>
           <View style={[s.checkbox, form.terms && s.checkboxOn]}>{form.terms && <Ionicons name="checkmark" size={11} color="#fff" />}</View>
-          <Text style={{ fontSize: 12, color: C.ink, flex: 1 }}>I agree to Jaleter&apos;s Terms and Privacy Policy.</Text>
+          <Text style={{ fontSize: 12, color: C.ink, flex: 1 }}>
+            I agree to Jaleter&apos;s{' '}
+            <Text testID="signup-terms-link" style={{ color: C.goldEyebrow, fontWeight: '700' }} onPress={() => openJaleter('terms')}>Terms</Text>
+            {' '}and{' '}
+            <Text testID="signup-privacy-link" style={{ color: C.goldEyebrow, fontWeight: '700' }} onPress={() => openJaleter('privacy')}>Privacy Policy</Text>
+            .
+          </Text>
         </Pressable>
         {error ? <Text testID="signup-error" style={s.formError}>{error}</Text> : null}
         <View style={{ marginTop: 14 }}><GoldButton label={busy ? 'Creating...' : 'Create account'} onPress={onSubmit} disabled={!valid || busy} testID="signup-create" /></View>
@@ -795,6 +809,7 @@ const Signup = ({ back, onCreated, goLogin }: any) => {
           <Text style={s.loginLink}>Already have an account? <Text style={{ color: C.goldEyebrow }}>Log in</Text></Text>
         </Pressable>
       </View>
+      <PoweredByJaleter />
     </ScrollView>
   );
 };
@@ -845,6 +860,7 @@ const Login = ({ back, goSignup, goForgot }: any) => {
           <Text style={s.loginLink}>No account yet? <Text style={{ color: C.goldEyebrow }}>Sign up</Text></Text>
         </Pressable>
       </View>
+      <PoweredByJaleter />
     </ScrollView>
   );
 };
@@ -2644,16 +2660,17 @@ const CoachingScreen = ({ back }: any) => {
             <Text style={s.stepBtnPillText}>Schedule →</Text>
           </Pressable>
         </View>
-        <View style={[s.stepCard, t.cardBg]}>
+        <Pressable style={[s.stepCard, t.cardBg]} onPress={() => openJaleter('coaching')} testID="coaching-open-jaleter">
           <View style={s.stepBadge}><Text style={s.stepBadgeText}>2</Text></View>
           <View style={{ flex: 1 }}>
             <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>Pay $50 on the web</Text>
-            <Text style={[{ fontSize: 9, color: C.muted2, marginTop: 2 }, t.textMuted]}>Complete payment at jaleter.com to lock your session.</Text>
+            <Text style={[{ fontSize: 9, color: C.muted2, marginTop: 2 }, t.textMuted]}>Complete payment at jaleter.com/coaching to lock your session.</Text>
           </View>
-        </View>
+          <Ionicons name="open-outline" size={16} color={C.goldEyebrow} />
+        </Pressable>
       </View>
 
-      <BillingWebsiteNotice />
+      <BillingWebsiteNotice target="coaching" />
 
       {upcoming.length > 0 && (
         <View style={{ marginTop: 22 }}>
@@ -2703,7 +2720,7 @@ const MembershipScreen = ({ back }: any) => {
           </View>
         ))}
       </View>
-      <BillingWebsiteNotice />
+      <BillingWebsiteNotice target="membership" />
     </ScrollView>
   );
 };
@@ -2733,7 +2750,18 @@ const MoreScreen = ({ navigate, linkedCount, onBack }: any) => {
             <Ionicons name="chevron-forward" size={16} color={t.dark ? D.textMuted : '#aaa39a'} />
           </Pressable>
         ))}
+
+        {/* External-website quick links — open jaleter.com in the browser. */}
+        <Pressable style={[s.moreGridBtn, t.cardBg]} onPress={() => openJaleter('home')} testID="more-visit-jaleter">
+          <View style={[s.moreGridIcon, t.dark && { backgroundColor: D.surfaceAlt }]}><Ionicons name="globe-outline" size={20} color={C.goldEyebrow} /></View>
+          <View style={{ flex: 1 }}>
+            <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>Visit jaleter.com</Text>
+            <Text style={[{ fontSize: 9, color: C.muted2 }, t.textMuted]}>Blog, pricing, resources</Text>
+          </View>
+          <Ionicons name="open-outline" size={16} color={t.dark ? D.textMuted : '#aaa39a'} />
+        </Pressable>
       </View>
+      <PoweredByJaleter />
     </ScrollView>
   );
 };
@@ -2746,8 +2774,8 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
     ['accounts', 'Linked Accounts', `${linkedAccounts.length} connected`, 'link-outline'],
     ['support', 'Help & Support', 'Contact us, FAQs, ticket history', 'help-buoy-outline'],
     ['notifications', 'Notification Details', 'Manage every reminder', 'notifications-outline'],
-    ['terms', 'Terms of Use', 'Membership terms', 'document-text-outline'],
-    ['privacy', 'Privacy Policy', 'Bank-data protection', 'lock-closed-outline'],
+    ['terms', 'Terms of Use', 'Opens jaleter.com/terms', 'document-text-outline'],
+    ['privacy', 'Privacy Policy', 'Opens jaleter.com/privacy', 'lock-closed-outline'],
   ];
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
@@ -2810,10 +2838,20 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
       </View>
       <View style={[s.settingsMenu, t.cardBg]}>
         {rows.map(([id, label, detail, icon]) => (
-          <Pressable key={id} onPress={() => setSheet(id)} style={[s.settingsMenuBtn, t.dividerBorder]} testID={`settings-${id}`}>
+          <Pressable
+            key={id}
+            onPress={() => {
+              // Terms and Privacy live on jaleter.com — open directly.
+              if (id === 'terms') { openJaleter('terms'); return; }
+              if (id === 'privacy') { openJaleter('privacy'); return; }
+              setSheet(id);
+            }}
+            style={[s.settingsMenuBtn, t.dividerBorder]}
+            testID={`settings-${id}`}
+          >
             <View style={[s.settingsRowIcon, t.dark && { backgroundColor: D.surfaceAlt }]}><Ionicons name={icon} size={17} color={t.dark ? D.textMuted : '#8a7b65'} /></View>
             <View style={{ flex: 1 }}><Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{label}</Text><Text style={[{ fontSize: 9, color: C.muted3 }, t.textMuted]}>{detail}</Text></View>
-            <Ionicons name="chevron-forward" size={16} color={t.dark ? D.textMuted : '#b0aaa0'} />
+            <Ionicons name={id === 'terms' || id === 'privacy' ? 'open-outline' : 'chevron-forward'} size={16} color={t.dark ? D.textMuted : '#b0aaa0'} />
           </Pressable>
         ))}
       </View>
