@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration-32 post-launch security follow-ups: 15/15 new pytest cases PASS + 23/23 iteration-31 regression cases PASS = 38/38 total. Verified all 3 fixes end-to-end. FIX 1 — /auth/delete-account now purges payment_transactions: seeded a row for user A + a row for user B, deleted A → response deleted_counts.payment_transactions=1, Mongo confirms A's row gone AND B's row intact (cross-user isolation). FIX 2 — Rate limiter is now bucketed by X-Forwarded-For: exactly 5x 401 then 429 on the 6th call from X-Forwarded-For=203.0.113.99 (deterministic, no more burst-of-20 hack), a burst of 5 from a DIFFERENT X-Forwarded-For=203.0.113.100 all returned 401 (fresh bucket), and no-XFF fallback via get_remote_address still rate-limits within 15 calls. FIX 3 — Plaid webhook signature verification: no header → 401 'missing Plaid-Verification header'; random string header → 401 'invalid webhook signature'; HS256 JWT (wrong alg) → 401; syntactically-valid ES256 JWT with fake kid → 401 (Plaid /webhook_verification_key/get errors out, our handler returns 401). db.plaid_items count is byte-identical before and after every rejected webhook (no unauthenticated writes). Endpoint still mounted at POST /api/plaid/webhook (GET returns 405). Regression: /api/plaid/status still returns configured=true, env='production'; support ticket creation still works; admin login intact.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration32_security_followups.py",
+    "/app/test_reports/pytest/iteration32_results.xml",
+    "/app/backend/tests/test_iteration31_prelaunch_security.py"
+  ],
+  "action_items": [
+    "No action items — all 3 fixes verified working. Iteration-32 is release-ready from a security-follow-up perspective.",
+    "Optional (carry-over from iter-31): server.py is now 1395 lines; splitting into auth/plaid/support/payments modules would still ease future audits.",
+    "Optional (carry-over from iter-31): consolidate per-user cleanup collections into a single helper so new user-scoped collections aren't forgotten in the next delete-account audit."
+  ],
+  "critical_code_review_comments": [
+    "_client_key (server.py:25-41) correctly strips the leftmost XFF value and falls back safely on any parse error. Good defensive coding.",
+    "plaid_webhook (server.py:1262-1331) rejects with 401 BEFORE any DB read/write. Verified plaid_items count byte-identical before/after each rejected call. Note: the endpoint still validates iat freshness (<5 min) and request_body_sha256; those paths are unreachable in a black-box test without valid Plaid signing, but the rejection branch (verification failure → HTTPException 401) is fully covered.",
+    "delete_account (server.py:386-437) now includes payment_transactions in the loop at line 418. Cross-user isolation is preserved because delete_many is scoped by user_id. Good.",
+    "server.py is 1395 lines — still well past the 700-line guideline, but not blocking."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (38/38 — 15 new iter-32 + 23 iter-31 regression)",
+    "frontend": "N/A (backend-only per request)"
+  },
+  "seed_data_creation": "Registered ~5 disposable users via /auth/register (TEST_i32_*@jaleter.app). Directly inserted 2 fake payment_transactions rows via pymongo (one per user for the isolation test). All test data purged by test_99_cleanup_test_data at end of run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Re-run everything: cd /app/backend && python -m pytest tests/test_iteration32_security_followups.py tests/test_iteration31_prelaunch_security.py -v. Wait 60-70s between full-suite runs so per-IP rate-limit windows reset. The XFF-based rate-limit tests (test_20/21) are now DETERMINISTIC (exactly 5 then 429) because we control the X-Forwarded-For bucket; the no-XFF fallback test (test_22) still needs a burst because we share get_remote_address with other traffic. Plaid webhook fake-kid test hits real Plaid /webhook_verification_key/get in production which errors gracefully — no cost, no side-effect. If Plaid ever changes that endpoint's error semantics we still 401 because our except-block is broad.",
+  "rca_of_issue": "N/A — no bugs found. All 3 fixes work exactly as documented in the review request."
+}

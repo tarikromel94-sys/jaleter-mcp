@@ -11,6 +11,7 @@ from typing import Optional
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import os
+import json
 import uuid
 import secrets
 import logging
@@ -20,6 +21,24 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
+
+def _client_key(request: Request) -> str:  # noqa: F821 - Request is imported later
+    """Return the real client IP for rate-limiting.
+
+    Behind Kubernetes ingress, `request.client.host` is the pod IP so every
+    caller collapses to one key. Ingress sets `X-Forwarded-For`; the leftmost
+    value is the original client. Falls back to remote address if no header
+    (e.g. local dev without a proxy). Any bad input → falls back safely.
+    """
+    try:
+        xff = request.headers.get('x-forwarded-for', '').strip()
+        if xff:
+            first = xff.split(',')[0].strip()
+            if first:
+                return first
+    except Exception:  # noqa: BLE001
+        pass
+    return get_remote_address(request)
 # IMPORTANT: load .env BEFORE importing modules that read env at module level
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -66,7 +85,7 @@ db = client[DB_NAME]
 pwd_ctx = CryptContext(schemes=['bcrypt'], deprecated='auto')
 
 # Rate limiter — protects auth endpoints from brute force
-limiter = Limiter(key_func=get_remote_address, default_limits=[])
+limiter = Limiter(key_func=_client_key, default_limits=[])
 
 app = FastAPI()
 app.state.limiter = limiter
@@ -395,7 +414,8 @@ async def delete_account(request: Request, current_user: dict = Depends(get_curr
     r = await db.bank_transactions.delete_many({'user_id': user_id}); deleted['bank_transactions'] = r.deleted_count
     # 3. Other linked-financial-data collections
     for coll in ('linked_accounts', 'snaptrade_accounts', 'snaptrade_users',
-                 'support_tickets', 'support_requests', 'coaching_bookings'):
+                 'support_tickets', 'support_requests', 'coaching_bookings',
+                 'payment_transactions'):
         try:
             r = await db[coll].delete_many({'user_id': user_id}); deleted[coll] = r.deleted_count
         except Exception as e:  # noqa: BLE001
@@ -1241,12 +1261,59 @@ async def plaid_unlink(item_id: str, current_user: dict = Depends(get_current_us
 
 @api_router.post('/plaid/webhook')
 async def plaid_webhook(request: Request):
-    """Plaid webhook receiver. Fast-ACKs, then background-syncs the item.
+    """Plaid webhook receiver — verifies signature, ACKs, then syncs.
 
-    Note: In production, verify the Plaid-Signature JWT against the raw body.
+    Signature verification (per Plaid docs — https://plaid.com/docs/api/webhooks/webhook-verification/):
+      1. Read the `Plaid-Verification` header (a JWT signed with ES256).
+      2. Decode the header without verifying to grab its `kid`.
+      3. Fetch the public JWK for that `kid` from `/webhook_verification_key/get`.
+         (Plaid rotates keys; we do not cache aggressively — 1 extra HTTP call per
+         webhook is fine at our scale and avoids a stale-cache footgun.)
+      4. Verify the JWT signature + `iat` freshness (< 5 min old).
+      5. Confirm the body's SHA-256 hash matches the JWT's `request_body_sha256` claim.
+      6. Only then process the event.
+
+    Any verification failure returns 401 — we NEVER touch the DB for unverified
+    webhooks (was the P3 IDOR-adjacent hardening item from the security audit).
     """
+    raw_body = await request.body()
+    verification_header = request.headers.get('plaid-verification') or ''
+    if not verification_header:
+        # Reject unauthenticated webhooks. In sandbox testing you can temporarily
+        # comment this out; in production, this closes the P3 finding.
+        raise HTTPException(status_code=401, detail='missing Plaid-Verification header')
     try:
-        payload = await request.json()
+        import jwt as pyjwt  # PyJWT — separate from python-jose used elsewhere.
+        unverified_header = pyjwt.get_unverified_header(verification_header)
+        kid = unverified_header.get('kid')
+        alg = unverified_header.get('alg')
+        if alg != 'ES256' or not kid:
+            raise ValueError('unexpected JWT header')
+        # Fetch the current signing key from Plaid.
+        key_resp = await plaid_service._post('/webhook_verification_key/get', {'key_id': kid})
+        jwk = key_resp.get('key')
+        if not jwk:
+            raise ValueError('no key returned from Plaid')
+        from jwt.algorithms import ECAlgorithm
+        public_key = ECAlgorithm.from_jwk(jwk)  # type: ignore[arg-type]
+        claims = pyjwt.decode(verification_header, public_key, algorithms=['ES256'])
+        # Freshness — reject if older than 5 min
+        iat = int(claims.get('iat', 0))
+        if iat <= 0 or (datetime.now(timezone.utc).timestamp() - iat) > 300:
+            raise ValueError('webhook stale')
+        # Body integrity — sha256 of raw body must match claim
+        import hashlib
+        body_hash = hashlib.sha256(raw_body).hexdigest()
+        if claims.get('request_body_sha256') != body_hash:
+            raise ValueError('body hash mismatch')
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.warning('plaid webhook verification failed: %s', e)
+        raise HTTPException(status_code=401, detail='invalid webhook signature')
+
+    try:
+        payload = json.loads(raw_body.decode('utf-8'))
     except Exception:
         raise HTTPException(status_code=400, detail='invalid webhook body')
     item_id = payload.get('item_id')
