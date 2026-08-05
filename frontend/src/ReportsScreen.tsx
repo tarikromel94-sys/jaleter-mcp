@@ -12,9 +12,10 @@
  *  - Top merchants / sources list (top 10 by count + total)
  */
 import React, { useMemo, useState } from 'react';
-import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, Pressable, ScrollView, StyleSheet, Modal, TextInput, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle, G, Path, Rect, Text as SvgText } from 'react-native-svg';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { C } from '@/src/jaleterTheme';
 import { MONEY } from '@/src/quoteLibrary';
 
@@ -43,7 +44,10 @@ const WINDOWS: { label: string; months: number }[] = [
   { label: '12M', months: 12 },
   { label: 'YTD', months: -1 },
   { label: 'All', months: -2 },
+  { label: 'Custom', months: -3 },
 ];
+
+const INITIAL_LIST_SIZE = 10;
 
 function parseDate(v: string): Date {
   const d = new Date(v);
@@ -180,18 +184,49 @@ function MonthlyChart({ data, height = 130 }: { data: { key: string; income: num
 
 export function ReportsScreen({ transactions, categories, back }: { transactions: Transaction[]; categories: Category[]; back: () => void }) {
   const [windowIdx, setWindowIdx] = useState(2); // default 6M
+  // Custom date range (YYYY-MM-DD) — used when the selected window is 'Custom'.
+  // `today` is stable across renders so useMemo dependencies stay clean.
+  const today = useMemo(() => new Date(), []);
+  const defaultStart = useMemo(() => new Date(today.getFullYear(), today.getMonth() - 3, 1), [today]);
+  const [customStart, setCustomStart] = useState<Date>(defaultStart);
+  const [customEnd, setCustomEnd] = useState<Date>(today);
+  const [customOpen, setCustomOpen] = useState(false);
+  // Native pickers control (iOS/Android modal, invisible on web where we use text inputs).
+  const [pickerFor, setPickerFor] = useState<'start' | 'end' | null>(null);
+  // Pagination: how many rows to show for merchants + subcategories lists.
+  const [merchantsShown, setMerchantsShown] = useState<number>(INITIAL_LIST_SIZE);
+  const [subcatsShown, setSubcatsShown] = useState<number>(INITIAL_LIST_SIZE);
 
   const filtered = useMemo(() => {
-    const cutoff = (() => {
-      const w = WINDOWS[windowIdx];
-      const now = new Date();
-      if (w.months === -1) return new Date(now.getFullYear(), 0, 1);
-      if (w.months === -2) return new Date(1970, 0, 1);
-      const d = new Date(now.getFullYear(), now.getMonth() - w.months + 1, 1);
-      return d;
-    })();
-    return (transactions || []).filter((t) => parseDate(t.date) >= cutoff);
-  }, [transactions, windowIdx]);
+    const w = WINDOWS[windowIdx];
+    let start: Date;
+    let end: Date | null = null;
+    if (w.months === -3) {
+      // Custom range — clamp end to end-of-day so txns on the last day are included.
+      start = new Date(customStart);
+      start.setHours(0, 0, 0, 0);
+      end = new Date(customEnd);
+      end.setHours(23, 59, 59, 999);
+    } else if (w.months === -1) {
+      start = new Date(today.getFullYear(), 0, 1);
+    } else if (w.months === -2) {
+      start = new Date(1970, 0, 1);
+    } else {
+      start = new Date(today.getFullYear(), today.getMonth() - w.months + 1, 1);
+    }
+    return (transactions || []).filter((t) => {
+      const d = parseDate(t.date);
+      if (d < start) return false;
+      if (end && d > end) return false;
+      return true;
+    });
+  }, [transactions, windowIdx, customStart, customEnd, today]);
+
+  // Reset pagination whenever the window/range changes.
+  React.useEffect(() => {
+    setMerchantsShown(INITIAL_LIST_SIZE);
+    setSubcatsShown(INITIAL_LIST_SIZE);
+  }, [windowIdx, customStart, customEnd]);
 
   const totals = useMemo(() => {
     let income = 0, expense = 0;
@@ -233,7 +268,6 @@ export function ReportsScreen({ transactions, categories, back }: { transactions
     });
     return Array.from(subMap.entries())
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
       .map(([label, value]) => ({ label, value }));
   }, [filtered, categories]);
 
@@ -264,7 +298,6 @@ export function ReportsScreen({ transactions, categories, back }: { transactions
     });
     return Array.from(map.entries())
       .sort((a, b) => b[1].total - a[1].total)
-      .slice(0, 10)
       .map(([name, v]) => ({ name, count: v.count, total: v.total }));
   }, [filtered]);
 
@@ -288,11 +321,27 @@ export function ReportsScreen({ transactions, categories, back }: { transactions
       {/* window picker */}
       <View style={styles.periodPills}>
         {WINDOWS.map((w, i) => (
-          <Pressable key={w.label} onPress={() => setWindowIdx(i)} style={[styles.pill, windowIdx === i && styles.pillActive]} testID={`reports-window-${w.label}`}>
+          <Pressable
+            key={w.label}
+            onPress={() => { setWindowIdx(i); if (w.months === -3) setCustomOpen(true); }}
+            style={[styles.pill, windowIdx === i && styles.pillActive]}
+            testID={`reports-window-${w.label}`}
+          >
             <Text style={[styles.pillText, windowIdx === i && styles.pillTextActive]}>{w.label}</Text>
           </Pressable>
         ))}
       </View>
+
+      {/* Custom date range summary + edit affordance */}
+      {WINDOWS[windowIdx].months === -3 ? (
+        <Pressable onPress={() => setCustomOpen(true)} style={styles.customBanner} testID="reports-custom-banner">
+          <Ionicons name="calendar-outline" size={16} color={C.goldEyebrow} />
+          <Text style={styles.customBannerText}>
+            {customStart.toLocaleDateString()} — {customEnd.toLocaleDateString()}
+          </Text>
+          <Ionicons name="pencil" size={12} color={C.goldEyebrow} />
+        </Pressable>
+      ) : null}
 
       {/* summary tiles */}
       <View style={styles.summaryRow}>
@@ -330,7 +379,12 @@ export function ReportsScreen({ transactions, categories, back }: { transactions
 
       {/* subcategory bars */}
       <Section title="Top subcategories">
-        <HorizontalBars data={subcategoryBars} />
+        <HorizontalBars data={subcategoryBars.slice(0, subcatsShown)} />
+        {subcategoryBars.length > subcatsShown ? (
+          <Pressable onPress={() => setSubcatsShown((n) => n + INITIAL_LIST_SIZE)} style={styles.loadMoreBtn} testID="reports-more-subcats">
+            <Text style={styles.loadMoreText}>Show more ({subcategoryBars.length - subcatsShown} left)</Text>
+          </Pressable>
+        ) : null}
       </Section>
 
       {/* monthly trend */}
@@ -350,7 +404,7 @@ export function ReportsScreen({ transactions, categories, back }: { transactions
       <Section title="Top merchants / sources">
         {merchants.length === 0 ? <Text style={styles.empty}>No expenses to analyze.</Text> : (
           <View style={{ gap: 6 }}>
-            {merchants.map((m, i) => (
+            {merchants.slice(0, merchantsShown).map((m, i) => (
               <View key={i} style={styles.merchantRow}>
                 <View style={styles.merchantIcon}><Text style={{ fontSize: 10, fontWeight: '800', color: C.goldEyebrow }}>{i + 1}</Text></View>
                 <View style={{ flex: 1 }}>
@@ -360,11 +414,139 @@ export function ReportsScreen({ transactions, categories, back }: { transactions
                 <Text style={styles.merchantValue}>{MONEY(m.total)}</Text>
               </View>
             ))}
+            {merchants.length > merchantsShown ? (
+              <Pressable onPress={() => setMerchantsShown((n) => n + INITIAL_LIST_SIZE)} style={styles.loadMoreBtn} testID="reports-more-merchants">
+                <Text style={styles.loadMoreText}>Show more ({merchants.length - merchantsShown} left)</Text>
+              </Pressable>
+            ) : null}
           </View>
         )}
       </Section>
+
+      {/* Custom date range picker modal */}
+      <CustomRangeModal
+        visible={customOpen}
+        start={customStart}
+        end={customEnd}
+        onCancel={() => setCustomOpen(false)}
+        onApply={(s, e) => { setCustomStart(s); setCustomEnd(e); setCustomOpen(false); }}
+        pickerFor={pickerFor}
+        setPickerFor={setPickerFor}
+      />
     </ScrollView>
   );
+}
+
+function CustomRangeModal({
+  visible, start, end, onCancel, onApply, pickerFor, setPickerFor,
+}: {
+  visible: boolean; start: Date; end: Date;
+  onCancel: () => void; onApply: (s: Date, e: Date) => void;
+  pickerFor: 'start' | 'end' | null; setPickerFor: (v: 'start' | 'end' | null) => void;
+}) {
+  const [localStart, setLocalStart] = useState<Date>(start);
+  const [localEnd, setLocalEnd] = useState<Date>(end);
+  const [error, setError] = useState('');
+
+  React.useEffect(() => {
+    if (visible) { setLocalStart(start); setLocalEnd(end); setError(''); }
+  }, [visible, start, end]);
+
+  const apply = () => {
+    if (localStart > localEnd) { setError('Start date must be on or before end date.'); return; }
+    onApply(localStart, localEnd);
+  };
+
+  // On web the native picker is unavailable — use plain YYYY-MM-DD text inputs.
+  const [startText, setStartText] = useState(fmtISO(localStart));
+  const [endText, setEndText] = useState(fmtISO(localEnd));
+  React.useEffect(() => { setStartText(fmtISO(localStart)); setEndText(fmtISO(localEnd)); }, [localStart, localEnd]);
+
+  const commitTextStart = () => {
+    const d = new Date(startText);
+    if (!isNaN(d.getTime())) setLocalStart(d);
+  };
+  const commitTextEnd = () => {
+    const d = new Date(endText);
+    if (!isNaN(d.getTime())) setLocalEnd(d);
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={{ flex: 1 }} onPress={onCancel} />
+        <View style={styles.modalSheet}>
+          <Text style={styles.modalTitle}>Custom date range</Text>
+
+          <Text style={styles.formLabel}>From</Text>
+          {Platform.OS === 'web' ? (
+            <TextInput
+              testID="reports-custom-start"
+              value={startText}
+              onChangeText={setStartText}
+              onBlur={commitTextStart}
+              placeholder="YYYY-MM-DD"
+              style={styles.input}
+            />
+          ) : (
+            <Pressable onPress={() => setPickerFor('start')} style={styles.input} testID="reports-custom-start">
+              <Text style={{ fontSize: 12, color: C.ink }}>{localStart.toLocaleDateString()}</Text>
+            </Pressable>
+          )}
+
+          <Text style={styles.formLabel}>To</Text>
+          {Platform.OS === 'web' ? (
+            <TextInput
+              testID="reports-custom-end"
+              value={endText}
+              onChangeText={setEndText}
+              onBlur={commitTextEnd}
+              placeholder="YYYY-MM-DD"
+              style={styles.input}
+            />
+          ) : (
+            <Pressable onPress={() => setPickerFor('end')} style={styles.input} testID="reports-custom-end">
+              <Text style={{ fontSize: 12, color: C.ink }}>{localEnd.toLocaleDateString()}</Text>
+            </Pressable>
+          )}
+
+          {pickerFor && Platform.OS !== 'web' ? (
+            <DateTimePicker
+              value={pickerFor === 'start' ? localStart : localEnd}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={(_evt, date) => {
+                setPickerFor(null);
+                if (date) {
+                  if (pickerFor === 'start') setLocalStart(date);
+                  else setLocalEnd(date);
+                }
+              }}
+              maximumDate={new Date(2100, 0, 1)}
+            />
+          ) : null}
+
+          {error ? <Text style={styles.modalError}>{error}</Text> : null}
+
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
+            <Pressable testID="reports-custom-cancel" onPress={onCancel} style={[styles.modalBtnSecondary, { flex: 1 }]}>
+              <Text style={styles.modalBtnSecondaryText}>Cancel</Text>
+            </Pressable>
+            <Pressable testID="reports-custom-apply" onPress={apply} style={[styles.modalBtnPrimary, { flex: 1 }]}>
+              <Text style={styles.modalBtnPrimaryText}>Apply</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function fmtISO(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -425,4 +607,40 @@ const styles = StyleSheet.create({
   merchantValue: { fontSize: 11, fontWeight: '800', color: '#b0453d' },
 
   empty: { fontSize: 10, color: '#8a7f70', textAlign: 'center', paddingVertical: 6 },
+
+  /* Pagination + custom-date-range additions */
+  loadMoreBtn: {
+    marginTop: 8,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e5decf',
+    backgroundColor: '#fbf6ec',
+    alignItems: 'center',
+  },
+  loadMoreText: { fontSize: 10, color: '#b28a4c', fontWeight: '700' },
+
+  customBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12,
+    borderWidth: 1, borderColor: '#e8dcc4', backgroundColor: '#fbf6ec',
+    marginBottom: 12,
+  },
+  customBannerText: { flex: 1, fontSize: 11, fontWeight: '700', color: C.ink },
+
+  modalBackdrop: { flex: 1, backgroundColor: '#00000060', justifyContent: 'center', padding: 24 },
+  modalSheet: { backgroundColor: '#fff', borderRadius: 18, padding: 20 },
+  modalTitle: { fontSize: 16, fontWeight: '700', color: C.ink, marginBottom: 8 },
+  formLabel: { fontSize: 10, fontWeight: '700', color: '#615b52', letterSpacing: 0.5, marginTop: 6, marginBottom: 4 },
+  input: {
+    borderWidth: 1, borderColor: '#e5decf', borderRadius: 12,
+    paddingHorizontal: 12, paddingVertical: 10,
+    fontSize: 12, color: C.ink, backgroundColor: '#fff',
+    justifyContent: 'center',
+  },
+  modalError: { fontSize: 10, color: '#b0453d', marginTop: 6 },
+  modalBtnPrimary: { backgroundColor: '#b28a4c', paddingVertical: 12, borderRadius: 12, alignItems: 'center' },
+  modalBtnPrimaryText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  modalBtnSecondary: { backgroundColor: '#fbf6ec', borderWidth: 1, borderColor: '#e8dcc4', paddingVertical: 12, borderRadius: 12, alignItems: 'center' },
+  modalBtnSecondaryText: { color: '#8a7f70', fontSize: 12, fontWeight: '700' },
 });

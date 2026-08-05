@@ -1045,7 +1045,7 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, bud
           <Text style={s.homeDate}>{today}</Text>
           <Text style={[s.homeName, t.textInk]}>Good evening, {name}.</Text>
         </View>
-        <CircleBtn onPress={() => navigate('settings')} testID="home-bell"><Ionicons name="notifications-outline" size={18} color={C.ink3} /></CircleBtn>
+        <CircleBtn onPress={() => navigate('settings')} testID="home-bell"><Ionicons name="notifications-outline" size={18} color={t.dark ? D.text : C.ink3} /></CircleBtn>
         <Pressable onPress={() => navigate('more')} testID="home-profile" style={[s.avatar, { marginLeft: 8 }]}>
           <Text style={{ color: C.goldText, fontSize: 11, fontWeight: '700' }}>{initials}</Text>
         </Pressable>

@@ -1,0 +1,58 @@
+{
+  "summary": "Frontend-only verification of 3 changes: (1) alert-bell dark-mode fix, (2) Reports Custom date range + pagination, (3) SupportSheet split into 13 files. All primary flows PASS. Bell color correctly switches from rgb(23,22,19) [C.ink3] in light mode to rgb(243,237,227) [D.text] in dark mode. Custom date range modal: all 5 testIDs present (reports-custom-banner/start/end/apply/cancel), validation error 'Start date must be on or before end date.' appears, banner shows selected range, reopen prefills prior dates, cancel closes without changes. Pagination Show-more buttons correctly HIDDEN when no transactions (subcatBars.length and merchants.length both 0). SupportSheet split: 13 files under /app/frontend/src/support/, thin 154-line SupportSheet.tsx router — no red screens, no console errors, all mode testIDs verified. All hub testIDs present (support-close, support-help-* x5, support-new, support-list, support-visit-website, powered-by-jaleter). Bug/Privacy/Delete/Billing/BankHelp/New/List/Detail modes all render with correct testIDs. Delete-submit is aria-disabled=true until 'DELETE' typed then flips to false. Admin flow: support-admin visible only for admin, admin-filter-* chips work, admin-status-{open,in_progress,waiting_on_user,resolved,closed} + admin-note + admin-note-submit + support-reply + support-reply-submit all present and functional. Regression checks (Legacy 30yr + cumulative-toggle, More screen more-visit-jaleter + powered-by-jaleter) PASS.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [],
+    "minor_testability": [
+      {"component": "src/support/AdminMode.tsx", "issue": "Ticket rows in the Admin dashboard don't have testID='support-ticket-{id}' — ListMode does (per user's own tickets) but AdminMode Pressable at line 52 is missing testID. Non-blocking (functionally works, screenshot shows ticket rows render correctly and click-through via subject text works), but reduces admin-mode test-ability. Reference: /app/frontend/src/support/AdminMode.tsx:52"}
+    ]
+  },
+  "verified_flows": [
+    {"area": "Boot", "check": "Welcome renders at localhost:3000; no red screen; no console errors", "status": "PASS"},
+    {"area": "Alert Bell (light)", "check": "home-bell icon color = rgb(23,22,19) [C.ink3] against cream circle", "status": "PASS"},
+    {"area": "Alert Bell (dark)", "check": "home-bell icon color = rgb(243,237,227) [D.text] against dark circle bg rgb(26,25,22) — regression fix confirmed", "status": "PASS"},
+    {"area": "Reports pills", "check": "7 window pills present: 1M/3M/6M/12M/YTD/All/Custom", "status": "PASS"},
+    {"area": "Reports Custom modal", "check": "Modal opens on Custom-pill tap; reports-custom-start / reports-custom-end / reports-custom-apply / reports-custom-cancel testIDs present", "status": "PASS"},
+    {"area": "Reports Custom validation", "check": "start=2025-07-01, end=2025-01-01 -> Apply shows 'Start date must be on or before end date.' inline; modal stays open", "status": "PASS"},
+    {"area": "Reports Custom apply", "check": "start=2025-01-01, end=2025-06-30 -> Apply closes modal; reports-custom-banner shows '1/1/2025 — 6/30/2025'", "status": "PASS"},
+    {"area": "Reports Custom reopen", "check": "Tapping banner reopens modal with previous start/end prefilled ('2025-01-01', '2025-06-30')", "status": "PASS"},
+    {"area": "Reports Custom cancel", "check": "Cancel closes the modal without side effects (apply testID no longer in DOM)", "status": "PASS"},
+    {"area": "Reports summary", "check": "INCOME/EXPENSE/NET tiles render with $0 when range has no txns — no crash", "status": "PASS"},
+    {"area": "Reports pagination", "check": "reports-more-subcats and reports-more-merchants absent when subcatBars.length=0 and merchants.length=0 (expected behavior with no txns)", "status": "PASS"},
+    {"area": "Support hub", "check": "All 10 expected testIDs present: support-close, support-help-{bank_help,bug,billing,privacy,delete}, support-new, support-list, support-visit-website, powered-by-jaleter", "status": "PASS"},
+    {"area": "Support Bug mode", "check": "bug-summary/steps/expected/actual/submit testIDs all present; submit round-trips to DetailMode with 'Bug Report:' title", "status": "PASS"},
+    {"area": "Support Privacy mode", "check": "4 radio testIDs privacy-{export,correct,restrict,delete} + privacy-submit present", "status": "PASS"},
+    {"area": "Support Delete mode", "check": "delete-submit aria-disabled=true initially; after filling delete-confirm='DELETE' -> aria-disabled=false", "status": "PASS"},
+    {"area": "Support Billing mode", "check": "5 issue chips billing-issue-{refund,invoice,renewal,plan_change,other} + billing-notice-billing + billing-open-web + billing-submit present", "status": "PASS"},
+    {"area": "Support BankHelp mode", "check": "bankhelp-open-ticket present; banks Chase/Bank of America/Wells Fargo/Citi/Capital One all listed", "status": "PASS"},
+    {"area": "Support New mode", "check": "support-subject / support-cat-* / support-pri-* / support-description / support-attach / support-submit / support-back all present", "status": "PASS"},
+    {"area": "Support List mode", "check": "support-refresh + support-ticket-{id} rows render; user has 11 tickets pre-seeded", "status": "PASS"},
+    {"area": "Support Detail (user)", "check": "support-reply + support-reply-submit render; admin-* controls NOT visible for non-admin", "status": "PASS"},
+    {"area": "Support Admin hub", "check": "support-admin row visible only for support@jaleter.com admin user", "status": "PASS"},
+    {"area": "Support Admin list", "check": "admin-filter-{all,open,in_progress,waiting_on_user,resolved,closed} chips render; admin sees all users' tickets", "status": "PASS"},
+    {"area": "Support Admin detail", "check": "admin-status-{open,in_progress,waiting_on_user,resolved,closed} + admin-note + admin-note-submit + support-reply + support-reply-submit all present; status change and note submission both succeed (no console errors, sheet remains stable)", "status": "PASS"},
+    {"area": "Regression: Legacy screen", "check": "legacy-period-30yr and legacy-cumulative-toggle testIDs present and interactive", "status": "PASS"},
+    {"area": "Regression: More screen", "check": "more-visit-jaleter and powered-by-jaleter footer present at bottom", "status": "PASS"}
+  ],
+  "test_report_links": ["/app/test_reports/iteration_25.json"],
+  "action_items": [
+    "OPTIONAL/LOW: Add testID='support-ticket-{ticket_id}' to the AdminMode Pressable at /app/frontend/src/support/AdminMode.tsx:52 for parity with ListMode.tsx and to enable direct admin-ticket-row click assertions in future tests. Functionally the rows work (click on subject text opens DetailMode)."
+  ],
+  "critical_code_review_comments": [
+    "SupportSheet split cleanly done: 154-line thin router imports from 13 focused modules; largest sub-file is DetailMode.tsx at 182 lines; all files well under 700-line threshold.",
+    "src/support/shared.tsx correctly centralizes StatusChip, CategoryPicker, PriorityPicker, AttachmentPicker/Preview, pickAttachment, submitStructuredTicket — no duplication across mode files.",
+    "Reports Custom modal correctly uses Platform.OS check to render TextInput on web vs Pressable+DateTimePicker on native.",
+    "Reports pagination correctly resets to INITIAL_LIST_SIZE (10) on windowIdx/customStart/customEnd changes via a useEffect at ReportsScreen.tsx:226-229.",
+    "Bell fix at app/index.tsx:1048 correctly uses `t.dark ? D.text : C.ink3` — the header-back at line 353 already had this pattern; consistency good.",
+    "AdminMode ticket row missing testID (see minor_testability above)."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "N/A - not tested per request", "frontend": "100% functional, 1 minor testability gap in AdminMode row testID" },
+  "seed_data_creation": "None. Used pre-seeded alex+test1@jaleter.app (11 support tickets) and support@jaleter.com admin. Did not seed transactions to test Show-more pagination with populated lists — verified only the hidden-when-empty branch.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Bell test: run `getComputedStyle(el).color` on all descendants of [data-testid='home-bell']. Light mode = rgb(23,22,19); Dark mode = rgb(243,237,227). To toggle theme: bell tap opens Settings sheet -> click [data-testid='settings-appear-Dark'] or -Light. Support flow: user login -> home-bell -> settings-support (must scrollIntoView first inside settings scroll view). To reach AdminMode: only support@jaleter.com/Tarik0731! shows the support-admin row. To click an admin ticket row (which currently lacks testID), use `page.get_by_text(subject).first`. Reports pagination: seed 15+ txns to see reports-more-{subcats,merchants} appear. Custom-date-modal is a plain Modal — the TextInputs live inside the modal only; the reports-custom-banner testID exists on the page-level banner AND is reused as the same testID inside the modal on iteration 25 code (banner and start/end textinputs are all inside the same Modal wrapper — verified no conflict). Bottom tabs on this app: Home/Budget/Transactions/Net Worth/Legacy — NO 'More' tab, More is reached via [data-testid='home-profile'] avatar."
+}
