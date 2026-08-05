@@ -49,7 +49,7 @@ export function AdminMode({
       {loading ? <ActivityIndicator size="small" color={C.goldEyebrow} /> : null}
       {!loading && rows.length === 0 ? <Text style={styles.empty}>No tickets in this filter.</Text> : null}
       {rows.map((t) => (
-        <Pressable key={t.ticket_id} onPress={() => onOpen(t)} style={styles.ticketRow}>
+        <Pressable key={t.ticket_id} onPress={() => onOpen(t)} style={styles.ticketRow} testID={`support-ticket-${t.ticket_id}`}>
           <View style={{ flex: 1 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <Text style={styles.ticketNumber}>#{t.ticket_number}</Text>
