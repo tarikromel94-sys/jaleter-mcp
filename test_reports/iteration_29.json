@@ -1,0 +1,57 @@
+{
+  "summary": "Frontend-only verification of 3 targeted fixes (Coaching single CTA, Membership $75→$90, PeriodPills horizontal scroll). Coaching and Membership fixes PASS fully. However, the PeriodPills ScrollView wrap introduced a HIGH-severity visual regression on every screen that uses PeriodPills: because `pill` has `flex:1` and it is now inside a horizontal ScrollView with unbounded main-axis width, each pill collapses to a very small width (18–33 px) and the pill text overlaps / clips. Confirmed on Budget (months 18.8px wide), Transactions (All/Income/Expenses ~32.8px — 'Income' text overflows onto 'Expenses'), Net Worth (Month/Quarter/Year ~30.8px), Settings (Faith/Both/Motivation and Light/System/Dark visibly overlap), and Legacy (pills ~22.8px, Retirement label truncated to 'R…'). Regression checks on Home bell, More screen, powered-by-jaleter footer all pass.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "PeriodPills (index.tsx:336) — global",
+        "issue": "After wrapping the pill row in a horizontal ScrollView, each pill collapses because `pill: { flex: 1 }` (index.tsx:3550) tries to distribute nonexistent bounded width. Result: pills are 18–33 px wide, labels overlap and are truncated across Budget (`budget-period-*` ~18.8px), Transactions (`tx-filter-*` ~32.8px — 'Income'/'Expenses' overlap), Net Worth (`nw-period-*` ~30.8px — 'Month'/'Quarter'/'Year' overlap), Settings (`settings-exp-*`, `settings-appear-*` overlap), Legacy (`legacy-period-*` ~22.8px, 'Retirement' truncated to 'R…'). Fix: remove `flex:1` from `pill` and rely on horizontal padding/gap, or add a `minWidth` (~64) to `pill`, or apply `alignSelf:'flex-start'` on the inner `s.segmented` View plus intrinsic-width pills.",
+        "testID": "budget-period, tx-filter, nw-period, settings-exp, settings-appear, legacy-period",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Legacy / Budget / Transactions / Net Worth / Settings",
+        "issues": [
+          "Pills touch targets no longer meet 44px minimum (currently 18–33 px wide, 31 px tall).",
+          "Pill labels overlap/clip due to collapsed width caused by `flex:1` + horizontal ScrollView."
+        ]
+      }
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iteration_29.json"],
+  "action_items": [
+    "Fix PeriodPills styling: since it now lives inside a horizontal ScrollView, remove `flex:1` from `s.pill` (or make the pill sizing intrinsic). Suggested minimal fix: change `pill: { flex: 1, ... }` → `pill: { paddingHorizontal: 14, minWidth: 64, ... }` and add `alignSelf: 'flex-start'` on the inner `s.segmented` View so it hugs content instead of stretching the outer scroll width. Re-verify Budget/Transactions/Net Worth/Settings/Legacy after fix.",
+    "Optionally: Only wrap PeriodPills in a ScrollView when the number of `values` exceeds a threshold (e.g. > 5) so shorter lists still stretch to fill the row like before, preserving the original visual for Budget/Tx/NW/Settings."
+  ],
+  "critical_code_review_comments": [
+    "index.tsx is 3746 lines — well past the 700-line guideline; split into per-screen modules to make regressions like this easier to catch.",
+    "PeriodPills change is a global component edit; PR should have called out every consumer (Budget, Transactions, Net Worth, Settings, Legacy, tx-month) so styling was validated everywhere. Consider a shared visual regression fixture per consumer."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "N/A (not tested)", "frontend": "66% (2 of 3 fixes fully pass; PeriodPills fix functional but introduces visual regression)" },
+  "seed_data_creation": "None. Reused seeded user alex+test1@jaleter.app / password123.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "After main agent adjusts pill sizing, re-run the same flow: Login → open More → Book Coaching → verify only `coaching-book-pay` present, tap it and confirm window.open URL contains `jaleter.com/coaching`; then More → Membership → confirm `$90/year` and no `$75`; then Legacy → confirm all 8 pills visible and readable; then check Budget/Transactions/Net Worth/Settings pills render with correct widths (>= ~60px) and readable, non-overlapping labels.",
+  "rca_of_issue": "Root cause: `PeriodPills` (index.tsx:336) now renders its inner segmented View inside a horizontal `ScrollView`. React Native's horizontal ScrollView gives its content an unbounded main-axis size, so children with `flex:1` (index.tsx:3550 `s.pill`) end up with a flex-basis of 0 and no additional space to distribute — every pill collapses to `paddingHorizontal` alone. Fix by using intrinsic pill widths (padding + optional minWidth) and letting the segmented View hug content via `alignSelf:'flex-start'`. Verified impact by measuring bounding boxes: Budget months=18.8px, tx-filter=32.8px, nw-period=30.8px, legacy=22.8px — vs the previous ~1/N of the screen width.",
+  "verification_results_pass": {
+    "coaching_cta_present": true,
+    "coaching_subtitle_present": true,
+    "coaching_old_elements_removed": ["Pick a time", "Pay $50 on the web", "coaching-open-calendly", "coaching-open-jaleter", "billing-notice-coaching", "step badges 1 and 2"],
+    "coaching_hero_price_and_session_preserved": true,
+    "coaching_tap_opens_url": "https://jaleter.com/coaching",
+    "membership_price_$90_shown": true,
+    "membership_price_$75_absent_in_ui_and_source": true,
+    "membership_all_4_bullets_present": true,
+    "membership_billing_notice_present": true,
+    "legacy_all_8_pills_rendered": ["1yr","2yr","3yr","5yr","10yr","20yr","30yr","Retirement"],
+    "legacy_no_horizontal_overlap_between_30yr_and_Retirement": true,
+    "regression_home_bell_present": true,
+    "regression_powered_by_jaleter_on_More": true,
+    "regression_more_reports_still_opens": true
+  }
+}

@@ -335,14 +335,23 @@ const CircleBtn = ({ children, onPress, testID, dark }: any) => {
 };
 const PeriodPills = ({ values, value, onChange, testID }: any) => {
   const t = useThemed();
+  // Wrap the segmented row in a horizontal ScrollView so long option lists
+  // (e.g. Legacy's 8 timeframes) don't overflow and clip the last labels.
   return (
-    <View style={[s.segmented, t.pillBg]} testID={testID}>
-      {values.map((v: string) => (
-        <Pressable key={v} testID={`${testID}-${v}`} onPress={() => onChange(v)} style={[s.pill, value === v && s.pillSelected, value === v && t.pillSelectedBg]}>
-          <Text style={[s.pillText, t.textMuted, value === v && s.pillTextSelected, value === v && t.textInk]}>{v}</Text>
-        </Pressable>
-      ))}
-    </View>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ paddingRight: 4 }}
+      style={{ marginTop: 12 }}
+    >
+      <View style={[s.segmented, t.pillBg, { marginTop: 0 }]} testID={testID}>
+        {values.map((v: string) => (
+          <Pressable key={v} testID={`${testID}-${v}`} onPress={() => onChange(v)} style={[s.pill, value === v && s.pillSelected, value === v && t.pillSelectedBg]}>
+            <Text style={[s.pillText, t.textMuted, value === v && s.pillTextSelected, value === v && t.textInk]}>{v}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </ScrollView>
   );
 };
 const PageHeader = ({ title, subtitle, back, action }: any) => {
@@ -1015,7 +1024,7 @@ const Paywall = ({ onContinue }: any) => {
       </View>
       <View style={s.priceCard}>
         <Text style={{ color: C.goldEyebrow2, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 }}>ANNUAL MEMBERSHIP</Text>
-        <Text style={s.priceStrong}>$75<Text style={{ fontSize: 13, color: '#8d867d', fontWeight: '500' }}>/year</Text></Text>
+        <Text style={s.priceStrong}>$90<Text style={{ fontSize: 13, color: '#8d867d', fontWeight: '500' }}>/year</Text></Text>
         {['Private statement import (any bank)', 'Budgets, Net Worth, and Legacy', '100 curated Faith + Focus messages'].map(t => (
           <View key={t} style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginVertical: 5 }}>
             <Ionicons name="checkmark" size={15} color="#a57537" />
@@ -2723,18 +2732,6 @@ const CoachingScreen = ({ back }: any) => {
   }, [token]);
   useEffect(() => { refreshBookings(); }, [refreshBookings]);
 
-  const openCalendly = async () => {
-    try {
-      if (Platform.OS === 'web' && typeof window !== 'undefined') {
-        window.open(CALENDLY_URL, '_blank', 'noopener');
-      } else {
-        await WebBrowser.openBrowserAsync(CALENDLY_URL);
-      }
-    } catch (e: any) {
-      setToast(e?.message || 'Could not open Calendly.');
-    }
-  };
-
   const upcoming = bookings
     .filter((b) => b.status === 'confirmed')
     .sort((a, b) => (new Date(b.created_at).getTime()) - (new Date(a.created_at).getTime()))
@@ -2750,28 +2747,23 @@ const CoachingScreen = ({ back }: any) => {
         <Text style={{ color: '#aaa298', fontSize: 10, textAlign: 'center' }}>Work through your budget, goals, or next financial decision with Danyell.</Text>
       </View>
 
-      <View style={{ marginTop: 18, gap: 10 }}>
-        <View style={[s.stepCard, t.cardBg]}>
-          <View style={s.stepBadge}><Text style={s.stepBadgeText}>1</Text></View>
-          <View style={{ flex: 1 }}>
-            <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>Pick a time</Text>
-            <Text style={[{ fontSize: 9, color: C.muted2, marginTop: 2 }, t.textMuted]}>Opens Calendly. Danyell will confirm by email.</Text>
-          </View>
-          <Pressable onPress={openCalendly} style={s.stepBtnPill} testID="coaching-open-calendly">
-            <Text style={s.stepBtnPillText}>Schedule →</Text>
-          </Pressable>
-        </View>
-        <Pressable style={[s.stepCard, t.cardBg]} onPress={() => openJaleter('coaching')} testID="coaching-open-jaleter">
-          <View style={s.stepBadge}><Text style={s.stepBadgeText}>2</Text></View>
-          <View style={{ flex: 1 }}>
-            <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>Pay $50 on the web</Text>
-            <Text style={[{ fontSize: 9, color: C.muted2, marginTop: 2 }, t.textMuted]}>Complete payment at jaleter.com/coaching to lock your session.</Text>
-          </View>
-          <Ionicons name="open-outline" size={16} color={C.goldEyebrow} />
+      {/* Single CTA — Stripe on jaleter.com handles the checkout and then
+          redirects the user directly into Calendly to pick their slot.
+          The previous 2-step "Schedule then Pay" flow is retired. */}
+      <View style={{ marginTop: 18 }}>
+        <Pressable
+          onPress={() => openJaleter('coaching')}
+          style={s.coachingCta}
+          testID="coaching-book-pay"
+        >
+          <Ionicons name="lock-closed-outline" size={16} color="#fff" />
+          <Text style={s.coachingCtaText}>Book & Pay at jaleter.com</Text>
+          <Ionicons name="open-outline" size={14} color="#fff" />
         </Pressable>
+        <Text style={[{ fontSize: 10, textAlign: 'center', marginTop: 10 }, t.textMuted]}>
+          Secure Stripe checkout — Calendly opens automatically after payment.
+        </Text>
       </View>
-
-      <BillingWebsiteNotice target="coaching" />
 
       {upcoming.length > 0 && (
         <View style={{ marginTop: 22 }}>
@@ -2808,7 +2800,7 @@ const MembershipScreen = ({ back }: any) => {
       <PageHeader title="Membership" subtitle="One simple annual plan." back={back} />
       <View style={[s.priceCard, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
         <Text style={{ color: C.goldEyebrow2, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 }}>JALETER PREMIUM</Text>
-        <Text style={[s.priceStrong, t.textInk]}>$75<Text style={{ fontSize: 13, color: t.dark ? D.textMuted : '#8d867d', fontWeight: '500' }}>/year</Text></Text>
+        <Text style={[s.priceStrong, t.textInk]}>$90<Text style={{ fontSize: 13, color: t.dark ? D.textMuted : '#8d867d', fontWeight: '500' }}>/year</Text></Text>
         {membership?.active && (
           <View style={{ marginTop: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: '#8fa88f22', alignSelf: 'flex-start' }}>
             <Text style={{ color: '#5a7f60', fontSize: 10, fontWeight: '700' }}>ACTIVE · renews {new Date(membership.expires_at as string).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>
@@ -3048,7 +3040,7 @@ const LegalSheet = ({ visible, close, type }: any) => (
     ) : (
       <View>
         <Text style={s.privacyPara}>Jaleter provides budgeting and planning tools for educational purposes. It does not provide investment, tax, or legal advice.</Text>
-        <Text style={s.privacyPara}>Premium membership is $75 per year. Coaching is a separate $50 per hour service. Renewal and cancellation details are shown before checkout.</Text>
+        <Text style={s.privacyPara}>Premium membership is $90 per year. Coaching is a separate $50 per hour service. Renewal and cancellation details are shown before checkout.</Text>
         <Text style={s.privacyPara}>Projections are estimates and are not guarantees of future performance.</Text>
       </View>
     )}
@@ -3629,6 +3621,17 @@ const s = StyleSheet.create({
   pickerChipOn: { backgroundColor: '#b28a4c', borderColor: '#b28a4c' },
   pickerChipText: { fontSize: 10, fontWeight: '700', color: '#3a3428' },
   stepCard: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: '#e7d9be', backgroundColor: '#fff' },
+  coachingCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderRadius: 16,
+    backgroundColor: '#0f0e0c',
+  },
+  coachingCtaText: { color: '#fff', fontSize: 15, fontWeight: '800', letterSpacing: 0.4 },
   stepBadge: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#f4e6c8', alignItems: 'center', justifyContent: 'center' },
   stepBadgeText: { color: '#8a6d3a', fontSize: 12, fontWeight: '800' },
   stepBtnPill: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16, backgroundColor: '#fbf5e9', borderWidth: 1, borderColor: '#e0cfa4' },
