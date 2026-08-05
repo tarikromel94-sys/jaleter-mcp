@@ -1,0 +1,77 @@
+{
+  "summary": "Frontend-only re-verification of the PeriodPills two-variant fix (short list → stretched, long list → scrollable) after iteration_29's regression. ALL 8 targeted flows PASS. Short-list variants render as original stretched thirds (Transactions filter ~108.3px, Net Worth ~108.3px, Settings appearance/experience ~96.3px). Long-list variants scroll horizontally with content-hugging widths (Legacy 8 pills @64px each with 'Retirement' fully readable; Budget 13 pills @64px scrollable to Year; Add-transaction month picker 12 pills @64px scrollable). Iteration_29 regression fixes (Coaching single CTA and Membership $90) also confirmed intact. All regression checks pass (home bell, support GET HELP hub, Reports screen, powered-by-jaleter footer on More/Support). No new UI issues found.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iteration_30.json"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "index.tsx still 3765 lines — well past 700-line guideline. Splitting per-screen would make future PeriodPills-style global-component regressions easier to catch.",
+    "PeriodPills variant threshold (`values.length > 5`) is a magic number; consider a named constant (e.g. `PILL_SCROLL_THRESHOLD = 5`) with a comment listing every consumer and its length so future edits know the impact radius."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "N/A (not tested)", "frontend": "100% (8/8 targeted flows + 4/4 regression checks pass)" },
+  "seed_data_creation": "None. Reused seeded user alex+test1@jaleter.app / password123.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "PeriodPills fix verified stable. If future PRs modify `s.pill` style or the PeriodPills component (index.tsx ~line 336), re-run the same 5 consumer screens: Legacy (nav-legacy), Budget (nav-budget), Transactions (nav-transactions filter), Net Worth (home→home-networth-card), Settings (home-profile→more-settings), and Add-transaction sheet (nav-transactions→tx-add). Short-list variants (<= 5 values) must be stretched thirds; long-list variants (> 5 values) must scroll horizontally with intrinsic widths ≥ 64px and no label truncation.",
+  "verification_results_pass": {
+    "test1_legacy_scrollable": {
+      "all_8_pills_present": ["1yr","2yr","3yr","5yr","10yr","20yr","30yr","Retirement"],
+      "each_pill_width_px": 64,
+      "retirement_label_full": "Retirement",
+      "scrollable_container_scrollWidth_vs_client": "545 > 333",
+      "no_overlap_after_scroll": true,
+      "tap_retirement_worked": true
+    },
+    "test2_budget_scrollable": {
+      "pills_measured_width_px": 64,
+      "container_scrollWidth_vs_client": "844 > 333",
+      "year_visible_after_scroll_x": 282,
+      "labels_full": ["Jan","Feb","Sep","Dec","Year"]
+    },
+    "test3_transactions_filter_stretched": {
+      "tx_filter_All_width": 108.33,
+      "tx_filter_Income_width": 108.34,
+      "tx_filter_Expenses_width": 108.33,
+      "no_overlap": true,
+      "labels_full": true
+    },
+    "test4_networth_period_stretched": {
+      "nw_period_Month_width": 108.33,
+      "nw_period_Quarter_width": 108.34,
+      "nw_period_Year_width": 108.33
+    },
+    "test5_settings_pills_stretched": {
+      "settings_appear_widths_px": [96.33, 96.34, 96.33],
+      "settings_exp_widths_px": [96.33, 96.34, 96.33],
+      "no_overlap": true
+    },
+    "test6_tx_month_scrollable": {
+      "pills_width_px": 64,
+      "container_scrollWidth_vs_viewport": "776 > 375",
+      "labels_full": ["Jan","Jun","Dec"]
+    },
+    "test7_coaching_single_cta": {
+      "coaching_book_pay_present": true,
+      "pick_a_time_removed": true,
+      "pay_50_on_web_removed": true,
+      "billing_notice_coaching_removed": true,
+      "coaching_open_calendly_removed": true,
+      "coaching_open_jaleter_removed": true
+    },
+    "test8_membership_price": {
+      "$90_year_present": true,
+      "$75_absent": true
+    },
+    "regression_home_bell": true,
+    "regression_support_hub_get_help_grid": true,
+    "regression_support_powered_by_footer": true,
+    "regression_reports_opens_from_more": true,
+    "regression_powered_by_on_more_screen": true
+  }
+}

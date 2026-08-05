@@ -335,8 +335,22 @@ const CircleBtn = ({ children, onPress, testID, dark }: any) => {
 };
 const PeriodPills = ({ values, value, onChange, testID }: any) => {
   const t = useThemed();
-  // Wrap the segmented row in a horizontal ScrollView so long option lists
-  // (e.g. Legacy's 8 timeframes) don't overflow and clip the last labels.
+  // Short lists keep their original stretched (`flex:1`) layout so touch
+  // targets stay large. Longer lists (Legacy's 8 timeframes, Budget's
+  // Jan-Dec+Year) horizontally scroll with content-hugging widths so long
+  // labels like "Retirement" and "September" aren't clipped.
+  const scrollable = values.length > 5;
+  if (!scrollable) {
+    return (
+      <View style={[s.segmented, t.pillBg]} testID={testID}>
+        {values.map((v: string) => (
+          <Pressable key={v} testID={`${testID}-${v}`} onPress={() => onChange(v)} style={[s.pill, value === v && s.pillSelected, value === v && t.pillSelectedBg]}>
+            <Text style={[s.pillText, t.textMuted, value === v && s.pillTextSelected, value === v && t.textInk]}>{v}</Text>
+          </Pressable>
+        ))}
+      </View>
+    );
+  }
   return (
     <ScrollView
       horizontal
@@ -344,9 +358,14 @@ const PeriodPills = ({ values, value, onChange, testID }: any) => {
       contentContainerStyle={{ paddingRight: 4 }}
       style={{ marginTop: 12 }}
     >
-      <View style={[s.segmented, t.pillBg, { marginTop: 0 }]} testID={testID}>
+      <View style={[s.segmented, t.pillBg, { marginTop: 0, alignSelf: 'flex-start' }]} testID={testID}>
         {values.map((v: string) => (
-          <Pressable key={v} testID={`${testID}-${v}`} onPress={() => onChange(v)} style={[s.pill, value === v && s.pillSelected, value === v && t.pillSelectedBg]}>
+          <Pressable
+            key={v}
+            testID={`${testID}-${v}`}
+            onPress={() => onChange(v)}
+            style={[s.pill, { flex: 0, paddingHorizontal: 14, minWidth: 64 }, value === v && s.pillSelected, value === v && t.pillSelectedBg]}
+          >
             <Text style={[s.pillText, t.textMuted, value === v && s.pillTextSelected, value === v && t.textInk]}>{v}</Text>
           </Pressable>
         ))}
