@@ -1107,6 +1107,25 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
         <Text style={s.inspirationQuote}>{q.quote}</Text>
         <Text style={{ color: '#aaa297', fontSize: 9 }}>{q.source}</Text>
       </Pressable>
+      {/* Prominent Coach AI entry point — replaces the bottom-nav slot.
+          Kept visible on the Home screen so users can always reach the coach
+          in one tap from the primary landing surface. */}
+      <Pressable testID="home-coach-card" onPress={() => navigate('coach')} style={s.coachCard}>
+        <LinearGradient
+          colors={['#f5d698', '#c49450', '#8a6428']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={s.coachCardIcon}
+        >
+          <Ionicons name="sparkles" size={22} color="#fffdf9" />
+        </LinearGradient>
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: '#d9af6d', fontSize: 9, fontWeight: '700', letterSpacing: 1.4 }}>JALETER COACH · AI</Text>
+          <Text style={s.coachCardTitle}>Ask about your money</Text>
+          <Text style={s.coachCardSub}>Personalized insights grounded in your real budget & spending.</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color="#e5c38b" />
+      </Pressable>
       <View style={s.sectionTitle}><Text style={[s.sectionH3, t.textInk]}>Right Now</Text><Text style={[s.sectionCap, t.textMuted]}>Your financial pulse</Text></View>
       <View style={{ flexDirection: 'row', gap: 11 }}>
         <Pressable style={[s.snapshotCard, t.cardBg]} onPress={() => navigate('budget')} testID="home-budget-card">
@@ -2850,9 +2869,9 @@ const MoreScreen = ({ navigate, linkedCount, onBack }: any) => {
       </View>
       <View style={{ gap: 10 }}>
         {[
+          ['coach','Jaleter Coach','AI insights on your money','sparkles-outline'],
           ['coaching','Book Coaching','Schedule + pay at jaleter.com','chatbubble-outline'],
           ['membership','Membership','Manage at jaleter.com','sparkles-outline'],
-          ['reports','Reports','Income & expense breakdowns','stats-chart-outline'],
           ['settings','Settings',`${linkedCount} linked accounts`,'settings-outline'],
         ].map(([id, name, sub, icon]) => (
           <Pressable key={id} style={[s.moreGridBtn, t.cardBg]} onPress={() => navigate(id)} testID={`more-${id}`}>
@@ -3028,7 +3047,7 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
 const navItems = [
   { id: 'home', label: 'Home', icon: 'home-outline' as const },
   { id: 'budget', label: 'Budget', icon: 'menu-outline' as const },
-  { id: 'coach', label: 'Coach', icon: 'sparkles-outline' as const },
+  { id: 'reports', label: 'Reports', icon: 'stats-chart-outline' as const },
   { id: 'transactions', label: 'Activity', icon: 'receipt-outline' as const },
   { id: 'networth', label: 'Wealth', icon: 'wallet-outline' as const },
   { id: 'legacy', label: 'Legacy', icon: 'trophy-outline' as const },
@@ -3508,7 +3527,7 @@ function MainApp() {
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={linkedAccounts.length} onBack={() => setActive('home')} />}
           {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} />}
-          {active === 'reports' && <ReportsScreen transactions={transactions} categories={categories} incomeSources={incomeSources} back={() => nav('more')} />}
+          {active === 'reports' && <ReportsScreen transactions={transactions} categories={categories} incomeSources={incomeSources} back={() => nav('home')} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}
           {active === 'settings' && <SettingsScreen initials={displayInitials} experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} categories={categories} appLock={appLock} setAppLock={(next: any) => setAppLock({ ...appLock, ...next })} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} onResetAppData={async () => {
@@ -3598,6 +3617,17 @@ const s = StyleSheet.create({
   homeName: { fontSize: 26, fontFamily: F.serif, fontWeight: '600', color: C.ink, marginTop: 5 },
   inspirationCard: { minHeight: 175, padding: 24, borderRadius: 22, backgroundColor: '#161511', marginBottom: 16 },
   inspirationQuote: { fontFamily: F.serif, fontSize: 17, color: '#f8f0e2', fontWeight: '500', lineHeight: 24, marginVertical: 16, maxWidth: 310 },
+  coachCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: '#161511', borderRadius: 18, padding: 16,
+    marginBottom: 16, borderWidth: 1, borderColor: '#3a2f1c',
+  },
+  coachCardIcon: {
+    width: 48, height: 48, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  coachCardTitle: { fontFamily: F.serif, fontSize: 16, color: '#f8f0e2', fontWeight: '600', marginTop: 3 },
+  coachCardSub: { color: '#aaa297', fontSize: 10, lineHeight: 14, marginTop: 3, maxWidth: 240 },
   sectionTitle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginVertical: 12 },
   sectionH3: { fontSize: 13, fontWeight: '700', color: C.ink },
   sectionCap: { color: '#9a948b', fontSize: 10 },
