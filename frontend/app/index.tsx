@@ -2141,8 +2141,26 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
         {shown.length === 0 && (
           <View style={{ padding: 30, alignItems: 'center' }}>
             <Ionicons name="receipt-outline" size={28} color={t.dark ? D.textMuted : '#c1b9ac'} />
-            <Text style={[{ fontSize: 11, marginTop: 8 }, t.textMuted]}>No transactions yet.</Text>
-            <Text style={[{ fontSize: 9, marginTop: 3 }, t.textMuted]}>Link a bank, import a file, or add one manually.</Text>
+            <Text style={[{ fontSize: 12, marginTop: 8, fontWeight: '700' }, t.textInk]}>No transactions yet</Text>
+            <Text style={[{ fontSize: 10, marginTop: 4, textAlign: 'center', maxWidth: 260, lineHeight: 14 }, t.textMuted]}>
+              Connect a bank, import transactions, or add a transaction manually.
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
+              <Pressable
+                onPress={() => openLinkSheet && openLinkSheet()}
+                testID="tx-empty-connect"
+                style={{ paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10, backgroundColor: '#c49450' }}
+              >
+                <Text style={{ color: '#fffdf9', fontSize: 11, fontWeight: '700' }}>Connect account</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setEditing({ id: '', name: '', amount: 0, date: new Date().toISOString().slice(0, 10), category: '', type: 'expense', origin: 'Manual' } as any)}
+                testID="tx-empty-add"
+                style={{ paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10, borderWidth: 1, borderColor: '#c49450' }}
+              >
+                <Text style={{ color: '#c49450', fontSize: 11, fontWeight: '700' }}>Add transaction</Text>
+              </Pressable>
+            </View>
           </View>
         )}
         {shown.map((tx: Tx) => (
@@ -2404,14 +2422,14 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
         <View style={{ flex: 1 }}><Text style={[s.cpSmall, t.textMuted]}>TOTAL CASH</Text><Text style={[s.cpStrong, t.textInk]}>{MONEY(cash)}</Text></View>
         <Text style={{ color: '#b99a6c' }}>−</Text>
         <Pressable onPress={() => setRestrictedOpen(true)} style={{ flex: 1 }} testID="nw-restricted">
-          <Text style={[s.cpSmall, t.textMuted]}>RESTRICTED</Text>
+          <Text style={[s.cpSmall, t.textMuted]}>SET ASIDE</Text>
           <Text style={[s.cpStrong, t.textInk]}>{MONEY(totalRestricted)}</Text>
           <Text style={{ color: '#c9a56c', fontSize: 8, marginTop: 2 }}>{restrictedBuckets.length > 0 ? `${restrictedBuckets.length} bucket${restrictedBuckets.length > 1 ? 's' : ''} · tap to manage` : 'tap to add'}</Text>
         </Pressable>
         <Text style={{ color: '#b99a6c' }}>=</Text>
         <View style={[{ flex: 1.2 }, s.cpAvailable]}><Text style={[s.cpSmall, { color: '#c8b494' }]}>AVAILABLE</Text><Text style={[s.cpStrong, { color: '#f3dfbd' }]}>{MONEY(Math.max(0, cash - totalRestricted))}</Text></View>
       </View>
-      <Sheet visible={restrictedOpen} close={() => { setRestrictedOpen(false); setAddingRestricted(false); setEditingBucket(null); setNewBucketName(''); setNewBucketAmt(''); }} title="Restricted Cash" subtitle="Create named buckets for money set aside — taxes, gifts, goals. Each bucket is subtracted from Available.">
+      <Sheet visible={restrictedOpen} close={() => { setRestrictedOpen(false); setAddingRestricted(false); setEditingBucket(null); setNewBucketName(''); setNewBucketAmt(''); }} title="Set Aside Cash" subtitle="Create named buckets for money set aside — taxes, gifts, goals. Each bucket is subtracted from Available Cash.">
         <View>
           {restrictedBuckets.length === 0 && !addingRestricted && (
             <Text style={{ fontSize: 11, color: C.muted2, marginBottom: 12 }}>No buckets yet. Tap the button below to add your first.</Text>
@@ -2428,7 +2446,7 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
               <Pressable onPress={() => {
                 const doIt = () => setRestrictedBuckets((prev: any[]) => prev.filter((x: any) => x.id !== b.id));
                 if (Platform.OS === 'web') { if (typeof window !== 'undefined' && window.confirm(`Remove "${b.name}"?`)) doIt(); }
-                else { Alert.alert(`Remove "${b.name}"?`, 'This allocation returns to Available cash.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Remove', style: 'destructive', onPress: doIt }]); }
+                else { Alert.alert(`Remove "${b.name}"?`, 'This allocation returns to Available Cash.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Remove', style: 'destructive', onPress: doIt }]); }
               }} hitSlop={6} style={{ paddingHorizontal: 8, paddingVertical: 6 }} testID={`bucket-del-${b.id}`}>
                 <Ionicons name="close-circle-outline" size={16} color="#b06a5b" />
               </Pressable>
@@ -2464,7 +2482,7 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
           ) : (
             <Pressable onPress={() => { setEditingBucket(null); setNewBucketName(''); setNewBucketAmt(''); setAddingRestricted(true); }} style={[s.subcategoryRow, { justifyContent: 'center', marginTop: 8 }]} testID="bucket-add">
               <Ionicons name="add-circle-outline" size={16} color="#9a6d32" />
-              <Text style={{ color: '#9a6d32', fontSize: 11, fontWeight: '700', marginLeft: 6 }}>Add restricted bucket</Text>
+              <Text style={{ color: '#9a6d32', fontSize: 11, fontWeight: '700', marginLeft: 6 }}>Add set-aside bucket</Text>
             </Pressable>
           )}
         </View>
@@ -2553,21 +2571,52 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
 };
 const WorthCard = ({ title, total, rows, hidden, onRowPress, onAdd }: any) => {
   const t = useThemed();
+  // A row is "empty" when it has no value AND no linked source. The seeded
+  // Cash + Investments rows always exist, so an "empty" WorthCard for
+  // Assets means both seeded rows are still at $0 and there are no manual
+  // additions. Liabilities has no seeded rows, so any zero-length rows
+  // array is truly empty.
+  const nonZeroRows = rows.filter((r: any) => (r.value || 0) > 0 || r.linked);
+  const isLiabilities = title !== 'Assets';
+  const showEmptyState = isLiabilities
+    ? rows.length === 0
+    : nonZeroRows.length === 0;
+  const emptyCopy = isLiabilities
+    ? 'Connect a liability account or add one manually.'
+    : 'Connect an account or add an asset to see your net worth.';
   return (
     <View style={[s.worthCard, t.cardBg]}>
       <View style={[s.worthCardHeading, t.dividerBorder]}>
         <Text style={[{ fontSize: 13, fontWeight: '700', color: C.ink }, t.textInk]}>{title}</Text>
         <Text style={[{ fontSize: 13, fontWeight: '700', color: C.ink }, t.textInk]}>{hidden ? '••••••' : MONEY(total)}</Text>
       </View>
-      {rows.map((r: Asset) => (
-        <Pressable key={r.id} onPress={() => onRowPress?.(r)} style={[s.worthRow, t.dividerBorder]} testID={`nw-row-${r.id}`}>
-          <View style={[s.worthIcon, t.dark && { backgroundColor: D.surfaceAlt }]}><Ionicons name={r.icon as any} size={17} color={t.dark ? D.textMuted : '#817969'} /></View>
-          <View style={{ flex: 1 }}><Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{r.name}</Text><Text style={[{ fontSize: 8, color: '#9b958c' }, t.textMuted]}>{r.source}</Text></View>
-          <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{hidden ? '••••' : MONEY(r.value)}</Text>
-          <Ionicons name="chevron-forward" size={12} color={t.dark ? D.textMuted : '#c1b9ac'} style={{ marginLeft: 4 }} />
-        </Pressable>
-      ))}
-      {onAdd && (
+      {showEmptyState ? (
+        <View style={{ paddingVertical: 22, paddingHorizontal: 14, alignItems: 'center' }}>
+          <Ionicons name={isLiabilities ? 'card-outline' : 'wallet-outline'} size={26} color={t.dark ? D.textMuted : '#c1b9ac'} />
+          <Text style={[{ fontSize: 11, marginTop: 6, textAlign: 'center', maxWidth: 260, lineHeight: 15 }, t.textMuted]}>
+            {emptyCopy}
+          </Text>
+          {onAdd && (
+            <Pressable
+              onPress={onAdd}
+              style={{ marginTop: 10, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#c49450' }}
+              testID={`nw-empty-add-${title.toLowerCase()}`}
+            >
+              <Text style={{ color: '#9a6d32', fontSize: 11, fontWeight: '700' }}>Add {isLiabilities ? 'liability' : 'asset'}</Text>
+            </Pressable>
+          )}
+        </View>
+      ) : (
+        rows.map((r: Asset) => (
+          <Pressable key={r.id} onPress={() => onRowPress?.(r)} style={[s.worthRow, t.dividerBorder]} testID={`nw-row-${r.id}`}>
+            <View style={[s.worthIcon, t.dark && { backgroundColor: D.surfaceAlt }]}><Ionicons name={r.icon as any} size={17} color={t.dark ? D.textMuted : '#817969'} /></View>
+            <View style={{ flex: 1 }}><Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{r.name}</Text><Text style={[{ fontSize: 8, color: '#9b958c' }, t.textMuted]}>{r.source}</Text></View>
+            <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{hidden ? '••••' : MONEY(r.value)}</Text>
+            <Ionicons name="chevron-forward" size={12} color={t.dark ? D.textMuted : '#c1b9ac'} style={{ marginLeft: 4 }} />
+          </Pressable>
+        ))
+      )}
+      {onAdd && !showEmptyState && (
         <Pressable onPress={onAdd} style={[s.worthRow, t.dividerBorder, { justifyContent: 'center' }]} testID={`nw-add-${title.toLowerCase()}`}>
           <Ionicons name="add-circle-outline" size={15} color="#9a6d32" />
           <Text style={{ color: '#9a6d32', fontSize: 10, fontWeight: '700', marginLeft: 6 }}>Add {title === 'Assets' ? 'asset' : 'liability'}</Text>
@@ -3089,8 +3138,10 @@ const LegalSheet = ({ visible, close, type }: any) => (
   </Sheet>
 );
 const NotificationsSheet = ({ visible, close, onSave }: any) => {
-  const labels: Record<string, string> = { daily: 'Daily check-in', weekly: 'Weekly summary', streak: 'Streak reminders', transactions: 'Large transactions', coaching: 'Coaching reminders' };
-  const [n, setN] = useState({ daily: true, weekly: true, streak: true, transactions: true, coaching: false });
+  // Coaching Alerts removed intentionally — the setting was surfaced in the
+  // Notifications sheet but never wired to actual delivery, so it was confusing.
+  const labels: Record<string, string> = { daily: 'Daily check-in', weekly: 'Weekly summary', streak: 'Streak reminders', transactions: 'Large transactions' };
+  const [n, setN] = useState({ daily: true, weekly: true, streak: true, transactions: true });
   return (
     <Sheet visible={visible} close={close} title="Notification Details" subtitle="Choose exactly what reaches you.">
       {Object.entries(n).map(([id, v]) => (
@@ -3347,7 +3398,7 @@ function MainApp() {
           if (Array.isArray(data.restrictedBuckets)) setRestrictedBuckets(data.restrictedBuckets);
           else if (typeof data.restrictedCash === 'number' && data.restrictedCash > 0) {
             // Migrate legacy single-value restrictedCash into a bucket.
-            setRestrictedBuckets([{ id: 'legacy-restricted', name: 'Restricted', amount: data.restrictedCash }]);
+            setRestrictedBuckets([{ id: 'legacy-restricted', name: 'Set Aside', amount: data.restrictedCash }]);
           }
           if (Array.isArray(data.assets) && data.assets.length > 0) setAssets(data.assets);
           if (Array.isArray(data.liabilities) && data.liabilities.length > 0) setLiabilities(data.liabilities);
