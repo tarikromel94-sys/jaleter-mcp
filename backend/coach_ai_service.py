@@ -148,21 +148,46 @@ def build_context_snippet(context: dict | None) -> str:
     return "\n".join(lines)
 
 
-async def chat_answer(session_id: str, user_id: str, message: str, context: dict | None) -> str:
+async def chat_answer(
+    session_id: str,
+    user_id: str,
+    message: str,
+    context: dict | None,
+    history: list[dict] | None = None,
+) -> str:
     """Send `message` to the LLM using multi-turn history keyed by session_id.
 
+    We inline the prior conversation into the `system_message` so context
+    survives across stateless request boundaries. (The `emergentintegrations`
+    LlmChat instance is created per-request and does not auto-rehydrate.)
+
     Uses `send_message()` (non-streaming) because the RN client consumes JSON.
-    We can upgrade to SSE streaming later without changing the client contract.
     """
     api_key = os.environ.get("EMERGENT_LLM_KEY", "").strip()
     if not api_key:
         raise RuntimeError("EMERGENT_LLM_KEY is not configured")
 
     snapshot = build_context_snippet(context)
-    system_msg = f"{SYSTEM_PROMPT}\n\n{snapshot}"
 
-    # NOTE: A new LlmChat instance is required per session per the playbook.
-    # We rely on the library's built-in per-session history persistence.
+    transcript_lines: list[str] = []
+    if history:
+        # Take the last ~20 turns to cap token growth on long sessions.
+        for m in history[-20:]:
+            role = str(m.get("role", "")).lower()
+            content = str(m.get("content", "")).strip()
+            if not content:
+                continue
+            label = "USER" if role == "user" else ("ASSISTANT" if role == "assistant" else role.upper())
+            transcript_lines.append(f"{label}: {content}")
+    transcript_block = ""
+    if transcript_lines:
+        transcript_block = (
+            "\n\nPRIOR CONVERSATION (most recent last — use this to keep continuity):\n"
+            + "\n".join(transcript_lines)
+        )
+
+    system_msg = f"{SYSTEM_PROMPT}\n\n{snapshot}{transcript_block}"
+
     chat = LlmChat(
         api_key=api_key,
         session_id=session_id,
@@ -170,8 +195,6 @@ async def chat_answer(session_id: str, user_id: str, message: str, context: dict
     ).with_model(PROVIDER, MODEL_NAME)
 
     result = await chat.send_message(UserMessage(text=message))
-    # `send_message` returns the assistant text as a string in the current
-    # emergentintegrations release. Coerce defensively.
     if isinstance(result, str):
         return result.strip()
     return str(result).strip()

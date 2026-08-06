@@ -1445,6 +1445,16 @@ async def coach_chat(request: Request, payload: CoachChatRequest, current_user: 
     user_id = current_user['user_id']
     session_id = (payload.session_id or coach_ai_service.default_session_id(user_id)).strip()
     now = datetime.now(timezone.utc)
+    # Fetch PRIOR conversation (before we insert the new user turn) so we can
+    # replay it into the model — emergentintegrations LlmChat is stateless per
+    # request, so we must inline history ourselves for multi-turn continuity.
+    prior_cursor = db.coach_messages.find(
+        {'user_id': user_id, 'session_id': session_id},
+        {'_id': 0, 'role': 1, 'content': 1, 'created_at': 1},
+    ).sort('created_at', 1).limit(40)
+    prior_history: list[dict] = []
+    async for m in prior_cursor:
+        prior_history.append({'role': m.get('role'), 'content': m.get('content')})
     # Store user message first (so history survives if the LLM call fails).
     await db.coach_messages.insert_one({
         'session_id': session_id,
@@ -1459,9 +1469,18 @@ async def coach_chat(request: Request, payload: CoachChatRequest, current_user: 
             user_id=user_id,
             message=payload.message,
             context=payload.context or {},
+            history=prior_history,
         )
     except Exception as exc:  # noqa: BLE001
         logger.error('coach chat failed for %s: %s', user_id, exc)
+        # Roll back the orphaned user turn so history stays clean.
+        try:
+            await db.coach_messages.delete_one({
+                'session_id': session_id, 'user_id': user_id,
+                'role': 'user', 'content': payload.message, 'created_at': now,
+            })
+        except Exception:
+            pass
         raise HTTPException(status_code=502, detail='Coach is temporarily unavailable. Please try again.')
     await db.coach_messages.insert_one({
         'session_id': session_id,

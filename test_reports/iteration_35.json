@@ -1,0 +1,31 @@
+{
+  "summary": "Re-verified Coach AI multi-turn memory fix. All 4 targeted tests PASS (2 multi-turn + 2 grounding regressions). The history-inlining fix in coach_ai_service.chat_answer (PRIOR CONVERSATION block appended to system_message, fed by server.py fetching last 40 messages from coach_messages before insert) works correctly. Turn 2 successfully recalls 'teal' and '$750' from turn 1 across the same session_id. Grounding regressions (netWorth $47,325.50, Starbucks $12) still pass — the fix did not regress anything.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_coach_ai.py",
+    "/app/test_reports/pytest/iteration35_coach.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix is clean and matches emergentintegrations library contract (stateless LlmChat per request → inline transcript into system_message).",
+    "History cap: server.py fetches last 40 messages, coach_ai_service further trims to last 20 turns in the transcript block — good token-growth guard for long sessions."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_coach_ai.py (added TestCoachMultiTurn::test_multi_turn_savings_target)"
+  ],
+  "success_rate": {"backend": "100% (4/4 targeted tests)", "frontend": "n/a"},
+  "seed_data_creation": "Ephemeral TEST_coach_* users created via /api/auth/register and deleted via /api/auth/delete-account fixture teardown. alex+test1@jaleter.app not touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Coach AI multi-turn memory bug from iteration 34 is now RESOLVED. If retesting full suite: rate-limit test (TestRateLimit) may 429 test-fixture teardown deletes; leave 60s between runs. Full 14+1 = 15 tests can be run with `pytest /app/backend/tests/test_coach_ai.py -v`.",
+  "rca_of_issue": "Original bug: LlmChat instances are stateless; per-request instantiation dropped prior turns. Fix (verified): server.py /api/coach/chat now reads last 40 messages for (user_id, session_id) from db.coach_messages (sorted asc, before inserting the current user turn) and passes them as `history=[...]` to coach_ai_service.chat_answer, which appends a 'PRIOR CONVERSATION (most recent last)' block (capped at 20 turns) to the system_message. Confirmed by two multi-turn tests (color=teal, savings=$750). Grounding regressions still pass."
+}

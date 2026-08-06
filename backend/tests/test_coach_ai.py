@@ -125,6 +125,23 @@ class TestCoachMultiTurn:
         answer = r2.json()['answer'].lower()
         assert 'teal' in answer, f"model did not retain multi-turn context — answer: {r2.json()['answer']}"
 
+    def test_multi_turn_savings_target(self, temp_user):
+        tok = temp_user['token']
+        requests.post(f"{API}/coach/reset", headers=_auth(tok), timeout=15)
+
+        r1 = requests.post(f"{API}/coach/chat",
+                           json={'message': 'Please remember that my target monthly savings is $750.'},
+                           headers=_auth(tok), timeout=90)
+        assert r1.status_code == 200, r1.text
+        sid = r1.json()['session_id']
+
+        r2 = requests.post(f"{API}/coach/chat",
+                           json={'message': 'What savings target did I share?', 'session_id': sid},
+                           headers=_auth(tok), timeout=90)
+        assert r2.status_code == 200, r2.text
+        answer = r2.json()['answer']
+        assert '750' in answer, f"model did not retain savings target — answer: {answer}"
+
 
 # ---- Context grounding ----------------------------------------------------
 class TestCoachContextGrounding:
