@@ -1,0 +1,41 @@
+{
+  "summary": "Coach AI (GPT-5.6-Terra) backend tested end-to-end. 13/14 tests pass. Auth enforcement, single-turn chat + persistence, context grounding (netWorth, transactions), history IDOR isolation, reset flow, rate-limit (20/min), delete-account cascade of coach_messages, and auth regressions all PASS. One critical failure: multi-turn conversation does NOT retain context across turns even when the same session_id is reused — the model has no memory of prior turns. Suspected cause: coach_ai_service.chat_answer() instantiates a NEW LlmChat per request; emergentintegrations does not persist per-session history across instances by itself, so turn-2 arrives with only the current message and the DATA SNAPSHOT (no prior turn transcript).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/coach/chat",
+        "issue": "Multi-turn context is broken. Turn 1 message 'My favorite color is teal, remember it.' is not visible to turn 2 (same session_id). Turn 2 responded: 'You haven’t mentioned a color in this chat.' Root cause: /app/backend/coach_ai_service.py:166 creates a fresh LlmChat() every call; the library does not automatically reload persisted history for a given session_id, so only the latest user turn is sent. Fix suggestion: before calling send_message, fetch prior messages from db.coach_messages for that (user_id, session_id) sorted asc and either (a) prepend them as UserMessage/AssistantMessage into the LlmChat, or (b) inline the running transcript into system_message. Verified deterministic reproduction across 2 runs.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_coach_ai.py",
+    "/app/test_reports/pytest/iteration34_coach.xml"
+  ],
+  "action_items": [
+    "Fix multi-turn memory in /app/backend/coach_ai_service.py: rebuild conversation history from db.coach_messages (user_id + session_id, sorted asc) and inject prior turns into the LlmChat before calling send_message. Otherwise the 'Coach AI conversation feels forgetful' bug will hit users on turn 2+."
+  ],
+  "critical_code_review_comments": [
+    "coach_ai_service.py comments claim reliance on 'the library's built-in per-session history persistence', but emergentintegrations LlmChat does not persist across instantiations — this assumption is the bug. Either persist history yourself (from coach_messages) or reuse a single LlmChat instance per session (which would require in-process caching).",
+    "server.py /api/coach/chat stores the user turn BEFORE calling the LLM and the assistant turn AFTER. If the LLM raises, the user turn remains orphaned in coach_messages without a matching assistant reply — history endpoint will show odd-length trailing user messages. Consider wrapping in a transaction or deleting the orphan on failure.",
+    "server.py:1439 — good use of rate limit (20/min) and Bearer enforcement. Endpoint uses request.client scoped rate limiter — works via _client_key(). Verified 429 kicks in.",
+    "coach_ai_service.py does not include the 'AI can make mistakes — not financial advice' disclaimer in the system prompt or response payload. Per user choice #3 this disclaimer was requested; verify it's rendered by the frontend (not tested here), otherwise add it server-side."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_coach_ai.py (new file — 14 test cases)"
+  ],
+  "success_rate": {"backend": "93% (13/14)", "frontend": "n/a"},
+  "seed_data_creation": "Created ephemeral temp users prefixed with TEST_coach_* and deleted them via /api/auth/delete-account in fixture teardown. Admin and alex+test1@jaleter.app were not modified.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Multi-turn memory fix must be re-verified by running: pytest /app/backend/tests/test_coach_ai.py::TestCoachMultiTurn -v. Delete-cascade regression may 429 if run back-to-back with other delete tests; wait 60s or hit /delete-account fewer than 3 times per minute per IP. Model name assertion is 'gpt-5.6-terra' — confirmed correct.",
+  "rca_of_issue": "REPRO: 1) POST /api/coach/chat {message:'My favorite color is teal, remember it.'} → 200 (session_id=jaleter-coach-<uid>). 2) POST /api/coach/chat {message:'What color did I mention?', session_id:<same>} → 200 but answer='You haven't mentioned a color in this chat.' MITIGATION: In coach_ai_service.chat_answer, before send_message, fetch prior messages from Mongo and replay them into LlmChat (or serialize into system prompt as a 'PRIOR CONVERSATION' block). Verified turn-1 IS persisted in coach_messages, so state exists — it just isn't being sent to the model."
+}

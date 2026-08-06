@@ -452,7 +452,7 @@ async def delete_account(request: Request, current_user: dict = Depends(get_curr
     # 5. Other linked-financial-data collections
     for coll in ('linked_accounts', 'snaptrade_accounts', 'snaptrade_users',
                  'support_tickets', 'support_requests', 'coaching_bookings',
-                 'payment_transactions'):
+                 'payment_transactions', 'coach_messages'):
         try:
             r = await db[coll].delete_many({'user_id': user_id}); deleted[coll] = r.deleted_count
         except Exception as e:  # noqa: BLE001
@@ -1420,6 +1420,83 @@ async def support_admin_reply(ticket_id: str, payload: ReplyCreate, current_user
 async def support_admin_note(ticket_id: str, payload: AdminNoteCreate, current_user: dict = Depends(get_current_user)):
     reply_payload = ReplyCreate(message=payload.note)
     return await support_service.admin_add_reply(db, current_user, ticket_id, reply_payload, private=True)
+
+
+# ------------------------------------------------------------------
+# Coach AI — GPT 5.6 Terra via Emergent LLM Key
+# ------------------------------------------------------------------
+import coach_ai_service
+
+
+class CoachChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000)
+    context: Optional[dict] = None
+    session_id: Optional[str] = None
+
+
+@api_router.post('/coach/chat')
+@limiter.limit('20/minute')
+async def coach_chat(request: Request, payload: CoachChatRequest, current_user: dict = Depends(get_current_user)):
+    """Ask Jaleter Coach a question. Multi-turn — pass the same session_id
+    (or omit to get the user's default one) to maintain history.
+
+    Persists the user turn AND the assistant turn in `coach_messages` so the
+    frontend can render history on cold start."""
+    user_id = current_user['user_id']
+    session_id = (payload.session_id or coach_ai_service.default_session_id(user_id)).strip()
+    now = datetime.now(timezone.utc)
+    # Store user message first (so history survives if the LLM call fails).
+    await db.coach_messages.insert_one({
+        'session_id': session_id,
+        'user_id': user_id,
+        'role': 'user',
+        'content': payload.message,
+        'created_at': now,
+    })
+    try:
+        answer = await coach_ai_service.chat_answer(
+            session_id=session_id,
+            user_id=user_id,
+            message=payload.message,
+            context=payload.context or {},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error('coach chat failed for %s: %s', user_id, exc)
+        raise HTTPException(status_code=502, detail='Coach is temporarily unavailable. Please try again.')
+    await db.coach_messages.insert_one({
+        'session_id': session_id,
+        'user_id': user_id,
+        'role': 'assistant',
+        'content': answer,
+        'created_at': datetime.now(timezone.utc),
+    })
+    return {'session_id': session_id, 'answer': answer, 'model': coach_ai_service.MODEL_NAME}
+
+
+@api_router.get('/coach/history')
+async def coach_history(session_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    user_id = current_user['user_id']
+    sid = (session_id or coach_ai_service.default_session_id(user_id)).strip()
+    cursor = db.coach_messages.find(
+        {'user_id': user_id, 'session_id': sid},
+        {'_id': 0, 'user_id': 0},
+    ).sort('created_at', 1).limit(200)
+    messages = []
+    async for m in cursor:
+        if isinstance(m.get('created_at'), datetime):
+            m['created_at'] = m['created_at'].isoformat()
+        messages.append(m)
+    return {'session_id': sid, 'messages': messages, 'model': coach_ai_service.MODEL_NAME}
+
+
+@api_router.post('/coach/reset')
+@limiter.limit('10/minute')
+async def coach_reset(request: Request, current_user: dict = Depends(get_current_user)):
+    """Start a fresh chat — deletes the current default-session history."""
+    user_id = current_user['user_id']
+    sid = coach_ai_service.default_session_id(user_id)
+    await db.coach_messages.delete_many({'user_id': user_id, 'session_id': sid})
+    return {'ok': True, 'session_id': sid}
 
 
 app.include_router(api_router)

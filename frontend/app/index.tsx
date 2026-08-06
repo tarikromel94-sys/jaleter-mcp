@@ -22,6 +22,7 @@ import { BANK_IMPORT_GUIDES } from '@/src/bankGuides';
 import { openJaleter } from '@/src/jaleterLinks';
 import { PoweredByJaleter } from '@/src/PoweredByJaleter';
 import { EmailVerificationBanner } from '@/src/components/EmailVerificationBanner';
+import { CoachAIScreen } from '@/src/screens/CoachAIScreen';
 
 const STORAGE_KEY = 'jaleter-state-v2';
 // One-time migration: any legacy v1 cache (which was seeded with mock $ figures) must be discarded.
@@ -3027,8 +3028,9 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
 const navItems = [
   { id: 'home', label: 'Home', icon: 'home-outline' as const },
   { id: 'budget', label: 'Budget', icon: 'menu-outline' as const },
-  { id: 'transactions', label: 'Transactions', icon: 'receipt-outline' as const },
-  { id: 'networth', label: 'Net Worth', icon: 'wallet-outline' as const },
+  { id: 'coach', label: 'Coach', icon: 'sparkles-outline' as const },
+  { id: 'transactions', label: 'Activity', icon: 'receipt-outline' as const },
+  { id: 'networth', label: 'Wealth', icon: 'wallet-outline' as const },
   { id: 'legacy', label: 'Legacy', icon: 'trophy-outline' as const },
 ];
 const BottomNav = ({ active, setActive, isDark }: any) => (
@@ -3484,6 +3486,24 @@ function MainApp() {
           <EmailVerificationBanner isDark={isDark} />
           {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} legacyContribution={legacyContribution} legacyHypothetical={legacyHypothetical} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
           {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} budgetYear={budgetYear} onSwitchYear={switchBudgetYear} />}
+          {active === 'coach' && <CoachAIScreen isDark={isDark} context={{
+            budgetYear,
+            categories,
+            incomeSources,
+            transactions,
+            netWorth,
+            totalCash,
+            investmentTotal,
+            monthlyNet,
+            linkedAccountsCount: linkedAccounts.length,
+            experience,
+            legacy: {
+              timeframe: legacyTimeframe,
+              contribution: legacyContribution,
+              hypothetical: legacyHypothetical,
+              cumulative: legacyCumulative,
+            },
+          }} />}
           {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} openLinkSheet={() => { setActive('settings'); }} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={linkedAccounts.length} onBack={() => setActive('home')} />}
