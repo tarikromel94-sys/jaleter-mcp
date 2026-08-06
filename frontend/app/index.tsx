@@ -21,6 +21,7 @@ import { ReportsScreen } from '@/src/ReportsScreen';
 import { BANK_IMPORT_GUIDES } from '@/src/bankGuides';
 import { openJaleter } from '@/src/jaleterLinks';
 import { PoweredByJaleter } from '@/src/PoweredByJaleter';
+import { EmailVerificationBanner } from '@/src/components/EmailVerificationBanner';
 
 const STORAGE_KEY = 'jaleter-state-v2';
 // One-time migration: any legacy v1 cache (which was seeded with mock $ figures) must be discarded.
@@ -3480,6 +3481,7 @@ function MainApp() {
       )}
       {auth.user && stage === 'app' && !(appLock.enabled && appLock.locked) && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
+          <EmailVerificationBanner isDark={isDark} />
           {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} legacyContribution={legacyContribution} legacyHypothetical={legacyHypothetical} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
           {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} budgetYear={budgetYear} onSwitchYear={switchBudgetYear} />}
           {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} openLinkSheet={() => { setActive('settings'); }} />}

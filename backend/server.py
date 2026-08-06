@@ -43,7 +43,17 @@ def _client_key(request: Request) -> str:  # noqa: F821 - Request is imported la
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-from email_service import build_password_reset_email, is_configured as sendgrid_ready, send_email
+from email_service import (
+    build_delete_confirmation_email,
+    build_password_reset_email,
+    build_verification_email,
+    is_configured as email_ready,
+    send_email,
+)
+# Legacy alias — many call-sites still reference `sendgrid_ready`. The email
+# provider is now Emergent-managed Resend, but the check is functionally the
+# same: "do we have a working provider configured?".
+sendgrid_ready = email_ready
 from simplefin_service import (
     SimpleFinError,
     claim_setup_token,
@@ -307,17 +317,16 @@ async def register(payload: RegisterRequest, request: Request):
             'expires_at': datetime.now(timezone.utc) + timedelta(hours=24),
             'used': False,
         })
-        if sendgrid_ready():
-            verify_link = f"https://jaleter.com/verify-email?token={verification_token}"
-            html = f"<p>Welcome to Jaleter! Verify your email:</p><p><a href='{verify_link}'>{verify_link}</a></p><p>Link expires in 24 hours.</p>"
-            await send_email(payload.email.lower(), 'Verify your Jaleter account', html)
+        if email_ready():
+            subject, html, _ = build_verification_email(payload.name.strip(), verification_token)
+            await send_email(payload.email.lower(), subject, html)
     except Exception as e:  # noqa: BLE001
         logger.warning('email verification issue on register: %s', e)
     token = create_access_token(user_id)
     doc.pop('_id', None)
     resp = AuthResponse(user=public_user(doc), token=token)
-    # In dev (no SendGrid) surface the token so QA can proceed; suppressed in prod.
-    if verification_token and not sendgrid_ready():
+    # In dev (no email provider) surface the token so QA can proceed; suppressed in prod.
+    if verification_token and not email_ready():
         return {**resp.model_dump(), 'dev_verification_token': verification_token}
     return resp
 
@@ -362,12 +371,11 @@ async def resend_verification(request: Request, current_user: dict = Depends(get
         'expires_at': datetime.now(timezone.utc) + timedelta(hours=24),
         'used': False,
     })
-    if sendgrid_ready():
-        verify_link = f"https://jaleter.com/verify-email?token={verification_token}"
-        html = f"<p>Verify your Jaleter email:</p><p><a href='{verify_link}'>{verify_link}</a></p><p>Link expires in 24 hours.</p>"
-        await send_email(current_user['email'], 'Verify your Jaleter account', html)
+    if email_ready():
+        subject, html, _ = build_verification_email(current_user.get('name', ''), verification_token)
+        await send_email(current_user['email'], subject, html)
         return {'ok': True}
-    # Dev-only: return the token for testing when SendGrid is not configured.
+    # Dev-only: return the token for testing when email is not configured.
     return {'ok': True, 'dev_verification_token': verification_token}
 
 
@@ -388,16 +396,45 @@ async def login(payload: LoginRequest, request: Request):
 async def delete_account(request: Request, current_user: dict = Depends(get_current_user)):
     """Fully purge a user account — profile, sessions, financial data, and Plaid.
 
+    Password-provider users MUST re-enter their password (sent in the JSON body
+    as `{ "password": "..." }`) as a soft "sudo" check before deletion proceeds.
+    Google / Apple users are exempt because the OAuth session token is proof.
+
     Steps (best-effort; nothing here should raise a 500 unless auth failed):
-      1. Revoke every Plaid item at Plaid (`/item/remove`), then delete local rows
-      2. Delete every cached bank transaction for the user
-      3. Delete linked_accounts, snaptrade_users/accounts, support tickets/replies
-      4. Delete sessions, password_resets, email_verifications
-      5. Finally delete the user row itself
+      1. Verify password (password-provider only)
+      2. Send goodbye email (best-effort)
+      3. Revoke every Plaid item at Plaid (`/item/remove`), then delete local rows
+      4. Delete every cached bank transaction for the user
+      5. Delete linked_accounts, snaptrade_users/accounts, support tickets/replies, payments
+      6. Delete sessions, password_resets, email_verifications
+      7. Finally delete the user row itself
     """
     user_id = current_user['user_id']
+    # 1. Password re-verification for password-provider accounts.
+    provider = (current_user.get('provider') or 'password').lower()
+    if provider == 'password':
+        body: dict = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        supplied = (body.get('password') or '').strip() if isinstance(body, dict) else ''
+        if not supplied:
+            raise HTTPException(status_code=400, detail='Password required to delete your account.')
+        pw_hash = current_user.get('password_hash')
+        if not pw_hash or not verify_password(supplied, pw_hash):
+            raise HTTPException(status_code=401, detail='Incorrect password.')
+
+    # 2. Send goodbye email BEFORE we blow away the user row (best-effort).
+    try:
+        if email_ready() and current_user.get('email'):
+            subject, html, _ = build_delete_confirmation_email(current_user.get('name', ''))
+            await send_email(current_user['email'], subject, html)
+    except Exception as e:  # noqa: BLE001
+        logger.warning('delete-account: goodbye email failed: %s', e)
+
     deleted: dict[str, int] = {}
-    # 1. Plaid items — try to revoke each token remotely, then delete locally.
+    # 3. Plaid items — try to revoke each token remotely, then delete locally.
     items = await db.plaid_items.find({'user_id': user_id}).to_list(length=100)
     plaid_revoked = 0
     plaid_revoke_errors = 0
@@ -410,9 +447,9 @@ async def delete_account(request: Request, current_user: dict = Depends(get_curr
             plaid_revoke_errors += 1
             logger.warning('plaid revoke failed during delete-account: %s', e)
     r = await db.plaid_items.delete_many({'user_id': user_id}); deleted['plaid_items'] = r.deleted_count
-    # 2. Cached transactions
+    # 4. Cached transactions
     r = await db.bank_transactions.delete_many({'user_id': user_id}); deleted['bank_transactions'] = r.deleted_count
-    # 3. Other linked-financial-data collections
+    # 5. Other linked-financial-data collections
     for coll in ('linked_accounts', 'snaptrade_accounts', 'snaptrade_users',
                  'support_tickets', 'support_requests', 'coaching_bookings',
                  'payment_transactions'):
@@ -420,13 +457,13 @@ async def delete_account(request: Request, current_user: dict = Depends(get_curr
             r = await db[coll].delete_many({'user_id': user_id}); deleted[coll] = r.deleted_count
         except Exception as e:  # noqa: BLE001
             logger.warning('delete-account: failed on %s: %s', coll, e)
-    # 4. Sessions + tokens
+    # 6. Sessions + tokens
     for coll in ('user_sessions', 'password_resets', 'email_verifications'):
         try:
             r = await db[coll].delete_many({'user_id': user_id}); deleted[coll] = r.deleted_count
         except Exception:
             pass
-    # 5. Finally the user record
+    # 7. Finally the user record
     r = await db.users.delete_one({'user_id': user_id}); deleted['users'] = r.deleted_count
     return {
         'ok': True,
@@ -635,22 +672,22 @@ async def forgot_password(payload: ForgotPasswordRequest, request: Request):
         'created_at': datetime.now(timezone.utc),
     })
 
-    if sendgrid_ready():
+    if email_ready():
         subject, html_body, text_body = build_password_reset_email(user.get('name', ''), token)
-        sent, detail = send_email(email, subject, html_body, text_body)
+        sent, detail = await send_email(email, subject, html_body, text_body)
         logger.info('Password reset email %s for %s (%s)', 'sent' if sent else 'FAILED', email, detail)
-        return {'ok': True, 'delivered': sent, 'via': 'sendgrid'}
+        return {'ok': True, 'delivered': sent, 'via': 'emergent-resend'}
 
-    # Preview fallback: SendGrid not configured. Return the token so the UI
+    # Preview fallback: email provider not configured. Return the token so the UI
     # flow still works. This branch MUST become unreachable once
-    # SENDGRID_API_KEY + SENDGRID_FROM_EMAIL are set in production.
-    logger.warning('SENDGRID not configured; returning reset token in response (dev only). Set SENDGRID_API_KEY+SENDGRID_FROM_EMAIL in /app/backend/.env to enable email delivery.')
+    # EMERGENT_EMAIL_KEY is set in production.
+    logger.warning('Email not configured; returning reset token in response (dev only). Set EMERGENT_EMAIL_KEY in /app/backend/.env to enable email delivery.')
     return {
         'ok': True,
         'delivered': False,
         'reset_token': token,
         'via': 'dev-fallback',
-        'note': 'SendGrid not configured. Set SENDGRID_API_KEY and SENDGRID_FROM_EMAIL in backend/.env to email reset tokens.',
+        'note': 'Email provider not configured. Set EMERGENT_EMAIL_KEY in backend/.env to email reset tokens.',
     }
 
 
@@ -947,17 +984,19 @@ async def submit_support_request(payload: SupportRequest, current_user: dict = D
         'created_at': datetime.now(timezone.utc), 'status': 'open',
     }
     result = await db.support_requests.insert_one(doc)
-    if sendgrid_ready():
+    if email_ready():
         admin_email = os.getenv('SUPPORT_ADMIN_EMAIL') or _sender_admin_fallback()
         if admin_email:
             subject = f'[Jaleter] Institution request: {doc["institution"]}'
             text = f"User: {doc['user_email']}\nInstitution: {doc['institution']}\nNotes: {doc['notes'] or '(none)'}"
             html = f"<p>User: <strong>{doc['user_email']}</strong></p><p>Institution: <strong>{doc['institution']}</strong></p><p>Notes: {doc['notes'] or '(none)'}</p>"
-            send_email(admin_email, subject, html, text)
+            await send_email(admin_email, subject, html, text)
     return {'ok': True, 'request_id': str(result.inserted_id)}
 
 
 def _sender_admin_fallback() -> Optional[str]:
+    # Prefer explicit SUPPORT_ADMIN_EMAIL. Legacy SENDGRID_FROM_EMAIL kept as
+    # a fallback for backwards compatibility with older environments.
     from_email = os.getenv('SENDGRID_FROM_EMAIL', '').strip()
     return from_email or None
 

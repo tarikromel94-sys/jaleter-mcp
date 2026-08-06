@@ -28,6 +28,10 @@ type AuthState = {
   logout: () => Promise<void>;
   requestPasswordReset: (email: string) => Promise<{ delivered: boolean; reset_token?: string }>;
   resetPassword: (token: string, newPassword: string) => Promise<void>;
+  deleteAccount: (password?: string) => Promise<void>;
+  resendVerification: () => Promise<{ ok: boolean; already_verified?: boolean; dev_verification_token?: string }>;
+  verifyEmail: (token: string) => Promise<void>;
+  refreshUser: () => Promise<void>;
 };
 
 const Ctx = createContext<AuthState | undefined>(undefined);
@@ -192,7 +196,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await persist(data.token, data.user);
   }, [persist]);
 
-  return <Ctx.Provider value={{ loading, user, token, register, login, loginWithGoogle, loginWithApple, logout, requestPasswordReset, resetPassword }}>{children}</Ctx.Provider>;
+  const deleteAccount = useCallback(async (password?: string) => {
+    // Password-provider users must re-enter their password. OAuth users can pass
+    // undefined; the backend allows the delete because the JWT itself is proof.
+    const body = password ? JSON.stringify({ password }) : undefined;
+    await callApi('/api/auth/delete-account', { method: 'DELETE', body }, token);
+    await storage.secureRemove(TOKEN_KEY);
+    setToken(null);
+    setUser(null);
+  }, [token]);
+
+  const resendVerification = useCallback(async () => {
+    return callApi('/api/auth/resend-verification', { method: 'POST' }, token);
+  }, [token]);
+
+  const verifyEmail = useCallback(async (verifyToken: string) => {
+    await callApi('/api/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ token: verifyToken }),
+    });
+    // Refresh user so email_verified flips to true in the UI.
+    try {
+      const me = await callApi('/api/auth/me', { method: 'GET' }, token);
+      setUser(me);
+    } catch {}
+  }, [token]);
+
+  const refreshUser = useCallback(async () => {
+    if (!token) return;
+    try {
+      const me = await callApi('/api/auth/me', { method: 'GET' }, token);
+      setUser(me);
+    } catch {}
+  }, [token]);
+
+  return <Ctx.Provider value={{ loading, user, token, register, login, loginWithGoogle, loginWithApple, logout, requestPasswordReset, resetPassword, deleteAccount, resendVerification, verifyEmail, refreshUser }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth(): AuthState {

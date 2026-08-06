@@ -107,7 +107,7 @@ export function SupportSheet({ visible, close }: { visible: boolean; close: () =
               <PrivacyMode token={token} back={() => setMode('hub')} onCreated={onTicketCreated} />
             )}
             {mode === 'delete' && (
-              <DeleteAccountMode token={token} back={() => setMode('hub')} onCreated={onTicketCreated} />
+              <DeleteAccountMode back={() => setMode('hub')} onDeleted={close} />
             )}
             {mode === 'billing' && (
               <BillingMode token={token} back={() => setMode('hub')} onCreated={onTicketCreated} />
