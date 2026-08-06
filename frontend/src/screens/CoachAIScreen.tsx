@@ -157,7 +157,9 @@ export function CoachAIScreen({ context, isDark = false }: { context: CoachConte
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
-      style={{ flex: 1, backgroundColor: bg }}
+      // 79px = height of the absolute-positioned BottomNav overlay in MainApp.
+      // Reserving this space keeps the composer + disclaimer visible above the tabs.
+      style={{ flex: 1, backgroundColor: bg, paddingBottom: 79 }}
     >
       {/* Header */}
       <View style={[styles.header, { borderColor: border, backgroundColor: surface }]}>
