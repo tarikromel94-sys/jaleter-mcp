@@ -1483,7 +1483,7 @@ async function exportTransactionsCsv(categories: Category[], incomeSources: any[
 }
 
 /* ---------------- Budget Screen ---------------- */
-const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSources, transactions, focusCategory, clearFocus, alerts, budgetYear, onSwitchYear }: any) => {
+const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSources, setIncomeSources, transactions, focusCategory, clearFocus, alerts, budgetYear, onSwitchYear, onCopyLastYear }: any) => {
   const t = useThemed();
   const [period, setPeriod] = useState<string>(currentMonth());
   const [view, setView] = useState<'cards' | 'grid'>('cards');
@@ -1505,10 +1505,18 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
   const mIdx = annual ? -1 : monthIndex(period);
   useEffect(() => { if (focusCategory) { setExpanded(x => x.includes(focusCategory) ? x : [...x, focusCategory]); clearFocus(); } }, [focusCategory]);
 
-  const relevant = transactions.filter((t: Tx) => annual || t.period === period);
+  const relevant = transactions.filter((t: Tx) => (annual || t.period === period) && !isSystemTransaction(t));
   const actualIncome = relevant.filter((t: Tx) => t.type === 'income').reduce((sum: number, t: Tx) => sum + t.amount, 0);
   const actualExpenses = relevant.filter((t: Tx) => t.type === 'expense').reduce((sum: number, t: Tx) => sum + t.amount, 0);
   const plannedIncome = incomeSources.reduce((sum: number, x: any) => sum + x.budgeted, 0) * (annual ? 12 : 1);
+  // Total planned expenses across every category / subcategory for the
+  // currently-selected month (or the whole year when in Year view). This is
+  // the "Budgeted Expenses" number surfaced on the summary card (spec #14).
+  const plannedExpenses = categories.reduce((sum: number, c: Category) => {
+    return sum + c.subcategories.reduce((cs: number, sub: Subcategory) => cs + (annual ? annualAmount(sub) : monthlyAmount(sub, mIdx)), 0);
+  }, 0);
+  const budgetedRemaining = plannedIncome - plannedExpenses;
+  const actualRemaining = actualIncome - actualExpenses;
   const spentInSub = (subId: string) => relevant.filter((tx: Tx) => tx.type === 'expense' && tx.detailId === subId).reduce((s: number, tx: Tx) => s + tx.amount, 0);
   const spentInGroup = (gId: string) => relevant.filter((tx: Tx) => tx.type === 'expense' && (tx.groupId === gId)).reduce((s: number, tx: Tx) => s + tx.amount, 0);
   const budgetFor = (sub: Subcategory) => annual ? annualAmount(sub) : monthlyAmount(sub, mIdx);
@@ -1617,18 +1625,27 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
           <Pressable onPress={() => setView('grid')} style={[s.viewTogglePill, view === 'grid' && s.viewTogglePillActive]} testID="budget-view-grid"><Ionicons name="grid-outline" size={13} color={view === 'grid' ? C.goldEyebrow : (t.dark ? D.textMuted : C.muted2)} /></Pressable>
         </View>
       } />
-      {/* Year selector — lets users build and switch between multiple year budgets.
-          Snapshotting is handled by MainApp.switchBudgetYear so numbers persist
-          per year across app reloads. */}
+      {/* Year selector — dynamic. Includes: (a) current year, (b) every year
+          that already has stored data, (c) three near-future years, and
+          (d) any prior years with saved data. New calendar years appear
+          automatically without needing a code change (spec #13). */}
       {onSwitchYear && (
         <View style={s.yearSelectorRow}>
           <Text style={s.yearSelectorLabel}>YEAR</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
             {(() => {
               const nowY = new Date().getFullYear();
-              const years: number[] = [];
-              for (let y = nowY; y <= nowY + 4; y++) years.push(y);
-              return years.map((y) => (
+              const dataYears: number[] = Object.keys(categoriesByYear || {})
+                .map((y) => Number(y))
+                .filter((y) => Number.isFinite(y));
+              const set = new Set<number>();
+              // Always show the current year + 3 future years + years with data.
+              set.add(nowY);
+              for (let i = 1; i <= 3; i += 1) set.add(nowY + i);
+              dataYears.forEach((y) => set.add(y));
+              if (budgetYear) set.add(budgetYear); // always visible even if outside range
+              const sorted = Array.from(set).sort((a, b) => a - b);
+              return sorted.map((y) => (
                 <Pressable
                   key={y}
                   onPress={() => onSwitchYear(y)}
@@ -1640,6 +1657,38 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
               ));
             })()}
           </ScrollView>
+          {onCopyLastYear && (() => {
+            // Show "Copy last year" only when the previous year has stored
+            // categories AND the current year is still at the seeded default
+            // (i.e. hasn't been customized yet). This prevents accidental
+            // overwrites — user must intentionally opt in each January.
+            const prevYear = budgetYear - 1;
+            const hasPrev = Boolean(categoriesByYear && categoriesByYear[String(prevYear)]);
+            if (!hasPrev) return null;
+            return (
+              <Pressable
+                onPress={() => {
+                  Alert.alert(
+                    `Copy ${prevYear} budget?`,
+                    `We'll copy your ${prevYear} categories and planned amounts into ${budgetYear}. Actual transactions are never copied. This replaces the current ${budgetYear} categories — you can undo by switching back.`,
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: `Copy from ${prevYear}`, onPress: () => onCopyLastYear(prevYear) },
+                    ],
+                  );
+                }}
+                style={{
+                  paddingHorizontal: 10, paddingVertical: 6,
+                  borderRadius: 10, borderWidth: 1, borderColor: '#c49450',
+                  marginLeft: 8, flexDirection: 'row', alignItems: 'center', gap: 4,
+                }}
+                testID="budget-copy-last-year"
+              >
+                <Ionicons name="copy-outline" size={12} color="#9a6d32" />
+                <Text style={{ fontSize: 10, fontWeight: '700', color: '#9a6d32' }}>Copy {prevYear}</Text>
+              </Pressable>
+            );
+          })()}
         </View>
       )}
       <PeriodPills values={[...MONTHS, 'Year']} value={period} onChange={setPeriod} testID="budget-period" />
@@ -1652,9 +1701,21 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
       )}
       {!annual && (
         <View style={s.budgetSummary}>
-          <View style={s.budgetSumCell}><Text style={s.bsSmall}>Total Income</Text><Text style={s.bsStrong}>{MONEY(actualIncome)}</Text><Text style={s.bsSmall}>of {MONEY(plannedIncome)}</Text></View>
-          <View style={s.budgetSumCell}><Text style={s.bsSmall}>Expenses</Text><Text style={s.bsStrong}>{MONEY(actualExpenses)}</Text><Text style={s.bsSmall}>actual</Text></View>
-          <View style={s.budgetSumCell}><Text style={s.bsSmall}>Net</Text><Text style={s.bsStrong}>{MONEY(actualIncome - actualExpenses)}</Text><Text style={s.bsSmall}>remaining</Text></View>
+          <View style={s.budgetSumCell}>
+            <Text style={s.bsSmall}>Income</Text>
+            <Text style={s.bsStrong}>{MONEY(actualIncome)}</Text>
+            <Text style={s.bsSmall}>Actual · budgeted {MONEY(plannedIncome)}</Text>
+          </View>
+          <View style={s.budgetSumCell}>
+            <Text style={s.bsSmall}>Expenses</Text>
+            <Text style={s.bsStrong}>{MONEY(actualExpenses)}</Text>
+            <Text style={s.bsSmall}>Actual · budgeted {MONEY(plannedExpenses)}</Text>
+          </View>
+          <View style={s.budgetSumCell}>
+            <Text style={s.bsSmall}>Remaining</Text>
+            <Text style={[s.bsStrong, actualRemaining < 0 && { color: '#b0453d' }]}>{MONEY(actualRemaining)}</Text>
+            <Text style={s.bsSmall}>Actual · budgeted {MONEY(budgetedRemaining)}</Text>
+          </View>
         </View>
       )}
       <View style={s.budgetActions}>
@@ -2070,7 +2131,7 @@ async function pickAndImport(token: string | null, onDone: (msg: string) => void
 }
 
 /* ---------------- Transactions ---------------- */
-const TransactionsScreen = ({ transactions, setTransactions, categories, incomeSources, openLinkSheet }: any) => {
+const TransactionsScreen = ({ transactions, setTransactions, categories, incomeSources, openLinkSheet, alerts }: any) => {
   const t = useThemed();
   const { token } = useAuth();
   const [filter, setFilter] = useState('All');
@@ -2091,6 +2152,23 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
   const save = (t: any) => {
     setTransactions((xs: Tx[]) => xs.some(x => x.id === t.id) ? xs.map(x => x.id === t.id ? t : x) : [{ ...t, id: `manual-${Date.now()}`, origin: 'Manual', period: currentMonth() }, ...xs]);
     setEditing(null); setToast('Transaction saved and totals refreshed.');
+    // Single-expense alert (spec #16) — fires only for eligible expense
+    // transactions. Transfers, refunds, credit-card payments and income
+    // deposits are ignored per the exclusion list.
+    const isEligibleExpense =
+      t.type === 'expense'
+      && !isSystemTransaction(t)
+      && Number(t.amount) > 0;
+    const threshold = alerts?.singleExpense?.threshold ?? 0;
+    if (isEligibleExpense && alerts?.enabled && alerts?.singleExpense?.enabled && threshold > 0 && Math.abs(Number(t.amount)) > threshold) {
+      try {
+        Alert.alert(
+          'Large expense alert',
+          `"${t.name}" was ${MONEY(Math.abs(Number(t.amount)))} — over your $${threshold} alert threshold. Review it in the Budget or Activity screens if it wasn't expected.`,
+          [{ text: 'OK' }],
+        );
+      } catch { /* Alert.alert isn't available on web preview — silent */ }
+    }
   };
   const remove = (id: string) => { setTransactions((xs: Tx[]) => xs.filter(x => x.id !== id)); setEditing(null); setToast('Transaction deleted.'); };
   const importFile = () => pickAndImport(token, (msg) => setToast(msg), (err) => setToast(err), setImporting);
@@ -3090,6 +3168,8 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
   const [sheet, setSheet] = useState<string | null>(null);
   const [toast, setToast] = useState('');
   const [confirmReset, setConfirmReset] = useState(false);
+  // UI-only expanded state per category for the collapsible Budget Alerts list.
+  const [settingsAlertExpanded, setSettingsAlertExpanded] = useState<Record<string, boolean>>({});
   // Prefer the derived-from-live-API count when provided; fall back to the
   // Plaid-items length (# of institutions) so we degrade gracefully during
   // the first render pass before /accounts/all returns.
@@ -3121,31 +3201,95 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
           <View style={{ flex: 1 }}><Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Enable alerts</Text><Text style={[{ fontSize: 9, color: C.muted3 }, t.textMuted]}>Master switch</Text></View>
           <View style={[s.toggle, alerts.enabled && s.toggleOn]}><View style={[s.toggleKnob, alerts.enabled && { transform: [{ translateX: 14 }] }]} /></View>
         </Pressable>
-        {alerts.enabled && (categories || []).map((c: any) => (
-          <View key={c.id} style={{ marginTop: 10 }}>
-            <Text style={[{ fontSize: 10, fontWeight: '800', letterSpacing: 0.6, color: '#a97c39' }]}>{c.name.toUpperCase()}</Text>
-            {c.subcategories.map((sub: any) => {
-              const conf = (alerts.perCategory && alerts.perCategory[sub.id]) || { p50: false, p80: true, exceeded: true };
-              const toggle = (key: 'p50' | 'p80' | 'exceeded') => {
-                const next = { ...conf, [key]: !conf[key] };
-                setAlerts({ ...alerts, perCategory: { ...(alerts.perCategory || {}), [sub.id]: next } });
-              };
-              return (
-                <View key={sub.id} style={s.alertRow}>
-                  <Text style={[{ flex: 1, fontSize: 10, fontWeight: '600' }, t.textInk]}>{sub.name}</Text>
-                  {(['p50','p80','exceeded'] as const).map((k) => {
-                    const label = k === 'p50' ? '50%' : k === 'p80' ? '80%' : '100%+';
-                    return (
-                      <Pressable key={k} onPress={() => toggle(k)} style={[s.alertPill, conf[k] && s.alertPillOn]} testID={`alert-${sub.id}-${k}`}>
-                        <Text style={[s.alertPillText, conf[k] && { color: '#fff' }]}>{label}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              );
-            })}
+        {alerts.enabled && (categories || []).map((c: any) => {
+          // Category-level alert section — collapsible per spec #15 to keep
+          // the interface clean. Expanded state is UI-only (not persisted).
+          const expanded = (settingsAlertExpanded || {})[c.id];
+          return (
+            <View key={c.id} style={{ marginTop: 10 }}>
+              <Pressable
+                onPress={() => setSettingsAlertExpanded({ ...(settingsAlertExpanded || {}), [c.id]: !expanded })}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}
+                testID={`alert-cat-toggle-${c.id}`}
+              >
+                <Text style={[{ flex: 1, fontSize: 10, fontWeight: '800', letterSpacing: 0.6, color: '#a97c39' }]}>{c.name.toUpperCase()}</Text>
+                <Text style={[{ fontSize: 9, color: C.muted3, marginRight: 6 }, t.textMuted]}>
+                  {c.subcategories.length} item{c.subcategories.length === 1 ? '' : 's'}
+                </Text>
+                <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color={t.dark ? D.textMuted : '#9a938a'} />
+              </Pressable>
+              {expanded && c.subcategories.map((sub: any) => {
+                // New-user defaults per spec #15: 50% OFF, 80% ON, 100%+ ON.
+                // Existing per-sub prefs are preserved because the presence of
+                // a record in `alerts.perCategory[sub.id]` short-circuits the
+                // defaults.
+                const conf = (alerts.perCategory && alerts.perCategory[sub.id]) || { p50: false, p80: true, exceeded: true };
+                const toggle = (key: 'p50' | 'p80' | 'exceeded') => {
+                  const next = { ...conf, [key]: !conf[key] };
+                  setAlerts({ ...alerts, perCategory: { ...(alerts.perCategory || {}), [sub.id]: next } });
+                };
+                return (
+                  <View key={sub.id} style={s.alertRow}>
+                    <Text style={[{ flex: 1, fontSize: 10, fontWeight: '600' }, t.textInk]}>{sub.name}</Text>
+                    {(['p50','p80','exceeded'] as const).map((k) => {
+                      const label = k === 'p50' ? '50%' : k === 'p80' ? '80%' : '100%+';
+                      return (
+                        <Pressable key={k} onPress={() => toggle(k)} style={[s.alertPill, conf[k] && s.alertPillOn]} testID={`alert-${sub.id}-${k}`}>
+                          <Text style={[s.alertPillText, conf[k] && { color: '#fff' }]}>{label}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                );
+              })}
+            </View>
+          );
+        })}
+        {/* Single-expense alert (spec #16) — triggers when one transaction
+            exceeds the configured amount. Refunds, transfers, credit-card
+            payments, income deposits and matched moves are all excluded
+            server-side before this compares against the threshold. */}
+        {alerts.enabled && (
+          <View style={{ marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: t.dark ? D.border : '#ece5d5' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Ionicons name="alert-circle-outline" size={14} color="#c49450" />
+              <Text style={[{ flex: 1, fontSize: 11, fontWeight: '700' }, t.textInk]}>Alert on large single expense</Text>
+              <Pressable
+                onPress={() => setAlerts({ ...alerts, singleExpense: { ...(alerts.singleExpense || { threshold: 200 }), enabled: !(alerts.singleExpense?.enabled) } })}
+                style={[s.toggle, alerts.singleExpense?.enabled && s.toggleOn]}
+                testID="alert-single-toggle"
+              >
+                <View style={[s.toggleKnob, alerts.singleExpense?.enabled && { transform: [{ translateX: 14 }] }]} />
+              </Pressable>
+            </View>
+            {alerts.singleExpense?.enabled && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                <Text style={[{ fontSize: 10, fontWeight: '600' }, t.textMuted]}>Notify me when one expense exceeds</Text>
+                <TextInput
+                  keyboardType="numeric"
+                  value={String(alerts.singleExpense?.threshold ?? 200)}
+                  onChangeText={(v) => {
+                    const cleaned = Math.max(0, Math.round(Number((v || '').replace(/[^0-9.]/g, '')) || 0));
+                    setAlerts({ ...alerts, singleExpense: { ...(alerts.singleExpense || {}), enabled: true, threshold: cleaned } });
+                  }}
+                  style={{
+                    borderWidth: 1, borderColor: t.dark ? D.border : '#ece5d5',
+                    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5,
+                    fontSize: 12, minWidth: 70, textAlign: 'right',
+                    color: t.dark ? D.text : C.ink,
+                  }}
+                  placeholder="200"
+                  placeholderTextColor={t.dark ? D.textMuted : C.muted}
+                  testID="alert-single-threshold"
+                />
+                <Text style={[{ fontSize: 10 }, t.textMuted]}>USD</Text>
+              </View>
+            )}
+            <Text style={[{ fontSize: 9, marginTop: 6 }, t.textMuted]}>
+              Transfers, refunds, credit-card payments, and income deposits never trigger this alert.
+            </Text>
           </View>
-        ))}
+        )}
       </View>
       <View style={[s.settingsSection, t.cardBg]}>
         <Text style={[s.settingsH3, t.textInk]}>App Lock</Text>
@@ -3511,7 +3655,12 @@ function MainApp() {
   const [liabilities, setLiabilities] = useState<Asset[]>(initialLiabilities);
   const [linkedAccounts, setLinkedAccounts] = useState<any[]>([]);
   const [focusCategory, setFocusCategory] = useState<string | null>(null);
-  const [alerts, setAlerts] = useState<{ enabled: boolean; threshold: number; perCategory: Record<string, { p50: boolean; p80: boolean; exceeded: boolean }> }>({ enabled: true, threshold: 80, perCategory: {} });
+  const [alerts, setAlerts] = useState<{
+    enabled: boolean;
+    threshold: number;
+    perCategory: Record<string, { p50: boolean; p80: boolean; exceeded: boolean }>;
+    singleExpense?: { enabled: boolean; threshold: number };
+  }>({ enabled: true, threshold: 80, perCategory: {}, singleExpense: { enabled: false, threshold: 200 } });
   // Legacy screen state — hoisted here so timeframe, contribution, and hypothetical
   // amount survive navigation and app reloads (previously reset on every visit).
   const [legacyTimeframe, setLegacyTimeframe] = useState<string>('Retirement');
@@ -3732,7 +3881,21 @@ function MainApp() {
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
           <EmailVerificationBanner isDark={isDark} />
           {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} legacyContribution={legacyContribution} legacyHypothetical={legacyHypothetical} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
-          {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} budgetYear={budgetYear} onSwitchYear={switchBudgetYear} />}
+          {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} categoriesByYear={categoriesByYear} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} budgetYear={budgetYear} onSwitchYear={switchBudgetYear} onCopyLastYear={(prevYear: number) => {
+            // "Copy last year" — deep-copies categories + planned amounts (per-
+            // month figures inside subcategories.monthly + the base .budgeted
+            // value) but strips any actual transactions. Categories that only
+            // existed in prev-year but not in current are added; the user's
+            // saved current-year categories are replaced (per spec #13
+            // wording — user chose this action explicitly via a confirmation).
+            const src = categoriesByYear[String(prevYear)];
+            if (!Array.isArray(src)) return;
+            const cloned = src.map((c: any) => ({
+              ...c,
+              subcategories: (c.subcategories || []).map((sub: any) => ({ ...sub, monthly: sub.monthly ? { ...sub.monthly } : undefined })),
+            }));
+            setCategories(cloned);
+          }} />}
           {active === 'coach' && <CoachAIScreen isDark={isDark} context={{
             budgetYear,
             categories,
@@ -3751,7 +3914,7 @@ function MainApp() {
               cumulative: legacyCumulative,
             },
           }} />}
-          {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} openLinkSheet={() => { setActive('settings'); }} />}
+          {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} alerts={alerts} openLinkSheet={() => { setActive('settings'); }} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={validLinked.length} onBack={() => setActive('home')} />}
           {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} />}
@@ -3768,7 +3931,7 @@ function MainApp() {
             setRestrictedCash(0);
             setExperience('Faith');
             setAppearance('System');
-            setAlerts({ enabled: true, threshold: 80, perCategory: {} });
+            setAlerts({ enabled: true, threshold: 80, perCategory: {}, singleExpense: { enabled: false, threshold: 200 } });
           }} />}
           <BottomNav active={active} setActive={(id: string) => { setActive(id); }} isDark={isDark} />
         </View>
