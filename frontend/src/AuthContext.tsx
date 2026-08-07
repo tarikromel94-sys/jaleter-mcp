@@ -44,13 +44,19 @@ async function callApi(path: string, options: RequestInit = {}, token?: string |
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
   if (!res.ok) {
-    let detail = 'Request failed';
+    let detail: any = 'Request failed';
     try {
       const body = await res.json();
-      detail = body?.detail || detail;
+      detail = body?.detail ?? detail;
     } catch {}
-    const err = new Error(detail) as any;
+    // Support both string details (`"Not found"`) and structured payloads
+    // (`{error:"...", message:"..."}`). The Error message must be a string,
+    // so we choose the most human-friendly field; the full object is still
+    // available on `err.detail`.
+    const message = typeof detail === 'string' ? detail : (detail?.message || detail?.error || 'Request failed');
+    const err = new Error(message) as any;
     err.status = res.status;
+    err.detail = detail;
     throw err;
   }
   return res.json();

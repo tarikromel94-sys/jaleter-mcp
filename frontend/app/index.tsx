@@ -22,6 +22,7 @@ import { BANK_IMPORT_GUIDES } from '@/src/bankGuides';
 import { openJaleter } from '@/src/jaleterLinks';
 import { PoweredByJaleter } from '@/src/PoweredByJaleter';
 import { EmailVerificationBanner } from '@/src/components/EmailVerificationBanner';
+import { ReclassifySheet } from '@/src/components/ReclassifySheet';
 import { CoachAIScreen } from '@/src/screens/CoachAIScreen';
 
 const STORAGE_KEY = 'jaleter-state-v2';
@@ -2338,11 +2339,48 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
 };
 
 /* ---------------- Net Worth ---------------- */
+// Legacy fallback used only when a Plaid account row is missing a `category`
+// (older cached rows). New code paths should rely on `r.category` which the
+// backend `wealth_service.classify_plaid()` sets by type + subtype.
 const isInvestmentAccount = (r: any) => {
+  if (r?.category === 'investments') return true;
+  if (r?.category) return false; // trust the backend classification
   const hay = `${r.name || ''} ${r.account_name || ''} ${r.org_name || ''}`.toLowerCase();
   if (r.provider === 'snaptrade') return true;
   return /(invest|brokerage|ira|401k|403b|roth|hsa|mutual|advisor|wealth|portfolio|etrade|schwab|fidelity|vanguard|robinhood)/.test(hay);
 };
+
+// Canonical labels for the Jaleter categories (mirrors backend `wealth_service.CATEGORY_LABELS`).
+const CATEGORY_LABELS: Record<string, string> = {
+  cash: 'Cash', investments: 'Investments', real_estate: 'Real Estate',
+  vehicles: 'Vehicles', other_assets: 'Other Assets',
+  credit_cards: 'Credit Cards', mortgage: 'Mortgage', auto_loans: 'Auto Loans',
+  student_loans: 'Student Loans', other_liabilities: 'Other Liabilities',
+};
+const CATEGORY_ICONS: Record<string, any> = {
+  cash: 'wallet-outline', investments: 'trending-up', real_estate: 'business-outline',
+  vehicles: 'car-outline', other_assets: 'cube-outline',
+  credit_cards: 'card-outline', mortgage: 'home-outline', auto_loans: 'car-sport-outline',
+  student_loans: 'school-outline', other_liabilities: 'document-text-outline',
+};
+const LIABILITY_CATEGORIES = new Set(['credit_cards', 'mortgage', 'auto_loans', 'student_loans', 'other_liabilities']);
+
+// Nicely humanises an ISO timestamp for the "Last updated" line on synced rows.
+function timeAgo(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  if (isNaN(then)) return '';
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 60) return 'just now';
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} min${mins === 1 ? '' : 's'} ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} hr${hrs === 1 ? '' : 's'} ago`;
+  const days = Math.round(hrs / 24);
+  if (days < 30) return `${days} day${days === 1 ? '' : 's'} ago`;
+  const months = Math.round(days / 30);
+  return `${months} mo ago`;
+}
 const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transactions, restrictedBuckets, setRestrictedBuckets }: any) => {
   const t = useThemed();
   const { token } = useAuth();
@@ -2356,6 +2394,15 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
   const [rowDraftName, setRowDraftName] = useState('');
   const [rowDraftAmt, setRowDraftAmt] = useState('');
   const [addingRowSide, setAddingRowSide] = useState<'assets' | 'liabilities' | null>(null);
+  // Reclassify sheet — opened when the user taps a linked (Synced) account
+  // in either the Assets or Liabilities card. Manual rows still use editRow.
+  const [reclassifyAccount, setReclassifyAccount] = useState<any | null>(null);
+  const refreshLinked = () => {
+    if (!token) return;
+    apiCall('/api/accounts/all', { method: 'GET' }, token)
+      .then((data: any) => setLinkedRows(Array.isArray(data?.accounts) ? data.accounts : []))
+      .catch(() => { /* keep last-known rows on failure */ });
+  };
   useEffect(() => {
     if (!token) return;
     apiCall('/api/accounts/all', { method: 'GET' }, token)
@@ -2365,12 +2412,22 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
   const [period, setPeriod] = useState('Quarter');
   const [visible, setVisible] = useState(true);
 
-  // ---- Aggregate live-linked balances into the Cash / Investments buckets ----
+  // ---- Aggregate live-linked balances by Jaleter category ----
   const validLinks = linkedRows.filter((r: any) => !r.error);
-  const linkedCash = validLinks.filter((r: any) => !isInvestmentAccount(r)).reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
-  const linkedInvest = validLinks.filter(isInvestmentAccount).reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
-  const cashSources = validLinks.filter((r: any) => !isInvestmentAccount(r));
-  const investSources = validLinks.filter(isInvestmentAccount);
+  const linkedByCat: Record<string, any[]> = {};
+  for (const r of validLinks) {
+    const cat = (r.category as string) || (isInvestmentAccount(r) ? 'investments' : 'cash');
+    (linkedByCat[cat] = linkedByCat[cat] || []).push(r);
+  }
+  const sumCat = (slug: string) =>
+    (linkedByCat[slug] || []).reduce((sum, r: any) => sum + Number(r.balance || 0), 0);
+  const linkedCash = sumCat('cash');
+  const linkedInvest = sumCat('investments');
+  const linkedRealEstate = sumCat('real_estate');
+  const linkedVehicles = sumCat('vehicles');
+  const linkedOtherAssets = sumCat('other_assets');
+  const cashSources = linkedByCat['cash'] || [];
+  const investSources = linkedByCat['investments'] || [];
   const sourceLabel = (rows: any[], fallback: string) => {
     if (rows.length === 0) return fallback;
     const providers = Array.from(new Set(rows.map((r: any) => r.provider)));
@@ -2391,9 +2448,47 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
     { id: 'investments', name: 'Investments', value: manualInvest + linkedInvest, source: sourceLabel(investSources, 'Manual'), icon: 'trending-up', linked: investSources.length > 0 },
     ...manualOther,
   ];
+  // Linked non-cash / non-investment assets (Real Estate / Vehicles / Other Assets)
+  // are treated as additional read-only rows. Manual rows for the same category
+  // are still shown separately so the user can distinguish sources.
+  const extraLinkedAssetRows: (Asset & { linked?: boolean; account?: any })[] = [];
+  for (const slug of ['real_estate', 'vehicles', 'other_assets']) {
+    for (const r of (linkedByCat[slug] || [])) {
+      extraLinkedAssetRows.push({
+        id: `linked-${r.account_id}`,
+        name: r.name || CATEGORY_LABELS[slug],
+        value: Number(r.balance || 0),
+        source: `${r.org_name || 'Linked'} · Synced${r.last_sync_at ? ' · ' + timeAgo(r.last_sync_at) : ''}`,
+        icon: CATEGORY_ICONS[slug],
+        linked: true,
+        account: r,
+      });
+    }
+  }
 
-  const ta = displayAssets.reduce((sum: number, x: any) => sum + (x.value || 0), 0);
-  const tl = liabilities.reduce((sum: number, x: Asset) => sum + x.value, 0);
+  // Liabilities: manual + all linked liability accounts, each shown as its own row.
+  const linkedLiabilityRows: (Asset & { linked?: boolean; account?: any })[] = [];
+  for (const slug of ['credit_cards', 'mortgage', 'auto_loans', 'student_loans', 'other_liabilities']) {
+    for (const r of (linkedByCat[slug] || [])) {
+      linkedLiabilityRows.push({
+        id: `linked-${r.account_id}`,
+        name: r.name || CATEGORY_LABELS[slug],
+        value: Number(r.balance || 0),
+        source: `${CATEGORY_LABELS[slug]} · ${r.org_name || 'Linked'} · Synced${r.last_sync_at ? ' · ' + timeAgo(r.last_sync_at) : ''}`,
+        icon: CATEGORY_ICONS[slug],
+        linked: true,
+        account: r,
+      });
+    }
+  }
+  const combinedLiabilities: (Asset & { linked?: boolean; account?: any })[] = [
+    ...linkedLiabilityRows,
+    ...liabilities.map((x: Asset) => ({ ...x, source: x.source || 'Manual', linked: false })),
+  ];
+
+  const ta = displayAssets.reduce((sum: number, x: any) => sum + (x.value || 0), 0)
+    + extraLinkedAssetRows.reduce((sum, x) => sum + (x.value || 0), 0);
+  const tl = combinedLiabilities.reduce((sum, x) => sum + (x.value || 0), 0);
   const nw = ta - tl;
   const cash = displayAssets.find((x: any) => x.id === 'cash')?.value || 0;
   const totalRestricted = restrictedBuckets.reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
@@ -2555,17 +2650,35 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
           </View>
         </View>
       </Sheet>
-      <WorthCard title="Assets" total={ta} rows={displayAssets} hidden={!visible} onRowPress={(row: Asset) => {
+      <WorthCard title="Assets" total={ta} rows={[...displayAssets, ...extraLinkedAssetRows]} hidden={!visible} onRowPress={(row: any) => {
+        if (row.linked && row.account) { setReclassifyAccount(row.account); return; }
         setEditRow({ side: 'assets', row });
         setRowDraftName(row.name);
         const raw = row.id === 'cash' ? manualCash : row.id === 'investments' ? manualInvest : row.value;
         setRowDraftAmt(raw ? String(raw) : '');
       }} onAdd={() => setAddingRowSide('assets')} />
-      <WorthCard title="Liabilities" total={tl} rows={liabilities} hidden={!visible} onRowPress={(row: Asset) => {
+      <WorthCard title="Liabilities" total={tl} rows={combinedLiabilities} hidden={!visible} onRowPress={(row: any) => {
+        if (row.linked && row.account) { setReclassifyAccount(row.account); return; }
         setEditRow({ side: 'liabilities', row });
         setRowDraftName(row.name);
         setRowDraftAmt(row.value ? String(row.value) : '');
       }} onAdd={() => setAddingRowSide('liabilities')} />
+      <Sheet
+        visible={!!reclassifyAccount}
+        close={() => setReclassifyAccount(null)}
+        title="Rename or reclassify"
+        subtitle="Fix how this account contributes to your Net Worth."
+      >
+        {reclassifyAccount ? (
+          <ReclassifySheet
+            account={reclassifyAccount}
+            token={token}
+            isDark={t.dark}
+            onDone={(_updated) => { setReclassifyAccount(null); refreshLinked(); }}
+            onClose={() => setReclassifyAccount(null)}
+          />
+        ) : null}
+      </Sheet>
     </ScrollView>
   );
 };
@@ -2607,10 +2720,25 @@ const WorthCard = ({ title, total, rows, hidden, onRowPress, onAdd }: any) => {
           )}
         </View>
       ) : (
-        rows.map((r: Asset) => (
+        rows.map((r: Asset & { linked?: boolean }) => (
           <Pressable key={r.id} onPress={() => onRowPress?.(r)} style={[s.worthRow, t.dividerBorder]} testID={`nw-row-${r.id}`}>
             <View style={[s.worthIcon, t.dark && { backgroundColor: D.surfaceAlt }]}><Ionicons name={r.icon as any} size={17} color={t.dark ? D.textMuted : '#817969'} /></View>
-            <View style={{ flex: 1 }}><Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{r.name}</Text><Text style={[{ fontSize: 8, color: '#9b958c' }, t.textMuted]}>{r.source}</Text></View>
+            <View style={{ flex: 1 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]} numberOfLines={1}>{r.name}</Text>
+                <View style={{
+                  paddingHorizontal: 5, paddingVertical: 1,
+                  borderRadius: 4, borderWidth: 1,
+                  borderColor: r.linked ? '#c49450' : (t.dark ? D.border : '#dcd4c6'),
+                  backgroundColor: r.linked ? '#c4945020' : 'transparent',
+                }}>
+                  <Text style={{ fontSize: 7, fontWeight: '800', letterSpacing: 0.6, color: r.linked ? '#c49450' : (t.dark ? D.textMuted : '#a29b90') }}>
+                    {r.linked ? 'SYNCED' : 'MANUAL'}
+                  </Text>
+                </View>
+              </View>
+              <Text style={[{ fontSize: 8, color: '#9b958c', marginTop: 1 }, t.textMuted]} numberOfLines={1}>{r.source}</Text>
+            </View>
             <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{hidden ? '••••' : MONEY(r.value)}</Text>
             <Ionicons name="chevron-forward" size={12} color={t.dark ? D.textMuted : '#c1b9ac'} style={{ marginLeft: 4 }} />
           </Pressable>
@@ -2947,13 +3075,17 @@ const MoreScreen = ({ navigate, linkedCount, onBack }: any) => {
     </ScrollView>
   );
 };
-const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, alerts, setAlerts, onLogout, back, linkedAccounts, addLinked, onResetAppData, initials, categories, appLock, setAppLock }: any) => {
+const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, alerts, setAlerts, onLogout, back, linkedAccounts, linkedAccountCount, addLinked, onResetAppData, initials, categories, appLock, setAppLock }: any) => {
   const t = useThemed();
   const [sheet, setSheet] = useState<string | null>(null);
   const [toast, setToast] = useState('');
   const [confirmReset, setConfirmReset] = useState(false);
+  // Prefer the derived-from-live-API count when provided; fall back to the
+  // Plaid-items length (# of institutions) so we degrade gracefully during
+  // the first render pass before /accounts/all returns.
+  const effectiveCount = typeof linkedAccountCount === 'number' ? linkedAccountCount : linkedAccounts.length;
   const rows: [string, string, string, any][] = [
-    ['accounts', 'Linked Accounts', `${linkedAccounts.length} connected`, 'link-outline'],
+    ['accounts', 'Linked Accounts', `${effectiveCount} connected`, 'link-outline'],
     ['support', 'Help & Support', 'Contact us, FAQs, ticket history', 'help-buoy-outline'],
     ['notifications', 'Notification Details', 'Manage every reminder', 'notifications-outline'],
     ['terms', 'Terms of Use', 'Opens jaleter.com/terms', 'document-text-outline'],
@@ -3481,15 +3613,41 @@ function MainApp() {
       .catch(() => { if (alive) setLinkedAccountBalances([]); });
     return () => { alive = false; };
   }, [auth.token, linkedAccounts.length]);
-  const linkedAssetsTotal = linkedAccountBalances
-    .filter((r: any) => !r.error)
-    .reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
-  const linkedInvestmentTotal = linkedAccountBalances
-    .filter((r: any) => !r.error && isInvestmentAccount(r))
-    .reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
-  const linkedCashTotal = linkedAccountBalances
-    .filter((r: any) => !r.error && !isInvestmentAccount(r))
-    .reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
+  // Group linked accounts by their Jaleter category so every downstream
+  // calculation is grounded in the same classification (see #1 / #2 / #27).
+  // Balances for liability accounts are already sent as positive magnitudes
+  // by the backend, so we can sum without worrying about signs.
+  const validLinked = React.useMemo(
+    () => linkedAccountBalances.filter((r: any) => !r.error),
+    [linkedAccountBalances],
+  );
+  const linkedByCategory = React.useMemo(() => {
+    const acc: Record<string, number> = {};
+    for (const r of validLinked) {
+      // Backend supplies `category`; if this row came from an older provider
+      // that didn't classify, fall back to the legacy regex so we don't lose
+      // data during the rollout.
+      const cat = (r.category as string) || (isInvestmentAccount(r) ? 'investments' : 'cash');
+      acc[cat] = (acc[cat] || 0) + Number(r.balance || 0);
+    }
+    return acc;
+  }, [validLinked]);
+  const linkedCashTotal = linkedByCategory['cash'] || 0;
+  const linkedInvestmentTotal = linkedByCategory['investments'] || 0;
+  const linkedRealEstateTotal = linkedByCategory['real_estate'] || 0;
+  const linkedVehiclesTotal = linkedByCategory['vehicles'] || 0;
+  const linkedOtherAssetsTotal = linkedByCategory['other_assets'] || 0;
+  const linkedCreditCardsTotal = linkedByCategory['credit_cards'] || 0;
+  const linkedMortgageTotal = linkedByCategory['mortgage'] || 0;
+  const linkedAutoLoansTotal = linkedByCategory['auto_loans'] || 0;
+  const linkedStudentLoansTotal = linkedByCategory['student_loans'] || 0;
+  const linkedOtherLiabTotal = linkedByCategory['other_liabilities'] || 0;
+  const linkedLiabilitiesTotal =
+    linkedCreditCardsTotal + linkedMortgageTotal + linkedAutoLoansTotal +
+    linkedStudentLoansTotal + linkedOtherLiabTotal;
+  const linkedAssetsTotal =
+    linkedCashTotal + linkedInvestmentTotal + linkedRealEstateTotal +
+    linkedVehiclesTotal + linkedOtherAssetsTotal;
 
   const income = transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
   const expense = transactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
@@ -3499,8 +3657,17 @@ function MainApp() {
   const manualAssetsTotal = syncedAssets.reduce((sum, x) => sum + x.value, 0);
   const manualInvestments = syncedAssets.find((x: any) => x.id === 'investments')?.value || 0;
   const investmentTotal = manualInvestments + linkedInvestmentTotal;
-  const totalCash = syncedCash + linkedCashTotal; // manual (synced) + linked cash
-  const netWorth = manualAssetsTotal + linkedAssetsTotal - liabilities.reduce((sum, x) => sum + x.value, 0);
+  const totalCash = syncedCash + linkedCashTotal; // Cash-only linked accounts, per spec #2
+  // Net Worth = Manual assets (already includes cash/investments seeds) + linked
+  // non-cash/non-investment assets - manual liabilities - linked liabilities.
+  const manualLiabilitiesTotal = liabilities.reduce((sum, x) => sum + x.value, 0);
+  const netWorth =
+    manualAssetsTotal
+    + linkedRealEstateTotal + linkedVehiclesTotal + linkedOtherAssetsTotal
+    // syncedAssets already contains the manual cash/investment values; add the
+    // linked cash + investment portions on top.
+    + linkedCashTotal + linkedInvestmentTotal
+    - manualLiabilitiesTotal - linkedLiabilitiesTotal;
   const monthlyBudgetIncome = incomeSources.reduce((sum, x) => sum + x.budgeted, 0);
   const monthlyBudgetExpense = categories.flatMap(c => c.subcategories).reduce((sum, x) => sum + x.budgeted, 0);
   const monthlyNet = monthlyBudgetIncome - monthlyBudgetExpense;
@@ -3565,7 +3732,7 @@ function MainApp() {
             totalCash,
             investmentTotal,
             monthlyNet,
-            linkedAccountsCount: linkedAccounts.length,
+            linkedAccountsCount: validLinked.length,
             experience,
             legacy: {
               timeframe: legacyTimeframe,
@@ -3576,12 +3743,12 @@ function MainApp() {
           }} />}
           {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} openLinkSheet={() => { setActive('settings'); }} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} />}
-          {active === 'more' && <MoreScreen navigate={nav} linkedCount={linkedAccounts.length} onBack={() => setActive('home')} />}
+          {active === 'more' && <MoreScreen navigate={nav} linkedCount={validLinked.length} onBack={() => setActive('home')} />}
           {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} />}
           {active === 'reports' && <ReportsScreen transactions={transactions} categories={categories} incomeSources={incomeSources} back={() => nav('home')} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}
-          {active === 'settings' && <SettingsScreen initials={displayInitials} experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} categories={categories} appLock={appLock} setAppLock={(next: any) => setAppLock({ ...appLock, ...next })} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} onResetAppData={async () => {
+          {active === 'settings' && <SettingsScreen initials={displayInitials} experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} categories={categories} appLock={appLock} setAppLock={(next: any) => setAppLock({ ...appLock, ...next })} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} linkedAccountCount={validLinked.length} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} onResetAppData={async () => {
             try { await storage.removeItem(STORAGE_KEY); } catch {}
             for (const k of LEGACY_STORAGE_KEYS) { try { await storage.removeItem(k); } catch {} }
             setTransactions([]);

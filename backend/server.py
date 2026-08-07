@@ -258,6 +258,8 @@ async def _startup():
     # Plaid
     await db.plaid_items.create_index('item_id', unique=True)
     await db.plaid_items.create_index([('user_id', 1)])
+    # Wealth account overrides (Jaleter category + custom name per Plaid account)
+    await db.account_overrides.create_index([('user_id', 1), ('account_id', 1)], unique=True)
     # Support tickets
     await db.support_tickets.create_index('ticket_id', unique=True)
     await db.support_tickets.create_index([('user_id', 1), ('created_at', -1)])
@@ -452,7 +454,7 @@ async def delete_account(request: Request, current_user: dict = Depends(get_curr
     # 5. Other linked-financial-data collections
     for coll in ('linked_accounts', 'snaptrade_accounts', 'snaptrade_users',
                  'support_tickets', 'support_requests', 'coaching_bookings',
-                 'payment_transactions', 'coach_messages'):
+                 'payment_transactions', 'coach_messages', 'account_overrides'):
         try:
             r = await db[coll].delete_many({'user_id': user_id}); deleted[coll] = r.deleted_count
         except Exception as e:  # noqa: BLE001
@@ -974,6 +976,127 @@ async def list_all_accounts(current_user: dict = Depends(get_current_user)):
     return {'accounts': combined}
 
 
+# ------------------------------------------------------------------
+# Account overrides — per-user rename + reclassification of a Plaid account
+# ------------------------------------------------------------------
+class AccountOverridePayload(BaseModel):
+    override_category: Optional[str] = Field(default=None)
+    override_name: Optional[str] = Field(default=None, max_length=64)
+    # User must acknowledge switching between asset<->liability sides.
+    allow_side_switch: bool = False
+
+
+@api_router.get('/accounts/categories')
+async def list_account_categories():
+    """Return the canonical list of Jaleter account categories the frontend
+    should render in the reclassification picker.
+
+    Grouped by side (assets/liabilities) so the UI can show them naturally."""
+    def pack(slug: str) -> dict:
+        return {
+            'slug': slug,
+            'label': wealth_service.CATEGORY_LABELS.get(slug, slug),
+            'is_asset': wealth_service.is_asset(slug),
+        }
+    return {
+        'assets': [pack(s) for s in ('cash', 'investments', 'real_estate', 'vehicles', 'other_assets')],
+        'liabilities': [pack(s) for s in ('credit_cards', 'mortgage', 'auto_loans', 'student_loans', 'other_liabilities')],
+    }
+
+
+@api_router.patch('/accounts/{account_id}')
+@limiter.limit('30/minute')
+async def update_account_override(
+    account_id: str,
+    payload: AccountOverridePayload,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """Set (or clear) the user's rename + reclassification for a Plaid account.
+
+    Passing `override_name=""` or `override_category=""` clears that field.
+    Category changes that cross the asset/liability boundary require
+    `allow_side_switch: true` — this matches spec #3 ("clear warning or
+    controlled rule" before treating a liability as an asset).
+    """
+    if not account_id.strip():
+        raise HTTPException(status_code=400, detail='Missing account_id')
+
+    # Validate category if provided (empty string means "clear override").
+    new_cat = (payload.override_category or '').strip().lower() or None
+    if new_cat is not None and new_cat not in wealth_service.ALL_CATEGORIES:
+        raise HTTPException(status_code=400, detail=f'Unknown category: {new_cat!r}')
+
+    # Verify the account belongs to this user (IDOR guard) by looking it up
+    # in the live Plaid account list. This also gives us the auto_category so
+    # we can enforce the side-switch guard.
+    live = await _plaid_list_accounts_for_user(current_user['user_id'])
+    match = next((r for r in live if r.get('account_id') == account_id), None)
+    if not match:
+        raise HTTPException(status_code=404, detail='Account not found for this user')
+
+    # Side-switch guard.
+    if new_cat is not None:
+        current_side_is_asset = wealth_service.is_asset(match.get('category') or 'other_assets')
+        new_side_is_asset = wealth_service.is_asset(new_cat)
+        if current_side_is_asset != new_side_is_asset and not payload.allow_side_switch:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    'error': 'side_switch_requires_confirmation',
+                    'message': (
+                        'Reclassifying between an asset and a liability changes how the '
+                        'balance affects Net Worth. Send `allow_side_switch: true` to confirm.'
+                    ),
+                    'current_category': match.get('category'),
+                    'new_category': new_cat,
+                },
+            )
+
+    new_name = payload.override_name
+    if new_name is not None:
+        new_name = new_name.strip() or None
+
+    set_doc: dict = {'updated_at': datetime.now(timezone.utc)}
+    unset_doc: dict = {}
+    if new_cat is None and payload.override_category is not None:
+        unset_doc['override_category'] = ''
+    elif new_cat:
+        set_doc['override_category'] = new_cat
+    if new_name is None and payload.override_name is not None:
+        unset_doc['override_name'] = ''
+    elif new_name:
+        set_doc['override_name'] = new_name
+
+    update: dict = {
+        '$set': {**set_doc, 'user_id': current_user['user_id'], 'account_id': account_id},
+        '$setOnInsert': {'created_at': datetime.now(timezone.utc)},
+    }
+    if unset_doc:
+        update['$unset'] = unset_doc
+    await db.account_overrides.update_one(
+        {'user_id': current_user['user_id'], 'account_id': account_id},
+        update,
+        upsert=True,
+    )
+    # Re-fetch the (now-updated) account row so the client can render immediately.
+    live = await _plaid_list_accounts_for_user(current_user['user_id'])
+    updated = next((r for r in live if r.get('account_id') == account_id), None)
+    return {'ok': True, 'account': updated}
+
+
+@api_router.delete('/accounts/{account_id}/override')
+async def clear_account_override(account_id: str, current_user: dict = Depends(get_current_user)):
+    """Reset both the rename + reclassification for an account (reverts to
+    Plaid's automatic classification)."""
+    await db.account_overrides.delete_one({
+        'user_id': current_user['user_id'], 'account_id': account_id,
+    })
+    live = await _plaid_list_accounts_for_user(current_user['user_id'])
+    updated = next((r for r in live if r.get('account_id') == account_id), None)
+    return {'ok': True, 'account': updated}
+
+
 # ------- Unsupported-institution requests -------
 @api_router.post('/support/requests')
 async def submit_support_request(payload: SupportRequest, current_user: dict = Depends(get_current_user)):
@@ -1120,6 +1243,13 @@ def _plaid_webhook_url(request: Request) -> Optional[str]:
 async def _plaid_list_accounts_for_user(user_id: str) -> list[dict]:
     cursor = db.plaid_items.find({'user_id': user_id})
     items = await cursor.to_list(length=100)
+    # Load user's overrides once so we can merge them onto every row.
+    overrides_cursor = db.account_overrides.find({'user_id': user_id})
+    override_map: dict[str, dict] = {}
+    async for od in overrides_cursor:
+        aid = od.get('account_id')
+        if aid:
+            override_map[aid] = od
     rows: list[dict] = []
     for item in items:
         item_id = item.get('item_id')
@@ -1141,19 +1271,46 @@ async def _plaid_list_accounts_for_user(user_id: str) -> list[dict]:
                 balance = float(balance or 0)
             except (TypeError, ValueError):
                 balance = 0.0
+            plaid_type = a.get('type')
+            plaid_subtype = a.get('subtype')
+            auto_category = wealth_service.classify_plaid(plaid_type, plaid_subtype)
+            auto_name = a.get('name') or a.get('official_name') or 'Account'
+            account_id = a.get('account_id')
+            eff_cat, eff_name, cat_over, name_over = wealth_service.merge_override(
+                auto_category, auto_name, override_map.get(account_id or ''),
+            )
+            # Liability balances from Plaid can arrive as absolute values; we
+            # normalise here so the frontend can render them as positive
+            # magnitudes inside the correct section without guessing.
+            display_balance = abs(balance) if wealth_service.is_liability(eff_cat) else balance
             rows.append({
                 'link_id': item_id,
-                'account_id': a.get('account_id'),
-                'name': a.get('name') or a.get('official_name') or 'Account',
+                'account_id': account_id,
+                'name': eff_name,
+                'auto_name': auto_name,
                 'currency': balances.get('iso_currency_code') or 'USD',
-                'balance': balance,
+                'balance': display_balance,
+                'raw_balance': balance,
                 'balance_date': None,
                 'org_name': org_name,
                 'org_domain': org_domain,
                 'last_sync_at': last_sync.isoformat() if isinstance(last_sync, datetime) else last_sync,
                 'mask': a.get('mask'),
-                'subtype': a.get('subtype'),
-                'type': a.get('type'),
+                # Jaleter classification
+                'category': eff_cat,
+                'category_label': wealth_service.CATEGORY_LABELS.get(eff_cat, eff_cat),
+                'auto_category': auto_category,
+                'category_overridden': cat_over,
+                'name_overridden': name_over,
+                'is_asset': wealth_service.is_asset(eff_cat),
+                'is_liability': wealth_service.is_liability(eff_cat),
+                # Plaid metadata (kept so users can see the original classification)
+                'plaid_type': plaid_type,
+                'plaid_subtype': plaid_subtype,
+                # Legacy fields — retained temporarily so existing frontend
+                # code still works during Phase 2 rollout.
+                'subtype': plaid_subtype,
+                'type': plaid_type,
             })
     return rows
 
@@ -1426,6 +1583,7 @@ async def support_admin_note(ticket_id: str, payload: AdminNoteCreate, current_u
 # Coach AI — GPT 5.6 Terra via Emergent LLM Key
 # ------------------------------------------------------------------
 import coach_ai_service
+import wealth_service
 
 
 class CoachChatRequest(BaseModel):
