@@ -125,6 +125,13 @@ def build_context_snippet(context: dict | None) -> str:
 
     # Recent transactions
     txns = context.get("transactions") or []
+    # Phase-3: exclude system transactions (transfer / cc-payment / loan
+    # payment) from what we send to the model so it never counts them as
+    # income or expense. Callers can pre-filter, but we double-guard here.
+    txns = [
+        t for t in txns
+        if str(t.get("system_category") or "").lower() not in ("transfer", "credit_card_payment", "loan_payment")
+    ]
     if txns:
         lines.append("")
         lines.append(f"Recent transactions (up to {MAX_TXNS_IN_PROMPT}, newest first):")

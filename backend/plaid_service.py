@@ -165,6 +165,8 @@ async def sync_transactions(access_token: str, cursor: str = '') -> dict[str, An
 
 def map_plaid_transaction(user_id: str, item_id: str, account_id: str, org_name: str, txn: dict[str, Any]) -> dict[str, Any]:
     """Normalize a Plaid transaction into the shared bank_transactions schema."""
+    # Import lazily to avoid a hard dependency during module import.
+    from transaction_classifier import classify_system
     txn_id = txn.get('transaction_id') or ''
     # Plaid expresses money as positive=out (debit), negative=in (credit) for depository.
     # Our app treats income as positive, expense as negative — so flip the sign.
@@ -190,6 +192,8 @@ def map_plaid_transaction(user_id: str, item_id: str, account_id: str, org_name:
         category = cats.get('primary')
     elif isinstance(txn.get('category'), list) and txn['category']:
         category = txn['category'][0]
+    # Auto-classify system category (transfer / cc-payment / loan-payment).
+    system_cat = classify_system(txn)
     return {
         'user_id': user_id,
         'account_id': account_id,
@@ -203,5 +207,11 @@ def map_plaid_transaction(user_id: str, item_id: str, account_id: str, org_name:
         'description': description,
         'category': category,
         'pending': bool(txn.get('pending')),
+        # Phase-3: system classification. `system_category` is the effective
+        # (post-override) value; `system_category_auto` preserves the auto
+        # detection so a user override can be reverted cleanly later.
+        'system_category': system_cat,
+        'system_category_auto': system_cat,
+        'is_transfer': system_cat == 'transfer',
         'raw': txn,
     }

@@ -305,7 +305,17 @@ const initialCategories = [
     { id: 'travel', name: 'Travel', budgeted: 0 }, { id: 'shopping', name: 'Shopping', budgeted: 0 }, { id: 'entertainment', name: 'Entertainment', budgeted: 0 }] },
 ];
 const initialIncome = [{ id: 'w2', name: 'W-2 Income', budgeted: 0 }, { id: 'contract', name: 'Contract Income', budgeted: 0 }, { id: 'business', name: 'Business Income', budgeted: 0 }];
-type Tx = { id: string; date: string; name: string; amount: number; type: 'income' | 'expense'; groupId: string; detailId?: string; origin: string; period: string; };
+type Tx = { id: string; date: string; name: string; amount: number; type: 'income' | 'expense'; groupId: string; detailId?: string; origin: string; period: string; system_category?: string | null; is_transfer?: boolean; external_id?: string; };
+
+// Phase-3 helper — a transaction that represents a self-move (transfer,
+// credit-card payment, or loan-principal payment) should NEVER inflate
+// Budget actuals or Income/Expense totals. `system_category` is set by
+// the backend (Plaid PFC + description matching) and mirrored onto every
+// row surfaced to the app.
+const isSystemTransaction = (t: any): boolean => {
+  const sc = (t?.system_category || '').toString().toLowerCase();
+  return sc === 'transfer' || sc === 'credit_card_payment' || sc === 'loan_payment';
+};
 const initialTx: Tx[] = [];
 
 type Asset = { id: string; name: string; value: number; source: string; icon: string; };
@@ -1248,8 +1258,8 @@ async function exportBudgetXlsx(categories: Category[], incomeSources: any[], tr
   const dollarFmt = '_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)';
 
   // Helpers to compute the same totals used across the app
-  const incomeActualForMonth = (srcId: string, mi: number) => transactions.filter((t: Tx) => t.type === 'income' && t.groupId === srcId && t.period === MONTHS[mi]).reduce((s: number, t: Tx) => s + t.amount, 0);
-  const expenseActualForMonth = (subId: string, mi: number) => transactions.filter((t: Tx) => t.type === 'expense' && t.detailId === subId && t.period === MONTHS[mi]).reduce((s: number, t: Tx) => s + t.amount, 0);
+  const incomeActualForMonth = (srcId: string, mi: number) => transactions.filter((t: Tx) => t.type === 'income' && t.groupId === srcId && t.period === MONTHS[mi] && !isSystemTransaction(t)).reduce((s: number, t: Tx) => s + t.amount, 0);
+  const expenseActualForMonth = (subId: string, mi: number) => transactions.filter((t: Tx) => t.type === 'expense' && t.detailId === subId && t.period === MONTHS[mi] && !isSystemTransaction(t)).reduce((s: number, t: Tx) => s + t.amount, 0);
   const incomeAnnualActual = (srcId: string) => MONTHS.reduce((sum: number, _: string, i: number) => sum + incomeActualForMonth(srcId, i), 0);
   const expenseAnnualActual = (subId: string) => MONTHS.reduce((sum: number, _: string, i: number) => sum + expenseActualForMonth(subId, i), 0);
   const incomePlannedAnnual = (src: any) => (src.budgeted || 0) * 12;
@@ -1835,8 +1845,8 @@ const BudgetScreen = ({ categories, setCategories, incomeSources, setIncomeSourc
         <BudgetGrid
           categories={categories}
           incomeSources={incomeSources}
-          incomeReceivedForMonth={(srcId: string, mi: number) => transactions.filter((t: Tx) => t.type === 'income' && t.groupId === srcId && t.period === MONTHS[mi]).reduce((s: number, t: Tx) => s + t.amount, 0)}
-          spentInSub={(id: string, mi: number) => transactions.filter((t: Tx) => t.type === 'expense' && t.detailId === id && t.period === MONTHS[mi]).reduce((s: number, t: Tx) => s + t.amount, 0)}
+          incomeReceivedForMonth={(srcId: string, mi: number) => transactions.filter((t: Tx) => t.type === 'income' && t.groupId === srcId && t.period === MONTHS[mi] && !isSystemTransaction(t)).reduce((s: number, t: Tx) => s + t.amount, 0)}
+          spentInSub={(id: string, mi: number) => transactions.filter((t: Tx) => t.type === 'expense' && t.detailId === id && t.period === MONTHS[mi] && !isSystemTransaction(t)).reduce((s: number, t: Tx) => s + t.amount, 0)}
           onEdit={startEdit}
           onEditIncome={(src: any) => { setEditingEarn(src); setDraft(src.budgeted ? String(src.budgeted) : ''); }}
           tDark={t.dark}
@@ -3649,8 +3659,8 @@ function MainApp() {
     linkedCashTotal + linkedInvestmentTotal + linkedRealEstateTotal +
     linkedVehiclesTotal + linkedOtherAssetsTotal;
 
-  const income = transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
-  const expense = transactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
+  const income = transactions.filter(t => t.type === 'income' && !isSystemTransaction(t)).reduce((sum, t) => sum + t.amount, 0);
+  const expense = transactions.filter(t => t.type === 'expense' && !isSystemTransaction(t)).reduce((sum, t) => sum + t.amount, 0);
   const openingCash = 0;
   const syncedCash = openingCash + income - expense;
   const syncedAssets = assets.map(x => x.id === 'cash' ? { ...x, value: syncedCash } : x);

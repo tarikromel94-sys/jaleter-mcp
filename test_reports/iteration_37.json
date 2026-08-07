@@ -1,0 +1,36 @@
+{
+  "summary": "Phase-3 Transaction Correctness testing complete. Wrote /app/backend/tests/test_iteration37_phase3_classifier.py with 45 tests spanning unit (transaction_classifier + file_provider CSV parsing) and integration (list/classify/match-transfers endpoints, Coach snippet, delete-account cascade). 44/45 PASSED, 1 SKIPPED (accounts/all shape — user alex+test1 has no linked accounts so field shape could not be inspected; endpoint itself returned 200 OK with empty list, confirmed via curl — no regression). Zero failures. All Phase-3 requirements verified: Plaid PFC classification (TRANSFER_IN/OUT, LOAN_PAYMENTS variants), legacy category hierarchy, description keyword fallback, user-override precedence (both 'none' clear and 'transfer' promote), Chase Description>Details priority, BoA Debit+Credit combo, Post/Posting Date aliases, Transaction Type direction flip, _parse_csv tuple shape + partial-file resilience (bad rows skipped, not fatal), include_transfers=false filter, PATCH classify with 401/404/400/200 + null-revert + 'none'-disable + IDOR guard (user B → 404), match-transfers pairing across accounts with paired_external_id linked bidirectionally + override='none' rows correctly excluded from matching, Coach build_context_snippet strips all three system_category kinds, delete-account cascades bank_transactions to zero.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration37_phase3_classifier.py",
+    "/app/test_reports/pytest/iteration37_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py L971 has a dead-code expression: `'system_category_override': {'$in': [None, ''], '$exists': False} if False else None`. The ternary is `if False` so it always evaluates to `None`, meaning the initial `cursor` query on L967-972 filters to rows where system_category_override == null literally. This first `cursor` is never even iterated — the code re-queries via `all_rows` on L974-977 without any override filter. The dead cursor + confusing ternary should be removed for clarity (no functional bug, but reviewer-hostile).",
+    "server.py match-transfers loops O(N^2) over `all_rows` (capped at 5000). Fine for <10k rows/user, but consider bucketing by abs(amount) for larger accounts; noted in code comment already.",
+    "transaction_classifier.classify_system: an invalid override string (neither in SYSTEM_CATEGORIES nor 'none') silently falls through to auto-detection. Acceptable behaviour but could log a warning to catch client bugs.",
+    "file_provider._parse_csv: a row where _parse_amount returns 0 (unparseable number) with a non-empty description is NOT skipped — it's persisted with amount=0. Consider adding to skipped for user visibility."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration37_phase3_classifier.py (new)"
+  ],
+  "success_rate": {
+    "backend": "97.7% (44 pass / 45 total, 1 skipped due to empty account list)",
+    "frontend": "N/A (skipped per request)"
+  },
+  "seed_data_creation": "Test user alex+test1@jaleter.app used for auth + seeded transactions with provider='test_seed' in bank_transactions. All seed docs are cleaned up in fixture teardown via _cleanup_seed(). A throwaway IDOR user (TEST_i37_userb_*@jaleter.app) is registered and deleted per module. A throwaway delete-cascade user (TEST_i37_del_*@jaleter.app) is registered and immediately deleted. No lingering data. Existing test user alex+test1 is NEVER deleted.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration-37 covered Phase-3 transaction classification/transfers surface. Test file test_iteration37_phase3_classifier.py is reusable — it self-cleans seeded data. If new classifier keywords or PFC codes are added, extend TestClassifySystem. If new CSV bank formats are added, extend TestDetectColumns/TestParseCSV. Coach build_context_snippet system_category filter is imported directly from coach_ai_service; no LLM call is made.",
+  "rca_of_issue": "N/A — no bugs found."
+}

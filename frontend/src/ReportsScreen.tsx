@@ -218,6 +218,10 @@ export function ReportsScreen({ transactions, categories, incomeSources = [], ba
       const d = parseDate(t.date);
       if (d < start) return false;
       if (end && d > end) return false;
+      // Phase-3: transfers, credit-card payments, and loan payments are
+      // system moves — never treat them as income or expense in Reports.
+      const sc = ((t as any).system_category || '').toString().toLowerCase();
+      if (sc === 'transfer' || sc === 'credit_card_payment' || sc === 'loan_payment') return false;
       return true;
     });
   }, [transactions, windowIdx, customStart, customEnd, today]);

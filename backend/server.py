@@ -869,12 +869,146 @@ async def unlink(link_id: str, current_user: dict = Depends(get_current_user)):
 
 
 @api_router.get('/accounts/transactions')
-async def list_bank_transactions(current_user: dict = Depends(get_current_user), limit: int = 50):
+async def list_bank_transactions(current_user: dict = Depends(get_current_user), limit: int = 50, include_transfers: bool = True):
+    """List the user's bank transactions, newest first.
+
+    `include_transfers` (default True) preserves the original behaviour used
+    by the Activity screen. Budget / Reports / Coach callers should pass
+    `include_transfers=false` so transfers, credit-card payments, and loan
+    payments never inflate income/expense totals (spec #8, #9, #11).
+    """
+    query: dict = {'user_id': current_user['user_id']}
+    if not include_transfers:
+        # System-classified rows: transfer / credit_card_payment / loan_payment.
+        # Filter them out via $nin — a $null / missing field keeps the row.
+        query['$or'] = [
+            {'system_category': {'$in': [None, '', 'none']}},
+            {'system_category': {'$exists': False}},
+        ]
     cursor = db.bank_transactions.find(
-        {'user_id': current_user['user_id']},
+        query,
         {'_id': 0, 'user_id': 0, 'raw': 0},
     ).sort('date', -1).limit(min(max(limit, 1), 200))
     return {'transactions': [{**t, 'date': t['date'].isoformat() if isinstance(t.get('date'), datetime) else t.get('date')} async for t in cursor]}
+
+
+class TransactionClassifyPayload(BaseModel):
+    system_category: Optional[str] = Field(default=None)  # 'transfer' | 'credit_card_payment' | 'loan_payment' | 'none' | None
+
+
+@api_router.patch('/accounts/transactions/{external_id}/classify')
+@limiter.limit('60/minute')
+async def classify_transaction(
+    external_id: str,
+    payload: TransactionClassifyPayload,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """Manually mark or un-mark a transaction as transfer / cc-payment / loan-payment.
+
+    Sending `system_category: null` reverts to the auto-detected value (from
+    `system_category_auto` at ingest time). Sending `"none"` explicitly
+    disables classification even if auto-detection said otherwise — a
+    permanent "not a transfer" override.
+
+    Overrides survive Plaid resyncs because `_plaid_sync_item()` no longer
+    $set-s `system_category` on existing rows.
+    """
+    import transaction_classifier
+    supplied = (payload.system_category or '').strip().lower() if payload.system_category is not None else None
+    if supplied is not None and supplied not in (transaction_classifier.SYSTEM_CATEGORIES | {'none', ''}):
+        raise HTTPException(status_code=400, detail=f'Unknown system_category: {supplied!r}')
+    tx = await db.bank_transactions.find_one({
+        'user_id': current_user['user_id'], 'external_id': external_id,
+    })
+    if not tx:
+        raise HTTPException(status_code=404, detail='Transaction not found')
+    if supplied is None:
+        # Revert to auto — copy system_category_auto onto system_category.
+        auto = tx.get('system_category_auto') or None
+        await db.bank_transactions.update_one(
+            {'_id': tx['_id']},
+            {'$set': {'system_category': auto, 'is_transfer': auto == 'transfer'},
+             '$unset': {'system_category_override': ''}},
+        )
+        effective = auto
+    else:
+        effective = None if supplied in ('none', '') else supplied
+        await db.bank_transactions.update_one(
+            {'_id': tx['_id']},
+            {'$set': {
+                'system_category': effective,
+                'system_category_override': supplied,
+                'is_transfer': effective == 'transfer',
+            }},
+        )
+    return {'ok': True, 'external_id': external_id, 'system_category': effective}
+
+
+@api_router.post('/accounts/transactions/match-transfers')
+@limiter.limit('6/minute')
+async def match_transfers(request: Request, current_user: dict = Depends(get_current_user)):
+    """Best-effort transfer matching across the user's accounts.
+
+    Scans the user's recent (last 180 days) transactions and marks any pair
+    that looks like the two sides of a transfer:
+      - same user, different accounts
+      - equal absolute amount, opposite signs
+      - dates within 3 days
+      - neither side already user-overridden
+
+    Marked rows get `system_category='transfer'` (unless the user explicitly
+    said `"none"` — those are never touched) and reference each other via
+    `paired_external_id`. Idempotent — running twice is a no-op.
+    """
+    import transaction_classifier as tc
+    from datetime import timedelta as _td
+    cutoff = datetime.now(timezone.utc) - _td(days=180)
+    cursor = db.bank_transactions.find({
+        'user_id': current_user['user_id'],
+        'date': {'$gte': cutoff},
+        # Never touch a user-overridden row.
+        'system_category_override': {'$in': [None, ''], '$exists': False} if False else None,
+    })
+    # Simple in-memory match — fine for <10k rows per user; upgrade if needed.
+    all_rows = await db.bank_transactions.find({
+        'user_id': current_user['user_id'],
+        'date': {'$gte': cutoff},
+    }).to_list(length=5000)
+    matched = 0
+    seen: set[str] = set()
+    for a in all_rows:
+        if a.get('external_id') in seen:
+            continue
+        if a.get('system_category_override') in tc.SYSTEM_CATEGORIES or a.get('system_category_override') == 'none':
+            continue
+        for b in all_rows:
+            if a is b:
+                continue
+            if b.get('external_id') in seen:
+                continue
+            if b.get('system_category_override') in tc.SYSTEM_CATEGORIES or b.get('system_category_override') == 'none':
+                continue
+            if not tc.is_probable_pair(a, b):
+                continue
+            # Found a match — mark both.
+            await db.bank_transactions.update_many(
+                {'user_id': current_user['user_id'], 'external_id': {'$in': [a['external_id'], b['external_id']]}},
+                {'$set': {'system_category': 'transfer', 'is_transfer': True,
+                          'paired_external_id_hint': True}},
+            )
+            await db.bank_transactions.update_one(
+                {'_id': a['_id']},
+                {'$set': {'paired_external_id': b['external_id']}},
+            )
+            await db.bank_transactions.update_one(
+                {'_id': b['_id']},
+                {'$set': {'paired_external_id': a['external_id']}},
+            )
+            seen.add(a['external_id']); seen.add(b['external_id'])
+            matched += 1
+            break
+    return {'ok': True, 'matched_pairs': matched}
 
 
 # ------- SnapTrade OAuth Callback -------
@@ -1397,14 +1531,36 @@ async def _plaid_sync_item(user_id: str, item: dict) -> dict:
     added = 0
     for txn in (result['added'] or []) + (result['modified'] or []):
         mapped = plaid_service.map_plaid_transaction(user_id, item_id, txn.get('account_id') or '', org_name, txn)
+        # If the user has manually overridden system_category (e.g. marked
+        # a Plaid txn as "not a transfer"), preserve their choice across
+        # resyncs by never $set-ing system_category from the mapper. Use
+        # $setOnInsert for the auto-detected value so we still populate it
+        # on first ingest, and $set everything else.
+        auto_system = mapped.pop('system_category_auto', mapped.get('system_category'))
+        set_on_insert = {'system_category_auto': auto_system}
+        # Don't $set system_category over an existing row; only set on insert.
+        insert_only_system = {'system_category': mapped.pop('system_category', None)}
+        insert_only_is_transfer = {'is_transfer': mapped.pop('is_transfer', False)}
         try:
             up = await db.bank_transactions.update_one(
                 {'user_id': mapped['user_id'], 'account_id': mapped['account_id'], 'external_id': mapped['external_id']},
-                {'$set': mapped},
+                {
+                    '$set': mapped,
+                    '$setOnInsert': {**set_on_insert, **insert_only_system, **insert_only_is_transfer},
+                },
                 upsert=True,
             )
             if up.upserted_id:
                 added += 1
+            else:
+                # Row existed — refresh the auto-detected value so we can
+                # show it in the UI if the user later "reverts to auto",
+                # but do NOT touch the effective system_category if the
+                # user already set an override.
+                await db.bank_transactions.update_one(
+                    {'user_id': mapped['user_id'], 'account_id': mapped['account_id'], 'external_id': mapped['external_id']},
+                    {'$set': {'system_category_auto': auto_system}},
+                )
         except Exception as e:  # noqa: BLE001
             logger.warning('bank_transactions upsert failed (plaid): %s', e)
     for txn in result['removed'] or []:

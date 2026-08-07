@@ -67,45 +67,155 @@ def _parse_date(raw: Any) -> datetime:
 
 
 def _detect_columns(header: list[str]) -> dict[str, str]:
-    """Fuzzy-map CSV header names to canonical column keys."""
+    """Fuzzy-map CSV header names to canonical column keys.
+
+    Supports the wildly varying formats used by Chase, Bank of America, Wells
+    Fargo, Capital One, Discover, Amex, Citi, most credit unions, and Mint
+    exports. Preference order: exact-match tokens > substring hints. When a
+    bank uses SEPARATE `Debit` + `Credit` columns (Chase business,
+    Wells Fargo credit-card, several credit unions), we return both under
+    `debit` and `credit` keys so the parser knows to combine them.
+
+    Recognised inputs:
+      * Date columns: Date, Transaction Date, Post Date, Posting Date, Trans Date
+      * Description columns: Description, Merchant, Payee, Details, Memo, Name
+      * Amount columns: Amount (single column) OR Debit + Credit (two columns)
+      * Category (optional)
+      * Type / Transaction Type (optional — used to disambiguate direction)
+    """
     normalized = [h.strip().lower() for h in header]
     mapping: dict[str, str] = {}
+    # Priority-ordered exact-match names. For each key we list the *most
+    # preferred* label first — this matters when a CSV includes both e.g.
+    # "Description" and "Details" (Chase does): we want the true description
+    # column, not the details/type column.
+    priority = {
+        'date':        ['date', 'transaction date', 'trans date', 'post date', 'posting date', 'posted date', 'settlement date'],
+        'description': ['description', 'transaction description', 'merchant', 'payee', 'name', 'memo', 'details'],
+        'amount':      ['amount', 'transaction amount', 'trans amount'],
+        'debit':       ['debit', 'debit amount', 'withdrawal', 'withdrawals', 'money out', 'outflow'],
+        'credit':      ['credit', 'credit amount', 'deposit', 'deposits', 'money in', 'inflow'],
+        'category':    ['category', 'transaction category'],
+        'type':        ['type', 'transaction type', 'trans type'],
+        'account':     ['account', 'account name', 'account number'],
+    }
+    # Round 1 — walk preferred names, take the first header that matches.
+    for key, names in priority.items():
+        for wanted in names:
+            for idx, name in enumerate(normalized):
+                if name == wanted:
+                    mapping[key] = header[idx]
+                    break
+            if key in mapping:
+                break
+    # Round 2 — fuzzy substring for anything still missing.
     for idx, name in enumerate(normalized):
-        if any(k in name for k in ('date', 'posted', 'transaction date')) and 'date' not in mapping:
+        if header[idx] in mapping.values():
+            continue  # already claimed
+        if 'date' in name and 'date' not in mapping:
             mapping['date'] = header[idx]
-        elif any(k in name for k in ('description', 'details', 'name', 'payee', 'merchant', 'memo')) and 'description' not in mapping:
+        elif any(k in name for k in ('description', 'details', 'memo', 'payee', 'merchant', 'name')) and 'description' not in mapping:
             mapping['description'] = header[idx]
-        elif any(k in name for k in ('amount', 'debit', 'credit')) and 'amount' not in mapping:
+        elif 'amount' in name and 'amount' not in mapping and 'debit' not in mapping and 'credit' not in mapping:
             mapping['amount'] = header[idx]
+        elif ('debit' in name or 'withdraw' in name or 'outflow' in name or 'money out' in name) and 'debit' not in mapping:
+            mapping['debit'] = header[idx]
+        elif ('credit' in name or 'deposit' in name or 'inflow' in name or 'money in' in name) and 'credit' not in mapping:
+            mapping['credit'] = header[idx]
         elif 'category' in name and 'category' not in mapping:
             mapping['category'] = header[idx]
+        elif ('type' in name or 'transaction type' in name) and 'type' not in mapping:
+            mapping['type'] = header[idx]
     return mapping
 
 
-def _parse_csv(content: str) -> tuple[dict[str, str], list[dict[str, Any]]]:
+def _combine_debit_credit(debit_raw: Any, credit_raw: Any) -> float:
+    """Combine separate Debit + Credit columns into a signed amount.
+
+    Convention: debit reduces balance (negative), credit increases (positive).
+    Both fields being blank returns 0.0."""
+    d = _parse_amount(debit_raw)
+    c = _parse_amount(credit_raw)
+    # Some banks quote debit as a positive number even in the debit column;
+    # normalise to a magnitude and let sign come from column identity.
+    return abs(c) - abs(d)
+
+
+def _resolve_direction(amount: float, type_hint: str) -> float:
+    """If a `Type` / `Transaction Type` column suggests direction that
+    disagrees with the sign of `amount`, correct it. E.g. Chase gives all
+    values positive with Type="DEBIT" or Type="CREDIT" and expects consumers
+    to flip. If no hint, return `amount` untouched.
+    """
+    if not type_hint:
+        return amount
+    t = type_hint.strip().upper()
+    if t in ('DEBIT', 'WITHDRAWAL', 'PURCHASE', 'PAYMENT', 'FEE', 'CHARGE') and amount > 0:
+        return -amount
+    if t in ('CREDIT', 'DEPOSIT', 'REFUND', 'RETURN', 'REVERSAL') and amount < 0:
+        return -amount
+    return amount
+
+
+def _parse_csv(content: str) -> tuple[dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Parse a CSV into normalized transactions.
+
+    Returns `(detected_columns, parsed_rows, skipped_rows)`. Skipped rows
+    include the reason and the original row so the caller can surface them
+    to the user (spec #12 — "Do not reject the entire file"). Valid rows are
+    imported even when a subset is malformed.
+    """
     reader = csv.reader(io.StringIO(content))
     rows = list(reader)
     if not rows:
         raise ProviderError('CSV appears to be empty')
     header, *data_rows = rows
     mapping = _detect_columns(header)
-    if not mapping.get('date') or not mapping.get('amount'):
-        raise ProviderError('Could not identify Date and Amount columns. Please rename your CSV headers.')
+    # A parseable file needs a date column AND either an Amount OR a
+    # (Debit + Credit) pair. Anything else → surface a clear error so the UI
+    # can offer the manual column-mapping flow.
+    has_amount = 'amount' in mapping
+    has_debit_credit = 'debit' in mapping or 'credit' in mapping
+    if not mapping.get('date') or not (has_amount or has_debit_credit):
+        raise ProviderError(
+            'Could not identify the Date and Amount (or Debit + Credit) columns. '
+            'You can either rename your CSV headers to include "Date" and "Amount", '
+            'or export in a different format. Detected headers: ' + ', '.join(header)
+        )
     idx = {k: header.index(v) for k, v in mapping.items()}
     parsed: list[dict[str, Any]] = []
-    for row in data_rows:
+    skipped: list[dict[str, Any]] = []
+    for row_num, row in enumerate(data_rows, start=2):  # start=2 → header is row 1
         if not row or all(not (c or '').strip() for c in row):
             continue
         try:
+            date_val = _parse_date(row[idx['date']])
+            # Amount handling — single column OR debit/credit pair. If we have
+            # BOTH (rare), the single Amount column wins; the parser is
+            # generous but never sums the same value twice.
+            if 'amount' in idx:
+                amount = _parse_amount(row[idx['amount']])
+            else:
+                debit_raw = row[idx['debit']] if 'debit' in idx else ''
+                credit_raw = row[idx['credit']] if 'credit' in idx else ''
+                amount = _combine_debit_credit(debit_raw, credit_raw)
+            if 'type' in idx:
+                amount = _resolve_direction(amount, row[idx['type']])
+            description = (row[idx['description']] if 'description' in idx else '').strip()
+            category_hint = (row[idx['category']] if 'category' in idx else '').strip() or None
+            if amount == 0 and not description:
+                skipped.append({'row_num': row_num, 'reason': 'blank / zero amount', 'raw': row})
+                continue
             parsed.append({
-                'date': _parse_date(row[idx['date']]),
-                'amount': _parse_amount(row[idx['amount']]),
-                'description': (row[idx['description']] if 'description' in idx else '').strip(),
-                'category_hint': (row[idx['category']] if 'category' in idx else '').strip() or None,
+                'date': date_val,
+                'amount': amount,
+                'description': description,
+                'category_hint': category_hint,
             })
-        except IndexError:
+        except (IndexError, ValueError, TypeError) as e:
+            skipped.append({'row_num': row_num, 'reason': f'unreadable ({type(e).__name__})', 'raw': row})
             continue
-    return mapping, parsed
+    return mapping, parsed, skipped
 
 
 def _parse_ofx(content: bytes) -> list[dict[str, Any]]:
@@ -147,6 +257,7 @@ class FileProvider(Provider):
         is_ofx_like = any(lower_name.endswith(ext) for ext in ('.ofx', '.qfx', '.qbo')) or (mime or '').lower().startswith('application/x-ofx')
         rows: list[dict[str, Any]]
         detected_columns: dict[str, str] | None = None
+        skipped: list[dict[str, Any]] = []
         if is_ofx_like:
             rows = _parse_ofx(raw)
             fmt = 'ofx'
@@ -155,10 +266,13 @@ class FileProvider(Provider):
                 text = raw.decode('utf-8-sig', errors='replace')
             except Exception as e:  # noqa: BLE001
                 raise ProviderError(f'Could not read CSV file: {e}')
-            detected_columns, rows = _parse_csv(text)
+            detected_columns, rows, skipped = _parse_csv(text)
             fmt = 'csv'
         if not rows:
             raise ProviderError('No transactions found in the file.')
+
+        # Lazy import to avoid a hard dep during module boot.
+        from transaction_classifier import classify_from_text
 
         link_id = f'file-{uuid.uuid4().hex[:12]}'
         acct_display = account_name or filename or 'Imported account'
@@ -176,14 +290,20 @@ class FileProvider(Provider):
             ext_id = r.get('external_id') or f"{r['date'].isoformat()}|{r['amount']:.2f}|{(r.get('description') or '').strip().lower()}"
             amount = r['amount']
             running_balance += amount
+            desc = r.get('description') or ''
+            system_cat = classify_from_text(desc, r.get('category_hint'))
             doc = {
                 'user_id': user_id, 'provider': self.id, 'link_id': link_id,
                 'account_id': link_id, 'external_id': ext_id, 'date': r['date'],
-                'name': r.get('description') or '', 'amount': amount,
+                'name': desc, 'description': desc, 'amount': amount,
                 'type': 'income' if amount > 0 else 'expense',
                 'origin': acct_display, 'period': r['date'].strftime('%B'),
-                'pending': False, 'category_id': _autocategorize(r.get('description') or ''),
+                'pending': False, 'category_id': _autocategorize(desc),
                 'category_hint': r.get('category_hint'),
+                # Phase-3 classification (transfer / cc-payment / loan-payment).
+                'system_category': system_cat,
+                'system_category_auto': system_cat,
+                'is_transfer': system_cat == 'transfer',
             }
             try:
                 result = await self.db.bank_transactions.update_one(
@@ -200,6 +320,7 @@ class FileProvider(Provider):
         return {
             'link_id': link_id, 'account_name': acct_display, 'format': fmt,
             'detected_columns': detected_columns or {}, 'inserted': inserted, 'duplicates': duplicates,
+            'skipped_rows': skipped, 'skipped_count': len(skipped),
             'balance': running_balance,
         }
 
