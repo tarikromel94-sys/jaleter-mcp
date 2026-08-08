@@ -2847,8 +2847,12 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
   const t = useThemed();
   const [editingHypo, setEditingHypo] = useState(false);
   const [hypoDraft, setHypoDraft] = useState('');
-  const [ageDraft, setAgeDraft] = useState('');
-  const [retDraft, setRetDraft] = useState('');
+  const [ageDraft, setAgeDraft] = useState<string>(String(currentAge ?? ''));
+  const [retDraft, setRetDraft] = useState<string>(String(retirementAge ?? ''));
+  // Whenever the persisted ages change (e.g. loaded from storage), sync the
+  // drafts so users always see the current value in the inputs.
+  React.useEffect(() => { setAgeDraft(String(currentAge ?? '')); }, [currentAge]);
+  React.useEffect(() => { setRetDraft(String(retirementAge ?? '')); }, [retirementAge]);
   const [ageError, setAgeError] = useState('');
 
   // Rate assumption used across every Legacy projection + mirrored on Home.
@@ -2921,12 +2925,23 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
   };
 
   const commitAges = () => {
-    const a = Math.max(0, Math.round(Number((ageDraft || '').replace(/[^0-9]/g, '')) || 0));
-    const r = Math.max(0, Math.round(Number((retDraft || '').replace(/[^0-9]/g, '')) || 0));
+    // Each field falls back to its persisted value when the draft is blank,
+    // so users can update one age without needing to retype the other. This
+    // was the bug where entering only a new "Current age" would fail with
+    // "Please enter a retirement age" because retDraft was empty.
+    const parsed = (draft: string, fallback: number) => {
+      const clean = (draft || '').replace(/[^0-9]/g, '');
+      if (!clean) return fallback;
+      return Math.max(0, Math.round(Number(clean) || 0));
+    };
+    const a = parsed(ageDraft, currentAge || 0);
+    const r = parsed(retDraft, retirementAge || 0);
     if (!a) { setAgeError('Please enter your current age.'); return; }
     if (!r) { setAgeError('Please enter a retirement age.'); return; }
     if (r <= a) { setAgeError(`Retirement age must be greater than ${a}.`); return; }
     setCurrentAge(a); setRetirementAge(r); setAgeError('');
+    setAgeDraft(String(a));
+    setRetDraft(String(r));
   };
 
   const projectionTitle = isBuild ? 'PROJECTED WEALTH' : 'PROJECTED INVESTMENTS';
@@ -2963,9 +2978,10 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
               <Text style={[{ fontSize: 9, marginBottom: 4 }, t.textMuted]}>Current age</Text>
               <TextInput
                 keyboardType="numeric"
-                value={ageDraft !== '' ? ageDraft : String(currentAge || '')}
-                onChangeText={(v) => { setAgeDraft(v); setAgeError(''); }}
+                value={ageDraft}
+                onChangeText={(v) => { setAgeDraft(v.replace(/[^0-9]/g, '')); setAgeError(''); }}
                 onBlur={commitAges}
+                selectTextOnFocus
                 placeholder="30"
                 placeholderTextColor={t.dark ? D.textMuted : C.muted}
                 style={{ borderWidth: 1, borderColor: t.dark ? D.border : '#ece5d5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, color: t.dark ? D.text : C.ink }}
@@ -2976,9 +2992,10 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
               <Text style={[{ fontSize: 9, marginBottom: 4 }, t.textMuted]}>Retirement age</Text>
               <TextInput
                 keyboardType="numeric"
-                value={retDraft !== '' ? retDraft : String(retirementAge || '')}
-                onChangeText={(v) => { setRetDraft(v); setAgeError(''); }}
+                value={retDraft}
+                onChangeText={(v) => { setRetDraft(v.replace(/[^0-9]/g, '')); setAgeError(''); }}
                 onBlur={commitAges}
+                selectTextOnFocus
                 placeholder="65"
                 placeholderTextColor={t.dark ? D.textMuted : C.muted}
                 style={{ borderWidth: 1, borderColor: t.dark ? D.border : '#ece5d5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, color: t.dark ? D.text : C.ink }}

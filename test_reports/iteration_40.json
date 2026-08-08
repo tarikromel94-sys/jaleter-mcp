@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 40 — verified Legacy Retirement age inputs UX fix. Logged in as alex+test1@jaleter.app, navigated to Legacy tab (Retirement selected by default), and executed all 6 scenarios in the review request via Playwright at mobile viewport 390x844. All fixes work correctly: (1) initial drafts populate from persisted state (30/65), (2) typing '35' in Current age replaces value (no '3035' concat), (3) editing only Retirement age to 70 commits without 'Please enter a retirement age' error, (4) equal ages (70/70) show inline error 'Retirement age must be greater than 70.' without crashing, (5) clearing Current age and blurring silently falls back to last persisted value (35) with no error, (6) switching to 5yr BUILD hides the Retirement-age card and switching back restores it with persisted 35/70. No React Native red screen, no console errors related to the fix. Only pre-existing warning: '\"shadow*\" style props are deprecated. Use \"boxShadow\".' (non-blocking).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "shadow* style props", "issue": "Console warning: '\"shadow*\" style props are deprecated. Use \"boxShadow\".' — pre-existing, not related to this iteration's fix. Reference: /app/frontend/app/index.tsx (multiple StyleSheet blocks)"}
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter40_legacy_initial.jpeg",
+    "/app/test_reports/screenshots/iter40_after_updates.jpeg",
+    "/app/test_reports/screenshots/iter40_edge_equal.jpeg",
+    "/app/test_reports/screenshots/iter40_after_switch.jpeg"
+  ],
+  "action_items": [
+    "(Optional / pre-existing) Consider migrating deprecated 'shadow*' style props to 'boxShadow' to silence the RN Web console warning. Not caused by this iteration."
+  ],
+  "critical_code_review_comments": [
+    "Fix implementation in LegacyScreen (index.tsx L2846–2945) is clean: drafts are initialized from props via useState and re-synced via useEffect when currentAge/retirementAge change; commitAges parses each draft independently with per-field fallback to the persisted value, preventing 'Please enter a retirement age' when only one field is edited; selectTextOnFocus is set on both TextInputs.",
+    "Minor: File /app/frontend/app/index.tsx is 4445 lines — recommend splitting into feature modules (LegacyScreen, LoginScreen, BottomNav, etc.) for maintainability. Not a blocker for this fix."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only iteration)", "frontend": "100% (6/6 scenarios pass)"},
+  "seed_data_creation": "None — used existing test account alex+test1@jaleter.app / password123.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Web preview logs into the app via iframe → parent postMessage bridge. Trigger with: await page.evaluate(\"window.postMessage('navigate:login', '*')\") to skip the Welcome iframe. Then use [data-testid=\"login-email\"], [data-testid=\"login-password\"], [data-testid=\"login-submit\"]. Legacy tab is [data-testid=\"nav-legacy\"]. selectTextOnFocus is a React Native prop that doesn't map to web behavior — use page.keyboard.press('Control+A') then type to simulate select-all-replace.",
+  "rca_of_issue": "Original bugs (both fixed and verified): (1) commitAges required BOTH drafts non-empty causing 'Please enter a retirement age' when user only edited Current age. Fix: parsed(draft, fallback) uses persisted value per-field when draft blank. (2) Inputs used ageDraft !== '' ? ageDraft : String(currentAge) fallback so drafts stayed empty and typing appended to placeholder. Fix: drafts init from state via useState + useEffect sync; inputs always render draft. Both root causes correctly addressed in /app/frontend/app/index.tsx L2850–2855 and L2927–2945."
+}
