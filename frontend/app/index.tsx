@@ -3245,7 +3245,7 @@ const MoreScreen = ({ navigate, linkedCount, onBack }: any) => {
           ['coach','Jaleter Coach','AI insights on your money','sparkles-outline'],
           ['coaching','Book Coaching','Schedule + pay at jaleter.com','chatbubble-outline'],
           ['membership','Membership','Manage at jaleter.com','sparkles-outline'],
-          ['settings','Settings',`${linkedCount} linked accounts`,'settings-outline'],
+          ['settings','Settings','Profile, alerts, appearance','settings-outline'],
         ].map(([id, name, sub, icon]) => (
           <Pressable key={id} style={[s.moreGridBtn, t.cardBg]} onPress={() => navigate(id)} testID={`more-${id}`}>
             <View style={[s.moreGridIcon, t.dark && { backgroundColor: D.surfaceAlt }]}><Ionicons name={icon as any} size={20} color={C.goldEyebrow} /></View>
