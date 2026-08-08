@@ -1,0 +1,40 @@
+{
+  "summary": "Iteration 41 — verified batch of 4 fixes for Plaid optional_products, Activity linked-transactions, Legacy disclaimer, and Wealth per-account subrows. Backend: 3/3 pytest cases pass. (1) plaid_service.create_link_token payload contains products=['transactions'] AND optional_products=['liabilities', 'investments'] plus transactions.days_requested=90 — confirmed via monkeypatched _post (no real Plaid calls). (2) Seeded two rows into bank_transactions (Coffee -25.50, Salary +1200.00) for alex+test1 and GET /api/accounts/transactions?limit=200&include_transfers=true returned both with the expected external_id/date/description/amount/org_name shape; cleaned up after. Frontend (Playwright, 390x844 mobile viewport, alex+test1@jaleter.app): (a) Activity tab renders without crashing and shows the 'No transactions yet' empty state + 'Connect account' / 'Add transaction' CTAs (expected — alex+test1 has no linked bank). (b) Legacy tab scrolled to bottom shows disclaimer 'Projections are estimates for planning only. Actual returns will vary and are not guaranteed. Jaleter does not provide investment, tax, or legal advice — consult a licensed professional for personalized guidance.' (grep confirmed at /app/frontend/app/index.tsx L3164). (c) Wealth tab renders empty-state 'Connect an account or add an asset to see your net worth.' — Cash/Investments per-account subrows code (index.tsx L2534-2557) is in place and cannot be exercised without linked accounts, matching the review request's fallback expectation. Only console warning: pre-existing '\"shadow*\" style props are deprecated. Use \"boxShadow\".' — non-blocking.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "shadow* style props", "issue": "Pre-existing console warning '\"shadow*\" style props are deprecated. Use \"boxShadow\".' — unrelated to this iteration. Reference: /app/frontend/app/index.tsx (multiple StyleSheet blocks)"}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration41.py",
+    "/app/test_reports/pytest/iteration41_results.xml",
+    "/app/test_reports/screenshots/iter41_home.jpeg",
+    "/app/test_reports/screenshots/iter41_activity.jpeg",
+    "/app/test_reports/screenshots/iter41_legacy_bottom.jpeg",
+    "/app/test_reports/screenshots/iter41_wealth.jpeg"
+  ],
+  "action_items": [
+    "(Optional / pre-existing) Migrate deprecated 'shadow*' StyleSheet props to 'boxShadow' to silence RN Web console warning.",
+    "(Optional / test coverage gap) The Wealth per-account subrows and the Activity linked-transactions merge cannot be exercised end-to-end with alex+test1 (no linked bank). Consider seeding a test SimpleFIN/Plaid linked account + a couple of transactions for this user in a future iteration so future testing agents can visually verify the Cash/Investments subrows and merged Activity feed. Code paths at index.tsx L2534-2557 (subrows) and L4013-4062 (linked-txn fetch/merge) look correct."
+  ],
+  "critical_code_review_comments": [
+    "plaid_service.create_link_token correctly moves liabilities/investments to `optional_products` (L118) while keeping `products` from env default (['transactions']). This is the exact Plaid pattern to fix banks like Chase CC that don't fully support secondary products.",
+    "server.py list_bank_transactions (L871-892) correctly excludes MongoDB '_id' via projection and serializes datetime to ISO string. Good.",
+    "index.tsx L2537/L2547 use `cashSources.length > 0` / `investSources.length > 0` to switch the summary 'source' label between 'Total across N accounts' and 'Manual' — clean. Per-account subrow rendering (L2538-2546, L2548-2556) correctly derives id / value / source per linked account.",
+    "index.tsx L4013-4070 fetch-and-merge for linked transactions is well-guarded: `alive` flag prevents race conditions, dedupe by external_id, and empty-array fallback on error. Effect deps include auth.token, linkedAccounts.length, stage, accountsRefreshTick — reasonable.",
+    "Minor (pre-existing): /app/frontend/app/index.tsx is 4518 lines. Recommend splitting screens into modules; not a blocker."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration41.py (new — 3 test cases)"
+  ],
+  "success_rate": {"backend": "100% (3/3)", "frontend": "100% (3/3 scenarios pass; Wealth subrows verified by code review since alex+test1 has no linked accounts)"},
+  "seed_data_creation": "Two bank_transactions rows temporarily inserted for alex+test1 during test_accounts_transactions_returns_seeded_rows (external_ids prefixed 'TEST_iter41_'). Automatically deleted in fixture teardown — verified no leftover TEST_ rows for this user.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "alex+test1@jaleter.app has NO linked accounts (SimpleFIN/Plaid), so any UI verification of linked-account features (Wealth subrows, Activity merged feed) can only assert the empty-state renders without crash. To fully exercise these code paths, seed a fake linked_accounts row + bank_transactions rows for alex+test1 (see /app/backend/tests/test_iteration41.py fixture `seeded_txns` for the schema). Web preview auth flow: page.evaluate(\"window.postMessage('navigate:login', '*')\"), then [data-testid=login-email/password/submit]. Bottom nav testIDs: nav-home, nav-budget, nav-reports, nav-transactions (Activity), nav-networth (Wealth), nav-legacy. Mobile viewport 390x844.",
+  "rca_of_issue": "N/A — this iteration validates fixes, not bugs. All 4 fixes verified: (1) Chase CC Plaid connect: optional_products correctly wired in link/token/create body. (2) Activity tab linked-txns: fetch/merge logic present and endpoint returns correct shape; empty-state renders cleanly for users without linked banks. (3) Legacy disclaimer: exact required text present at bottom of Legacy screen. (4) Wealth subrows: code in place at L2534-2557 to render per-account rows under Cash/Investments summary; empty-state also renders cleanly."
+}

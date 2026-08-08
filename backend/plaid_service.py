@@ -109,6 +109,13 @@ async def create_link_token(user_id: str, webhook_url: Optional[str] = None, and
         'country_codes': PLAID_COUNTRY_CODES,
         'user': {'client_user_id': user_id},
         'products': PLAID_PRODUCTS or ['transactions'],
+        # `optional_products` lets us request extra data (like credit-card
+        # APR/minimum payment via `liabilities`, and holdings for investment
+        # accounts) WITHOUT forcing the institution to support them. Chase
+        # credit-card connections were failing before because when a bank
+        # doesn't fully support a required product, the entire link errors
+        # out — moving these to optional fixes that gracefully.
+        'optional_products': ['liabilities', 'investments'],
     }
     if 'transactions' in (PLAID_PRODUCTS or ['transactions']):
         body['transactions'] = {'days_requested': 90}

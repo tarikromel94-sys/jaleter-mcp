@@ -2531,9 +2531,29 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
   const manualCash = assets.find((x: Asset) => x.id === 'cash')?.value || 0;
   const manualInvest = assets.find((x: Asset) => x.id === 'investments')?.value || 0;
   const manualOther = assets.filter((x: Asset) => x.id !== 'cash' && x.id !== 'investments');
-  const displayAssets: (Asset & { linked?: boolean })[] = [
-    { id: 'cash', name: 'Cash', value: manualCash + linkedCash, source: sourceLabel(cashSources, 'Manual'), icon: 'wallet-outline', linked: cashSources.length > 0 },
-    { id: 'investments', name: 'Investments', value: manualInvest + linkedInvest, source: sourceLabel(investSources, 'Manual'), icon: 'trending-up', linked: investSources.length > 0 },
+  const displayAssets: (Asset & { linked?: boolean; account?: any })[] = [
+    // Cash & Investments show a category header + one row per linked account
+    // so users can see each checking/savings/brokerage separately (spec fix).
+    { id: 'cash', name: 'Cash', value: manualCash + linkedCash, source: cashSources.length > 0 ? `Total across ${cashSources.length} account${cashSources.length > 1 ? 's' : ''}` : 'Manual', icon: 'wallet-outline', linked: cashSources.length > 0 },
+    ...cashSources.map((r: any) => ({
+      id: `linked-cash-${r.account_id}`,
+      name: r.name,
+      value: Number(r.balance || 0),
+      source: `${r.org_name || 'Linked'} · Synced${r.last_sync_at ? ' · ' + timeAgo(r.last_sync_at) : ''}`,
+      icon: 'wallet-outline',
+      linked: true,
+      account: r,
+    })),
+    { id: 'investments', name: 'Investments', value: manualInvest + linkedInvest, source: investSources.length > 0 ? `Total across ${investSources.length} account${investSources.length > 1 ? 's' : ''}` : 'Manual', icon: 'trending-up', linked: investSources.length > 0 },
+    ...investSources.map((r: any) => ({
+      id: `linked-invest-${r.account_id}`,
+      name: r.name,
+      value: Number(r.balance || 0),
+      source: `${r.org_name || 'Linked'} · Synced${r.last_sync_at ? ' · ' + timeAgo(r.last_sync_at) : ''}`,
+      icon: 'trending-up',
+      linked: true,
+      account: r,
+    })),
     ...manualOther,
   ];
   // Linked non-cash / non-investment assets (Real Estate / Vehicles / Other Assets)
@@ -3133,6 +3153,18 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
           </View>
         </View>
       </Sheet>
+
+      {/* Legal / financial disclaimer required at the bottom of Legacy so
+          users understand these numbers are educational estimates, not a
+          guarantee. Kept concise + subtle to match the luxury feel. */}
+      <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8 }}>
+        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start' }}>
+          <Ionicons name="information-circle-outline" size={12} color={t.dark ? D.textMuted : '#8b8478'} style={{ marginTop: 1 }} />
+          <Text style={[{ fontSize: 9, lineHeight: 14, flex: 1 }, t.textMuted]}>
+            Projections are estimates for planning only. Actual returns will vary and are not guaranteed. Jaleter does not provide investment, tax, or legal advice — consult a licensed professional for personalized guidance.
+          </Text>
+        </View>
+      </View>
     </ScrollView>
   );
 };
@@ -3972,19 +4004,24 @@ function MainApp() {
   const isDark = appearance === 'Dark';
   // Live-linked account balances — a single source of truth used by Home + Net Worth.
   const [linkedAccountBalances, setLinkedAccountBalances] = useState<any[]>([]);
+  // Live-linked BANK TRANSACTIONS from every connected provider. These arrive
+  // as `bank_transactions` rows from `/api/accounts/transactions` and get
+  // reshaped into the app's local `Tx` type so the Activity tab, Budget
+  // actuals, and Reports all see them alongside manual entries. Merging
+  // happens in `mergedTransactions` below — the local `transactions` array
+  // remains untouched so manual edits still persist across reloads.
+  const [linkedTransactions, setLinkedTransactions] = useState<Tx[]>([]);
   const [accountsRefreshTick, setAccountsRefreshTick] = useState(0);
   const refreshAccounts = React.useCallback(() => setAccountsRefreshTick(n => n + 1), []);
   useEffect(() => {
-    if (!auth.token) { setLinkedAccountBalances([]); return; }
+    if (!auth.token) { setLinkedAccountBalances([]); setLinkedTransactions([]); return; }
     let alive = true;
+    // 1. Account balances
     apiCall('/api/accounts/all', { method: 'GET' }, auth.token)
       .then((data: any) => {
         if (!alive) return;
         const rows = Array.isArray(data?.accounts) ? data.accounts : [];
         setLinkedAccountBalances(rows);
-        // If Plaid returned only error rows (institution disconnected, expired
-        // token, etc.), surface a subtle toast so the user knows to reconnect
-        // instead of silently seeing partial data (Phase 6 bug fix).
         const plaidRows = rows.filter((r: any) => r.provider === 'plaid');
         const plaidErrors = plaidRows.filter((r: any) => r.error);
         if (plaidRows.length > 0 && plaidErrors.length === plaidRows.length) {
@@ -3992,9 +4029,45 @@ function MainApp() {
         }
       })
       .catch(() => { if (alive) setLinkedAccountBalances([]); });
+    // 2. Bank transactions (include everything — Activity shows all; other
+    //    surfaces filter out transfers/CC payments via `isSystemTransaction`).
+    apiCall('/api/accounts/transactions?limit=200&include_transfers=true', { method: 'GET' }, auth.token)
+      .then((data: any) => {
+        if (!alive) return;
+        const raw = Array.isArray(data?.transactions) ? data.transactions : [];
+        const reshaped: Tx[] = raw.map((r: any) => {
+          const amt = Number(r.amount) || 0;
+          const dateStr = typeof r.date === 'string' ? r.date : new Date(r.date).toISOString();
+          const period = MONTHS[new Date(dateStr).getMonth()] || currentMonth();
+          return {
+            id: `bank-${r.external_id}`,
+            external_id: r.external_id,
+            date: dateStr,
+            name: r.description || r.name || 'Transaction',
+            amount: Math.abs(amt),
+            type: amt >= 0 ? 'income' : 'expense',
+            groupId: '',
+            detailId: '',
+            origin: r.org_name || 'Linked',
+            period,
+            system_category: r.system_category || null,
+            is_transfer: !!r.is_transfer,
+          } as Tx;
+        });
+        setLinkedTransactions(reshaped);
+      })
+      .catch(() => { if (alive) setLinkedTransactions([]); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.token, linkedAccounts.length, stage, accountsRefreshTick]);
+  // Effective list used across the app — manual first (users' overrides
+  // win), then linked. Duplicates by external_id are avoided since manual
+  // txns don't set that field.
+  const mergedTransactions = React.useMemo(() => {
+    const seen = new Set<string>(transactions.filter(t => (t as any).external_id).map(t => (t as any).external_id));
+    const linkedOnly = linkedTransactions.filter(t => !seen.has(t.external_id as string));
+    return [...transactions, ...linkedOnly].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  }, [transactions, linkedTransactions]);
   // Group linked accounts by their Jaleter category so every downstream
   // calculation is grounded in the same classification (see #1 / #2 / #27).
   // Balances for liability accounts are already sent as positive magnitudes
@@ -4137,7 +4210,7 @@ function MainApp() {
               cumulative: legacyCumulative,
             },
           }} />}
-          {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} alerts={alerts} openLinkSheet={() => { setActive('settings'); }} />}
+          {active === 'transactions' && <TransactionsScreen transactions={mergedTransactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} alerts={alerts} openLinkSheet={() => { setActive('settings'); }} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={validLinked.length} onBack={() => setActive('home')} />}
           {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} currentAge={currentAge} setCurrentAge={setCurrentAge} retirementAge={retirementAge} setRetirementAge={setRetirementAge} />}
