@@ -2843,41 +2843,75 @@ const WorthCard = ({ title, total, rows, hidden, onRowPress, onAdd }: any) => {
 };
 
 /* ---------------- Legacy / Coaching / Membership / Settings / More ---------------- */
-const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTimeframe, contribution, setContribution, hypothetical, setHypothetical, cumulative, setCumulative }: any) => {
+const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTimeframe, contribution, setContribution, hypothetical, setHypothetical, cumulative, setCumulative, currentAge, setCurrentAge, retirementAge, setRetirementAge }: any) => {
   const t = useThemed();
   const [editingHypo, setEditingHypo] = useState(false);
   const [hypoDraft, setHypoDraft] = useState('');
-  // Rate assumption used across ALL long-horizon projections + mirrored on Home.
-  const rate = 7;
-  const shortTimeframes: Record<string, number> = { '1yr': 1, '2yr': 2, '3yr': 3, '5yr': 5 };
-  const longTimeframes: Record<string, number> = { '10yr': 10, '20yr': 20, '30yr': 30, 'Retirement': 33 };
-  const isShort = timeframe in shortTimeframes;
-  const years = isShort ? shortTimeframes[timeframe] : longTimeframes[timeframe];
-  const hypoValue = Math.max(0, Number((hypothetical || '').replace(/[^0-9.]/g, '')) || 0);
-  const totalInvested = investmentTotal + hypoValue;
+  const [ageDraft, setAgeDraft] = useState('');
+  const [retDraft, setRetDraft] = useState('');
+  const [ageError, setAgeError] = useState('');
 
-  // Short-horizon (1-5yr): uses REAL cash + real monthly net income, no compounding assumed
-  // Long-horizon (10yr+/Retirement): compounding at 8% + optional recurring contribution
-  const projectionAtYear = (n: number): number => {
-    if (isShort) {
-      return Math.round(totalCash + totalInvested + monthlyNet * 12 * n);
-    }
-    // Compound at `rate`% + monthly contribution treated as annual lump
-    return Math.round(totalInvested * Math.pow(1 + rate / 100, n) + contribution * 12 * ((Math.pow(1 + rate / 100, n) - 1) / (rate / 100)));
+  // Rate assumption used across every Legacy projection + mirrored on Home.
+  const RATE = 0.07;                    // 7% annual
+  const MONTHLY_RATE = RATE / 12;       // monthly compounding
+
+  // ---- BUILD vs GROW split (spec #21) --------------------------------------
+  const BUILD: Record<string, number> = { '1yr': 1, '2yr': 2, '3yr': 3, '5yr': 5 };
+  const GROW: Record<string, { years: number | null; isRetirement?: boolean }> = {
+    '10yr': { years: 10 }, '20yr': { years: 20 }, '30yr': { years: 30 },
+    'Retirement': { years: null, isRetirement: true },
   };
+  const isBuild = timeframe in BUILD;
+  const isRetirement = timeframe === 'Retirement';
+
+  // Compute effective years (Retirement uses ages; everything else is fixed).
+  const yearsUntilRetirement = Math.max(0, (Number(retirementAge) || 0) - (Number(currentAge) || 0));
+  const years = isBuild
+    ? BUILD[timeframe]
+    : (isRetirement ? yearsUntilRetirement : (GROW[timeframe]?.years || 0));
+
+  const hypoValue = Math.max(0, Number((hypothetical || '').replace(/[^0-9.]/g, '')) || 0);
+  const monthlySurplus = Number(monthlyNet) || 0; // may be negative
+
+  // ---- Projection math -----------------------------------------------------
+  // BUILD (1-5yr): current cash + investments compounded at 7% + surplus over the period.
+  // GROW (10yr+ / Retirement): investments ONLY, monthly compounding, monthly contributions.
+  const buildProjectionAt = (n: number): number => {
+    const grownInvest = (investmentTotal + hypoValue) * Math.pow(1 + RATE, n);
+    // Cash grows only by the added surplus (no rate applied). Negative
+    // surplus reduces cash but never below zero when we display it — the
+    // "surplus" row separately shows the actual (possibly-negative) figure.
+    const cashPortion = totalCash + monthlySurplus * 12 * n;
+    return Math.round(grownInvest + cashPortion);
+  };
+  const growProjectionAt = (n: number): number => {
+    // Monthly compounding: FV = P * (1+r/12)^(n*12) + C * [((1+r/12)^(n*12) - 1) / (r/12)]
+    const months = Math.max(0, Math.round(n * 12));
+    const growthFactor = Math.pow(1 + MONTHLY_RATE, months);
+    const startingPrincipal = investmentTotal + hypoValue;
+    const fvPrincipal = startingPrincipal * growthFactor;
+    const fvContrib = MONTHLY_RATE > 0
+      ? contribution * ((growthFactor - 1) / MONTHLY_RATE)
+      : contribution * months;
+    return Math.round(fvPrincipal + fvContrib);
+  };
+  const projectionAtYear = (n: number): number => (isBuild ? buildProjectionAt(n) : growProjectionAt(n));
   const projection = projectionAtYear(years);
 
-  // Cumulative year-by-year rows (up to selected timeframe)
+  // Cumulative year-by-year table — only rendered when the toggle is on.
   const cumulativeRows = useMemo(() => {
     const rows: { year: number; value: number; delta: number }[] = [];
-    let prev = isShort ? (totalCash + totalInvested) : totalInvested;
+    let prev = isBuild
+      ? totalCash + investmentTotal + hypoValue
+      : investmentTotal + hypoValue;
     for (let y = 1; y <= years; y++) {
       const v = projectionAtYear(y);
       rows.push({ year: y, value: v, delta: v - prev });
       prev = v;
     }
     return rows;
-  }, [years, isShort, totalCash, totalInvested, contribution]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [years, isBuild, totalCash, investmentTotal, hypoValue, monthlySurplus, contribution, currentAge, retirementAge]);
 
   const commitHypo = () => {
     const clean = Math.max(0, Math.round(Number(hypoDraft.replace(/[^0-9.]/g, '')) || 0));
@@ -2886,37 +2920,106 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
     setHypoDraft('');
   };
 
+  const commitAges = () => {
+    const a = Math.max(0, Math.round(Number((ageDraft || '').replace(/[^0-9]/g, '')) || 0));
+    const r = Math.max(0, Math.round(Number((retDraft || '').replace(/[^0-9]/g, '')) || 0));
+    if (!a) { setAgeError('Please enter your current age.'); return; }
+    if (!r) { setAgeError('Please enter a retirement age.'); return; }
+    if (r <= a) { setAgeError(`Retirement age must be greater than ${a}.`); return; }
+    setCurrentAge(a); setRetirementAge(r); setAgeError('');
+  };
+
+  const projectionTitle = isBuild ? 'PROJECTED WEALTH' : 'PROJECTED INVESTMENTS';
+  const projectionSubtitle = isBuild
+    ? 'Based on your current cash, investments, and monthly budget surplus.'
+    : `Assumes a ${Math.round(RATE * 100)}% annual return and your selected monthly contribution.`;
+
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Your Legacy" subtitle="See what consistent stewardship can become." />
-      <PeriodPills values={['1yr','2yr','3yr','5yr','10yr','20yr','30yr','Retirement']} value={timeframe} onChange={setTimeframe} testID="legacy-period" />
+      {/* Spec #21 — BUILD vs GROW top organisation. Only one row is
+          "active" at a time; the other is grayed out so users can see the
+          full menu but understand what they're switching between. */}
+      <View style={{ paddingHorizontal: 16, marginTop: 6 }}>
+        <Text style={{ fontSize: 10, letterSpacing: 1.4, fontWeight: '800', color: '#c49450' }}>BUILD</Text>
+        <Text style={[{ fontSize: 9, marginTop: 2, marginBottom: 6 }, t.textMuted]}>What your money + budget habits could build.</Text>
+        <PeriodPills values={Object.keys(BUILD)} value={isBuild ? timeframe : ''} onChange={setTimeframe} testID="legacy-build-period" />
+        <Text style={{ fontSize: 10, letterSpacing: 1.4, fontWeight: '800', color: '#c49450', marginTop: 14 }}>GROW</Text>
+        <Text style={[{ fontSize: 9, marginTop: 2, marginBottom: 6 }, t.textMuted]}>What your investments could grow into.</Text>
+        <PeriodPills values={Object.keys(GROW)} value={!isBuild ? timeframe : ''} onChange={setTimeframe} testID="legacy-grow-period" />
+      </View>
+
+      {/* Retirement-age card — only visible when the user selects Retirement (spec #24). */}
+      {isRetirement && (
+        <View style={[s.assumptionsCard, t.cardBg]}>
+          <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Retirement age</Text>
+          <Text style={[{ fontSize: 9, marginTop: 2 }, t.textMuted]}>
+            {yearsUntilRetirement > 0
+              ? `Projecting for ${yearsUntilRetirement} year${yearsUntilRetirement === 1 ? '' : 's'} (age ${currentAge} → ${retirementAge}).`
+              : 'Enter your current age and desired retirement age to see the projection.'}
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={[{ fontSize: 9, marginBottom: 4 }, t.textMuted]}>Current age</Text>
+              <TextInput
+                keyboardType="numeric"
+                value={ageDraft !== '' ? ageDraft : String(currentAge || '')}
+                onChangeText={(v) => { setAgeDraft(v); setAgeError(''); }}
+                onBlur={commitAges}
+                placeholder="30"
+                placeholderTextColor={t.dark ? D.textMuted : C.muted}
+                style={{ borderWidth: 1, borderColor: t.dark ? D.border : '#ece5d5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, color: t.dark ? D.text : C.ink }}
+                testID="legacy-current-age"
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[{ fontSize: 9, marginBottom: 4 }, t.textMuted]}>Retirement age</Text>
+              <TextInput
+                keyboardType="numeric"
+                value={retDraft !== '' ? retDraft : String(retirementAge || '')}
+                onChangeText={(v) => { setRetDraft(v); setAgeError(''); }}
+                onBlur={commitAges}
+                placeholder="65"
+                placeholderTextColor={t.dark ? D.textMuted : C.muted}
+                style={{ borderWidth: 1, borderColor: t.dark ? D.border : '#ece5d5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, color: t.dark ? D.text : C.ink }}
+                testID="legacy-retirement-age"
+              />
+            </View>
+          </View>
+          {ageError ? <Text style={{ fontSize: 10, color: '#b0453d', marginTop: 8 }}>{ageError}</Text> : null}
+        </View>
+      )}
+
+      {/* Projection card — labeled per selected mode. */}
       <View style={s.projectionCard}>
-        <Text style={{ color: '#caa465', fontSize: 9, letterSpacing: 1.3, textAlign: 'center' }}>PROJECTED TOTAL ({timeframe})</Text>
-        <Text style={s.projectionStrong}>{MONEY(projection)}</Text>
-        <Text style={{ color: '#b4ada3', fontSize: 12, textAlign: 'center', maxWidth: 270, alignSelf: 'center' }}>
-          {isShort
-            ? 'Current cash + investments + your budgeted monthly net over the period.'
-            : `Assumes ${rate}% annual return. Compounds your investment total + monthly contributions.`}
+        <Text style={{ color: '#caa465', fontSize: 9, letterSpacing: 1.3, textAlign: 'center' }}>
+          {projectionTitle} ({isRetirement && yearsUntilRetirement > 0 ? `${yearsUntilRetirement}yr` : timeframe})
+        </Text>
+        <Text style={s.projectionStrong}>{years > 0 ? MONEY(projection) : '—'}</Text>
+        <Text style={{ color: '#b4ada3', fontSize: 12, textAlign: 'center', maxWidth: 300, alignSelf: 'center' }}>
+          {projectionSubtitle}
         </Text>
         <View style={s.growthChart}>
-          {(isShort ? [.30,.42,.56,.72,.86,1] : [.16,.24,.34,.48,.66,.84,1]).map((f, i) => (
+          {(isBuild ? [.30,.42,.56,.72,.86,1] : [.16,.24,.34,.48,.66,.84,1]).map((f, i) => (
             <LinearGradient key={i} colors={['#e8c98f','#8b6437']} style={[s.growthBar, { height: `${Math.max(18, f * 100)}%` }]} />
           ))}
         </View>
       </View>
 
-      {/* Cumulative-year toggle: shows a year-by-year breakdown table. */}
-      <Pressable onPress={() => setCumulative(!cumulative)} style={[s.assumptionsCard, t.cardBg, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]} testID="legacy-cumulative-toggle">
-        <View style={{ flex: 1 }}>
-          <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Cumulative year-by-year</Text>
-          <Text style={[{ fontSize: 9, marginTop: 2 }, t.textMuted]}>Show growth for every year up to {timeframe}.</Text>
-        </View>
-        <View style={[{ width: 34, height: 20, borderRadius: 10, backgroundColor: cumulative ? '#b28a4c' : '#e5decf', padding: 2 }]}>
-          <View style={[{ width: 16, height: 16, borderRadius: 8, backgroundColor: '#fff', transform: [{ translateX: cumulative ? 14 : 0 }] }]} />
-        </View>
-      </Pressable>
+      {/* Cumulative-year toggle. */}
+      {years > 0 && (
+        <Pressable onPress={() => setCumulative(!cumulative)} style={[s.assumptionsCard, t.cardBg, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]} testID="legacy-cumulative-toggle">
+          <View style={{ flex: 1 }}>
+            <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Cumulative year-by-year</Text>
+            <Text style={[{ fontSize: 9, marginTop: 2 }, t.textMuted]}>Show growth for every year up to {isRetirement ? `year ${years}` : timeframe}.</Text>
+          </View>
+          <View style={[{ width: 34, height: 20, borderRadius: 10, backgroundColor: cumulative ? '#b28a4c' : '#e5decf', padding: 2 }]}>
+            <View style={[{ width: 16, height: 16, borderRadius: 8, backgroundColor: '#fff', transform: [{ translateX: cumulative ? 14 : 0 }] }]} />
+          </View>
+        </Pressable>
+      )}
 
-      {cumulative && (
+      {cumulative && years > 0 && (
         <View style={[s.assumptionsCard, t.cardBg]}>
           <View style={{ flexDirection: 'row', paddingBottom: 6, borderBottomWidth: 1, borderColor: t.dark ? '#333' : '#f0e7d1' }}>
             <Text style={[{ flex: 1, fontSize: 9, fontWeight: '800', color: '#a97c39', letterSpacing: 0.6 }]}>YEAR</Text>
@@ -2935,64 +3038,42 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
         </View>
       )}
 
+      {/* WHAT WE'RE PROJECTING FROM — content differs by mode per spec #22 / #23. */}
       <View style={[s.assumptionsCard, t.cardBg]}>
         <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 0.4 }, t.textInk]}>WHAT WE&apos;RE PROJECTING FROM</Text>
         <View style={{ marginTop: 8, gap: 6 }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-            <Text style={[{ fontSize: 10 }, t.textMuted]}>Current investments (synced)</Text>
-            <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{MONEY(investmentTotal)}</Text>
-          </View>
-          {isShort && (
+          {isBuild ? (
             <>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                <Text style={[{ fontSize: 10 }, t.textMuted]}>Current cash (synced)</Text>
-                <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{MONEY(totalCash)}</Text>
-              </View>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                <Text style={[{ fontSize: 10 }, t.textMuted]}>Monthly net (from Budget)</Text>
-                <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{MONEY(monthlyNet)}</Text>
-              </View>
+              <Row label="Current Cash" value={MONEY(totalCash)} muted={t.textMuted} ink={t.textInk} />
+              <Row label="Current Investments" value={MONEY(investmentTotal)} muted={t.textMuted} ink={t.textInk} />
+              <Row
+                label="Monthly Budget Surplus"
+                value={MONEY(monthlySurplus)}
+                muted={t.textMuted}
+                ink={t.textInk}
+                valueColor={monthlySurplus < 0 ? '#b0453d' : undefined}
+              />
+              {monthlySurplus < 0 && (
+                <Text style={{ fontSize: 9, color: '#b0453d', marginTop: 2 }}>
+                  Your budget currently spends more than it earns. There is no positive surplus to build wealth right now.
+                </Text>
+              )}
+            </>
+          ) : (
+            <>
+              <Row label="Current Investments" value={MONEY(investmentTotal)} muted={t.textMuted} ink={t.textInk} />
+              <Row label="Monthly Contribution" value={MONEY(contribution)} muted={t.textMuted} ink={t.textInk} />
+              <Row label="Assumed Return" value={`${Math.round(RATE * 100)}%`} muted={t.textMuted} ink={t.textInk} />
             </>
           )}
           {hypoValue > 0 && (
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-              <Text style={{ color: '#c9a56c', fontSize: 10 }}>+ Hypothetical amount</Text>
-              <Text style={{ color: '#c9a56c', fontSize: 10, fontWeight: '700' }}>{MONEY(hypoValue)}</Text>
-            </View>
+            <Row label="+ Hypothetical (modeled)" value={MONEY(hypoValue)} muted={t.textMuted} ink={t.textInk} valueColor="#c9a56c" labelColor="#c9a56c" />
           )}
         </View>
       </View>
 
-      <Pressable onPress={() => { setHypoDraft(hypothetical || ''); setEditingHypo(true); }} style={[s.assumptionsCard, t.cardBg]} testID="legacy-hypo-open">
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          <View style={{ flex: 1 }}>
-            <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Hypothetical Amount</Text>
-            <Text style={[{ fontSize: 9, marginTop: 2 }, t.textMuted]}>Model a windfall or extra investment — kept separate from your synced number.</Text>
-          </View>
-          <Text style={{ fontSize: 18, fontWeight: '700', color: '#9a6d32', marginLeft: 12 }}>{hypoValue > 0 ? MONEY(hypoValue) : '+ Add'}</Text>
-        </View>
-      </Pressable>
-
-      {/* Short-horizon checkpoints (Y1 / Y2 / Y5 / Y10) — highlight cards.
-          Always visible regardless of the selected timeframe so users can
-          reason about multiple milestones at a glance. */}
-      <View style={[s.assumptionsCard, t.cardBg]}>
-        <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 0.4 }, t.textInk]}>CHECKPOINTS (SHORT-TERM CASH)</Text>
-        <Text style={[{ fontSize: 9, marginTop: 2 }, t.textMuted]}>Cash + investments + budgeted monthly net, carried forward.</Text>
-        <View style={{ flexDirection: 'row', gap: 6, marginTop: 10 }}>
-          {[1, 2, 5, 10].map((yr) => {
-            const val = Math.round(totalCash + totalInvested + monthlyNet * 12 * yr);
-            return (
-              <View key={yr} style={{ flex: 1, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: t.dark ? '#3a342b' : '#f0e7d1', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
-                <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8 }}>YEAR {yr}</Text>
-                <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 3 }, t.textInk]} numberOfLines={1}>{MONEY(val)}</Text>
-              </View>
-            );
-          })}
-        </View>
-      </View>
-
-      {!isShort && (
+      {/* Monthly contribution — only GROW modes (spec #23 / #26). */}
+      {!isBuild && (
         <View style={[s.assumptionsCard, t.cardBg]}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <View><Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Monthly Contribution</Text><Text style={[{ fontSize: 8, color: '#999289' }, t.textMuted]}>Extra amount you plan to invest each month</Text></View>
@@ -3004,6 +3085,24 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
           </View>
         </View>
       )}
+
+      {/* Hypothetical amount — clearly labeled as modeling only (spec #25). */}
+      <Pressable onPress={() => { setHypoDraft(hypothetical || ''); setEditingHypo(true); }} style={[s.assumptionsCard, t.cardBg]} testID="legacy-hypo-open">
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Hypothetical Amount</Text>
+              <View style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, backgroundColor: '#c4945020' }}>
+                <Text style={{ fontSize: 7, fontWeight: '800', letterSpacing: 0.6, color: '#c49450' }}>MODELED</Text>
+              </View>
+            </View>
+            <Text style={[{ fontSize: 9, marginTop: 2 }, t.textMuted]}>
+              For what-if modeling only. Never changes your actual Wealth, Budget, or account balances.
+            </Text>
+          </View>
+          <Text style={{ fontSize: 18, fontWeight: '700', color: '#9a6d32', marginLeft: 12 }}>{hypoValue > 0 ? MONEY(hypoValue) : '+ Add'}</Text>
+        </View>
+      </Pressable>
 
       <Sheet visible={editingHypo} close={() => { setEditingHypo(false); setHypoDraft(''); }} title="Add hypothetical amount" subtitle="This is imaginary money — used only for what-if modeling on this screen.">
         <View>
@@ -3020,6 +3119,15 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
     </ScrollView>
   );
 };
+
+// Small reusable row for the "WHAT WE'RE PROJECTING FROM" card.
+const Row = ({ label, value, ink, muted, valueColor, labelColor }: any) => (
+  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+    <Text style={[{ fontSize: 10 }, muted, labelColor && { color: labelColor }]}>{label}</Text>
+    <Text style={[{ fontSize: 10, fontWeight: '700' }, ink, valueColor && { color: valueColor }]}>{value}</Text>
+  </View>
+);
+
 const CALENDLY_URL = 'https://calendly.com/danyelldaugherty-v6lh/30min';
 
 const CoachingScreen = ({ back }: any) => {
@@ -3163,6 +3271,95 @@ const MoreScreen = ({ navigate, linkedCount, onBack }: any) => {
     </ScrollView>
   );
 };
+/**
+ * ResetAppDataModal — strong two-step confirmation for the destructive reset.
+ *
+ * Spec #18 requirements addressed:
+ *  - Clearly explains what is REMOVED (imported transactions, manual entries,
+ *    budgets, income plans, manual assets/liabilities, custom reclassifications,
+ *    alerts, cached reports) vs what STAYS (login, profile, subscription,
+ *    Plaid connections — synced data resyncs on next refresh).
+ *  - Requires the user to type "RESET" verbatim before the final button
+ *    activates. No one-tap deletion.
+ *  - Final button is labeled "Permanently Reset App Data" so intent is
+ *    unambiguous.
+ */
+function ResetAppDataModal({ visible, isDark, onCancel, onConfirm }: { visible: boolean; isDark: boolean; onCancel: () => void; onConfirm: () => void }) {
+  const [confirmText, setConfirmText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const needed = 'RESET';
+  const canProceed = confirmText.trim() === needed && !busy;
+
+  React.useEffect(() => { if (!visible) { setConfirmText(''); setBusy(false); } }, [visible]);
+
+  const cardBg = isDark ? D.surface : '#fff';
+  const border = isDark ? D.border : '#e5decf';
+  const ink = isDark ? D.text : C.ink;
+  const muted = isDark ? D.textMuted : C.muted;
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
+      <View style={{ flex: 1, backgroundColor: '#00000099', justifyContent: 'center', padding: 24 }}>
+        <View style={[{ borderRadius: 22, padding: 22, backgroundColor: cardBg }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Ionicons name="warning-outline" size={20} color="#b0453d" />
+            <Text style={[{ fontSize: 18, fontFamily: F.serif, fontWeight: '600', color: ink, flex: 1 }]}>Reset app data?</Text>
+          </View>
+          <Text style={[{ fontSize: 11, marginTop: 12, lineHeight: 16, color: muted }]}>
+            <Text style={{ fontWeight: '800', color: ink }}>What gets removed:</Text>{'\n'}
+            • Every imported and manually entered transaction{'\n'}
+            • Your budget categories, planned amounts, and income sources{'\n'}
+            • Manual assets, liabilities, Set Aside Cash buckets{'\n'}
+            • Custom account renames + reclassifications{'\n'}
+            • Legacy assumptions (hypotheticals, retirement age){'\n'}
+            • Budget alerts + notification preferences{'\n'}
+            • Cached reports and category-mapping overrides
+          </Text>
+          <Text style={[{ fontSize: 11, marginTop: 12, lineHeight: 16, color: muted }]}>
+            <Text style={{ fontWeight: '800', color: ink }}>What stays:</Text>{'\n'}
+            • Your login and profile{'\n'}
+            • Membership + coaching bookings{'\n'}
+            • Your Plaid bank connections{'\n'}
+            <Text style={{ fontStyle: 'italic' }}>Plaid accounts remain connected. Their live balances and transactions will resync automatically on your next open.</Text>
+          </Text>
+          <Text style={[{ fontSize: 11, marginTop: 14, color: ink, fontWeight: '600' }]}>
+            Type <Text style={{ fontWeight: '900', color: '#b0453d' }}>{needed}</Text> to confirm:
+          </Text>
+          <TextInput
+            value={confirmText}
+            onChangeText={setConfirmText}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            placeholder={needed}
+            placeholderTextColor={muted}
+            style={{
+              marginTop: 6, borderWidth: 1, borderColor: border, borderRadius: 10,
+              paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, color: ink,
+              backgroundColor: isDark ? '#20180c' : '#fbf6ec',
+            }}
+            testID="reset-confirm-input"
+          />
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+            <Pressable onPress={onCancel} disabled={busy} style={{ flex: 1, padding: 14, borderRadius: 14, borderWidth: 1, borderColor: border, alignItems: 'center' }} testID="reset-cancel">
+              <Text style={[{ fontWeight: '700', fontSize: 12, color: ink }]}>Cancel</Text>
+            </Pressable>
+            <Pressable
+              onPress={async () => { if (!canProceed) return; setBusy(true); try { await onConfirm(); } finally { setBusy(false); } }}
+              disabled={!canProceed}
+              style={{ flex: 1.4, padding: 14, borderRadius: 14, backgroundColor: canProceed ? '#b0453d' : (isDark ? '#3a2a26' : '#eecfcb'), alignItems: 'center' }}
+              testID="reset-confirm"
+            >
+              <Text style={{ color: canProceed ? '#fff' : (isDark ? '#8f6862' : '#b0453d'), fontWeight: '800', fontSize: 12 }}>
+                {busy ? 'Resetting…' : 'Permanently Reset App Data'}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, alerts, setAlerts, onLogout, back, linkedAccounts, linkedAccountCount, addLinked, onResetAppData, initials, categories, appLock, setAppLock }: any) => {
   const t = useThemed();
   const [sheet, setSheet] = useState<string | null>(null);
@@ -3350,24 +3547,12 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
           close={() => setAppLock?.({ openConfigure: false })}
         />
       </Sheet>
-      <Modal transparent visible={confirmReset} animationType="fade" onRequestClose={() => setConfirmReset(false)}>
-        <View style={{ flex: 1, backgroundColor: '#00000099', justifyContent: 'center', padding: 24 }}>
-          <View style={[{ borderRadius: 22, padding: 22 }, { backgroundColor: t.dark ? D.surface : '#fff' }]}>
-            <Text style={[{ fontSize: 18, fontFamily: F.serif, fontWeight: '600' }, t.textInk]}>Reset app data?</Text>
-            <Text style={[{ fontSize: 12, marginTop: 8, lineHeight: 18 }, t.textMuted]}>
-              This clears every locally cached transaction, budget adjustment, and preference in this browser. Your account, bookings, and membership are safe — they live on the server.
-            </Text>
-            <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
-              <Pressable onPress={() => setConfirmReset(false)} style={{ flex: 1, padding: 14, borderRadius: 14, borderWidth: 1, borderColor: t.dark ? D.border : '#e5decf', alignItems: 'center' }} testID="reset-cancel">
-                <Text style={[{ fontWeight: '700', fontSize: 12 }, t.textInk]}>Cancel</Text>
-              </Pressable>
-              <Pressable onPress={async () => { setConfirmReset(false); await onResetAppData?.(); setToast('App data reset. Fresh start.'); }} style={{ flex: 1, padding: 14, borderRadius: 14, backgroundColor: '#b28a4c', alignItems: 'center' }} testID="reset-confirm">
-                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12 }}>Reset</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <ResetAppDataModal
+        visible={confirmReset}
+        isDark={t.dark}
+        onCancel={() => setConfirmReset(false)}
+        onConfirm={async () => { setConfirmReset(false); await onResetAppData?.(); setToast('App data reset. Fresh start.'); }}
+      />
       <LegalSheet visible={sheet === 'terms'} close={() => setSheet(null)} type="Terms of Use" />
       <LegalSheet visible={sheet === 'privacy'} close={() => setSheet(null)} type="Privacy Policy" />
       <NotificationsSheet visible={sheet === 'notifications'} close={() => setSheet(null)} onSave={(m: string) => { setSheet(null); setToast(m); }} />
@@ -3667,6 +3852,10 @@ function MainApp() {
   const [legacyContribution, setLegacyContribution] = useState<number>(0);
   const [legacyHypothetical, setLegacyHypothetical] = useState<string>('');
   const [legacyCumulative, setLegacyCumulative] = useState<boolean>(false);
+  // Retirement-age inputs (Phase 5 #24) — sensible defaults so first-time
+  // users see a plausible projection instantly.
+  const [currentAge, setCurrentAge] = useState<number>(30);
+  const [retirementAge, setRetirementAge] = useState<number>(65);
 
   // Hydrate persisted UI state (auth is separate)
   useEffect(() => {
@@ -3697,6 +3886,8 @@ function MainApp() {
           if (typeof data.legacyContribution === 'number') setLegacyContribution(data.legacyContribution);
           if (typeof data.legacyHypothetical === 'string') setLegacyHypothetical(data.legacyHypothetical);
           if (typeof data.legacyCumulative === 'boolean') setLegacyCumulative(data.legacyCumulative);
+          if (typeof data.currentAge === 'number') setCurrentAge(data.currentAge);
+          if (typeof data.retirementAge === 'number') setRetirementAge(data.retirementAge);
           if (typeof data.budgetYear === 'number') setBudgetYear(data.budgetYear);
           if (data.categoriesByYear && typeof data.categoriesByYear === 'object') setCategoriesByYear(data.categoriesByYear);
         }
@@ -3707,8 +3898,8 @@ function MainApp() {
   // Persist on change (skip auth-managed fields)
   useEffect(() => {
     if (!hydrated) return;
-    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyCumulative, budgetYear, categoriesByYear })).catch(() => {});
-  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyCumulative, budgetYear, categoriesByYear]);
+    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyCumulative, budgetYear, categoriesByYear, currentAge, retirementAge })).catch(() => {});
+  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyCumulative, budgetYear, categoriesByYear, currentAge, retirementAge]);
 
   // Listen for SnapTrade OAuth callback deep link (jaleter://snaptrade-callback).
   useEffect(() => {
@@ -3917,18 +4108,32 @@ function MainApp() {
           {active === 'transactions' && <TransactionsScreen transactions={transactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} alerts={alerts} openLinkSheet={() => { setActive('settings'); }} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={validLinked.length} onBack={() => setActive('home')} />}
-          {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} />}
+          {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} currentAge={currentAge} setCurrentAge={setCurrentAge} retirementAge={retirementAge} setRetirementAge={setRetirementAge} />}
           {active === 'reports' && <ReportsScreen transactions={transactions} categories={categories} incomeSources={incomeSources} back={() => nav('home')} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}
           {active === 'settings' && <SettingsScreen initials={displayInitials} experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} categories={categories} appLock={appLock} setAppLock={(next: any) => setAppLock({ ...appLock, ...next })} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} linkedAccountCount={validLinked.length} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} onResetAppData={async () => {
+            // Spec #18 — Reset App Data behavior confirmed by the user:
+            // KEEP Plaid connections, CLEAR synced data. Every locally-cached
+            // financial artefact goes; Plaid items in the backend stay so
+            // balances + transactions resync on the next `/accounts/all` call.
             try { await storage.removeItem(STORAGE_KEY); } catch {}
             for (const k of LEGACY_STORAGE_KEYS) { try { await storage.removeItem(k); } catch {} }
             setTransactions([]);
-            setLinkedAccounts([]);
+            setLinkedAccounts([]);           // local list — server still has plaid_items
+            setLinkedAccountBalances([]);    // clear cached /accounts/all snapshot
             setCategories(initialCategories);
+            setCategoriesByYear({});
             setIncomeSources(initialIncome);
-            setRestrictedCash(0);
+            setRestrictedBuckets([]);
+            setAssets(initialAssets);
+            setLiabilities([]);
+            setLegacyTimeframe('Retirement');
+            setLegacyContribution(0);
+            setLegacyHypothetical('');
+            setLegacyCumulative(false);
+            setCurrentAge(30);
+            setRetirementAge(65);
             setExperience('Faith');
             setAppearance('System');
             setAlerts({ enabled: true, threshold: 80, perCategory: {}, singleExpense: { enabled: false, threshold: 200 } });

@@ -1,0 +1,39 @@
+{
+  "summary": "FINAL pre-launch regression + IDOR sweep — 25/25 PASS in /app/backend/tests/test_iteration38_final_regression.py. Coverage: (1) SANITY: GET /api/ 200 OK, no ImportError/ModuleNotFoundError/SyntaxError in supervisor logs, /api/accounts/categories returns exactly the 10 canonical slugs. (2) PHASE-1: grep-based sanity check confirms no user-facing 'restricted' terminology in server-side code (single documented reference in coach_ai_service.py:48 system prompt is a negation — `not \"Restricted\"` — telling the LLM NOT to use that term, which is correct). (3) PHASE-2 wealth_service.classify_plaid() matrix: 5/5 spot-checks pass (checking→cash, ira→investments, credit card→credit_cards, mortgage→mortgage, student→student_loans). (4) PHASE-3 transaction_classifier: PFC TRANSFER_IN→transfer + LOAN_PAYMENTS_CREDIT_CARD_PAYMENT→credit_card_payment; file_provider._parse_csv on Chase Business format (Details+Posting Date+Description+Amount+Type) correctly picks Description over Details and preserves Amount sign. (5) IDOR sweep — all 5 cross-user surfaces isolated: PATCH /api/accounts/{account_id} → 404 for both users on non-owned IDs; PATCH /api/accounts/transactions/{external_id}/classify → 404 when tx belongs to user A but user B calls (verified DB unchanged, and user A can still classify it); GET /api/accounts/all — user B's response contains zero rows with user A's user_id; GET /api/accounts/transactions — seeded row on user A is absent from user B's list; GET /api/coach/history — seeded coach_message on user A is absent from user B's history. (6) AUTH regression: /auth/login (200 + /me works), wrong password rejected, /auth/forgot-password 200 (via emergent-resend or dev-fallback), /auth/resend-verification 200/400, /auth/verify-email bad token 400/404, /auth/delete-account for password provider requires password (400 empty body, 401 wrong pw, 200 correct pw + token invalidated after cascade). (7) COACH AI end-to-end with real Emergent LLM: /coach/reset → /coach/chat with minimal context (real LLM call ~1s response) → /coach/history returns both user + assistant turns; unauth call → 401. Phase-4 (Budget) + Phase-5 (Legacy) are frontend-only per spec — no server tests required. Phase-6 Reset App Data confirmation flow is a frontend UI change per spec — no server-side surface. Backend data-ownership audit portion of Phase 6 is FULLY VERIFIED via the IDOR class.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration38_final_regression.py",
+    "/app/test_reports/pytest/iteration38_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "IDOR guard for PATCH /api/accounts/{account_id} correctly implemented via _plaid_list_accounts_for_user(current_user['user_id']) — a spoofed account_id from another user never resolves in the live-Plaid lookup and yields 404 (server.py:1167-1170).",
+    "IDOR guard for PATCH /api/accounts/transactions/{external_id}/classify correctly uses find_one({'user_id': current_user['user_id'], 'external_id': ...}) so cross-user hits also 404 (server.py:921-925). Verified with real seeded row + separate user B token.",
+    "GET /api/accounts/transactions query is scoped by 'user_id': current_user['user_id'] (server.py:880) — no leakage possible.",
+    "GET /api/coach/history query is scoped by user_id + session_id (server.py:1813-1816) — session_id is derived from the authed user_id via default_session_id() so cross-user reads are inherently blocked.",
+    "delete-account cascade at server.py:451-467 purges plaid_items, bank_transactions, linked_accounts, snaptrade_*, support_*, coaching_bookings, payment_transactions, coach_messages, account_overrides, user_sessions, password_resets, email_verifications, and users — verified end-to-end (token invalidated post-delete).",
+    "Coach AI live LLM path (POST /coach/chat) returns in ~1s with a valid answer + persists both turns — no orphaned user-turn after LLM failure (rollback logic at server.py:1791-1797 verified in earlier iterations).",
+    "PRIOR-ITERATION NOTE: running test_iteration36 + test_iteration37 back-to-back after this suite exhausts the /auth/delete-account 3/min limiter and produces spurious 429s on register/delete calls. Those failures are NOT regressions — the endpoints themselves work when spaced ≥60s apart. Consider consolidating rate-limit-sensitive tests or adding built-in wait/retry across suites for CI stability."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration38_final_regression.py (new — 25 tests)"
+  ],
+  "success_rate": {
+    "backend": "100% (25/25)",
+    "frontend": "N/A (skipped per request)"
+  },
+  "seed_data_creation": "Ephemeral throwaway users created via /api/auth/register with TEST_i38_userb_* (IDOR partner, module-scoped) and TEST_i38_delacct_* (delete-account flow, per-test) prefixes — all deleted via /auth/delete-account or direct Mongo cleanup in fixture teardown. Test transactions seeded with provider='test_seed_i38' and purged on module teardown. Primary user alex+test1@jaleter.app is NEVER deleted — only used for auth+seed/cleanup. One synthetic coach_messages doc inserted under user A's session_id with a unique marker string, deleted immediately after the isolation assertion.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "This suite is the FINAL pre-launch backend regression pass covering Phases 1-6 + IDOR sweep. It runs cleanly in ~7s and self-cleans all seed data. Rate-limit awareness: forgot-password (3/min) has a built-in 21s retry; delete-account (3/min) is only hit once with a fresh throwaway user, so it's fine standalone but consumes the bucket if chained with iteration 36/37 back-to-back — space runs ≥60s apart or run test_iteration38_final_regression.py in isolation. If future changes touch account-override or transaction-classify surface, the IDOR class remains a good sentinel — extend it with the new endpoint following the seed-on-A / call-as-B / verify-404 / verify-DB-unchanged / verify-A-can-still-do-it pattern.",
+  "rca_of_issue": "N/A — no bugs found. All Phase 1-6 server-side surfaces verified: no 'restricted' terminology, wealth classification correct, transaction classifier + CSV parser correct, cross-user data isolation enforced on all 5 audited endpoints, auth flows (login/me/forgot/resend/verify/delete) all correct, Coach AI end-to-end with real LLM works. Frontend-only Phase 4 (Budget), Phase 5 (Legacy), and Phase 6 (Reset App Data confirmation UI) require frontend testing which was explicitly skipped per the review request."
+}
