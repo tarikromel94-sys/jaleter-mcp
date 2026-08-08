@@ -1,0 +1,33 @@
+{
+  "summary": "Iteration 39 verifies the Plaid partial-data hardening in `_plaid_list_accounts_for_user()`. Created /app/backend/tests/test_iteration39_plaid_partial_data.py using FastAPI TestClient in-process so `plaid_service.fetch_accounts` can be monkeypatched. All 7 tests pass (100%): (1) user with no plaid_items returns clean accounts list with zero plaid rows and no 500; (2) PlaidError -> HTTP 200 with row {error, needs_reconnect: true, link_id, org_name}; (3) generic Exception -> HTTP 200 with row {error: 'RuntimeError: kaboom', needs_reconnect: false, link_id, org_name} and correctly OMITS category/is_asset/is_liability so the frontend must skip them; (4) valid Plaid depository/checking data returns category='cash', is_asset=true, balance≈1234.56, name+org_name populated; (5) second call is idempotent (identical shape); regression checks pass for /api/accounts/categories, /api/auth/me, /api/coach/history. No import errors introduced by logger.warning/error additions. Cleanup uses sync pymongo so no throwaway data or plaid_items remain after the run; alex+test1's data untouched.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration39_plaid_partial_data.py",
+    "/app/test_reports/pytest/iteration39_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "`_plaid_list_accounts_for_user()` correctly distinguishes PlaidError (needs_reconnect=true) vs generic Exception (needs_reconnect=false) and logs at warning/error level respectively — shape verified.",
+    "Error rows intentionally omit category/is_asset/is_liability. Frontend must guard against these being undefined when rendering (verified by the shape assertion in test 3).",
+    "Also noticed `/api/accounts/all` swallows any raise from `_plaid_list_accounts_for_user` itself (outer try/except at server.py:1104-1109) — if the helper somehow raised (e.g., DB down), the response would contain a Plaid row with only `provider` and `error`. Not exercised in this iteration but worth noting.",
+    "The plaid_items scan uses `to_list(length=100)` — users with >100 linked institutions would silently drop items. Non-issue for realistic accounts but flagged for future."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration39_plaid_partial_data.py (created)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "N/A (backend-only review)"},
+  "seed_data_creation": "Each test creates a throwaway user (email prefix test_iter39_...@jaleter.app) via /api/auth/register and inserts a synthetic plaid_items row with a Fernet-encrypted placeholder access token; both are cleaned up via sync pymongo in the fixture teardown and inline after each scenario. alex+test1@jaleter.app is NOT touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 39 = Plaid partial-data hardening (backend-only). Test file test_iteration39_plaid_partial_data.py uses FastAPI TestClient in-process with pymongo (sync) for seed/cleanup — this pattern works around motor's async-loop conflict with TestClient and is the recommended pattern for future tests that need to (a) monkeypatch internal service modules and (b) seed Mongo. Junit results at /app/test_reports/pytest/iteration39_results.xml.",
+  "rca_of_issue": "N/A — this iteration verified an already-applied fix. The prior bug (Plaid showing partial data with no user feedback) was caused by `_plaid_list_accounts_for_user` silently swallowing all fetch errors into a single unstructured error row. Main agent's fix (logging + distinguishing PlaidError vs generic Exception + adding needs_reconnect flag) is confirmed working. Frontend should now be able to (a) detect ALL-error state and show a global reconnect toast and (b) prompt reconnect only for rows where needs_reconnect=true."
+}

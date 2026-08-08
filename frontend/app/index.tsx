@@ -3955,14 +3955,29 @@ function MainApp() {
   const isDark = appearance === 'Dark';
   // Live-linked account balances — a single source of truth used by Home + Net Worth.
   const [linkedAccountBalances, setLinkedAccountBalances] = useState<any[]>([]);
+  const [accountsRefreshTick, setAccountsRefreshTick] = useState(0);
+  const refreshAccounts = React.useCallback(() => setAccountsRefreshTick(n => n + 1), []);
   useEffect(() => {
     if (!auth.token) { setLinkedAccountBalances([]); return; }
     let alive = true;
     apiCall('/api/accounts/all', { method: 'GET' }, auth.token)
-      .then((data: any) => { if (alive) setLinkedAccountBalances(Array.isArray(data?.accounts) ? data.accounts : []); })
+      .then((data: any) => {
+        if (!alive) return;
+        const rows = Array.isArray(data?.accounts) ? data.accounts : [];
+        setLinkedAccountBalances(rows);
+        // If Plaid returned only error rows (institution disconnected, expired
+        // token, etc.), surface a subtle toast so the user knows to reconnect
+        // instead of silently seeing partial data (Phase 6 bug fix).
+        const plaidRows = rows.filter((r: any) => r.provider === 'plaid');
+        const plaidErrors = plaidRows.filter((r: any) => r.error);
+        if (plaidRows.length > 0 && plaidErrors.length === plaidRows.length) {
+          setGlobalToast('Plaid needs to be reconnected. Open Settings → Linked Accounts.');
+        }
+      })
       .catch(() => { if (alive) setLinkedAccountBalances([]); });
     return () => { alive = false; };
-  }, [auth.token, linkedAccounts.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.token, linkedAccounts.length, stage, accountsRefreshTick]);
   // Group linked accounts by their Jaleter category so every downstream
   // calculation is grounded in the same classification (see #1 / #2 / #27).
   // Balances for liability accounts are already sent as positive magnitudes

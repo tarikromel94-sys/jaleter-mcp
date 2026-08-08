@@ -1391,7 +1391,18 @@ async def _plaid_list_accounts_for_user(user_id: str) -> list[dict]:
             token = plaid_service.decrypt(item['access_token_encrypted'])
             accts = await plaid_service.fetch_accounts(token)
         except PlaidError as e:
-            rows.append({'link_id': item_id, 'org_name': item.get('institution_name'), 'error': str(e)})
+            logger.warning('plaid fetch_accounts failed for item %s: %s', item_id, e)
+            rows.append({
+                'link_id': item_id, 'org_name': item.get('institution_name'),
+                'error': str(e), 'needs_reconnect': True,
+            })
+            continue
+        except Exception as e:  # noqa: BLE001
+            logger.error('plaid fetch_accounts unexpected error for item %s: %s', item_id, e)
+            rows.append({
+                'link_id': item_id, 'org_name': item.get('institution_name'),
+                'error': f'{type(e).__name__}: {e}', 'needs_reconnect': False,
+            })
             continue
         org_name = item.get('institution_name') or 'Bank'
         org_domain = item.get('institution_domain')
