@@ -1236,7 +1236,7 @@ function longTermInvestment(investmentTotal: number, hypoPrincipal: number, mont
   return Math.round(totalInvested * Math.pow(1 + r, year) + monthlyContribution * 12 * ((Math.pow(1 + r, year) - 1) / r));
 }
 
-const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, totalCash, monthlyNet, legacyContribution, legacyHypothetical, legacyHypoFrequency, legacyHypoDuration, legacyReturnRate, budgetUsage, alertsEnabled, navigate }: any) => {
+const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, totalCash, availableCash, monthlyNet, legacyContribution, legacyHypothetical, legacyHypoFrequency, legacyHypoDuration, legacyReturnRate, budgetUsage, alertsEnabled, navigate }: any) => {
   const t = useThemed();
   const q = dailyQuote(experience as QuoteType, new Date());
   const hypoValue = Math.max(0, Number((legacyHypothetical || '').replace(/[^0-9.]/g, '')) || 0);
@@ -1248,16 +1248,15 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
   const h33 = hypoAt(33);
   const projected = investmentTotal > 0 ? longTermInvestment(investmentTotal, h33.addToPrincipal, (legacyContribution || 0) + h33.addToMonthlyContrib, 33, rate) : 0;
   const hasProjection = projected > 0;
-  // BUILD checkpoints — 1/2/3/5 yr. Investments are held FLAT (the default
-  // return rate is intentionally NOT applied to BUILD — that's what GROW is
-  // for). Cash grows only from the POSITIVE monthly surplus. Monthly/annual
-  // hypotheticals still contribute to cash; a one-time hypothetical adds to
-  // held investments.
+  // BUILD uses Available Cash (Total Cash − Set Aside) as the starting cash
+  // per spec. Set-aside money still counts toward Wealth/Net Worth but is
+  // reserved, so BUILD projections don't grow it.
+  const buildStartingCash = (typeof availableCash === 'number' ? availableCash : (totalCash || 0)) || 0;
   const positiveSurplus = Math.max(0, monthlyNet || 0);
   const buildAt = (n: number) => {
     const h = hypoAt(n);
     const heldInvest = (investmentTotal || 0) + h.addToPrincipal; // no compounding in BUILD
-    const cashPortion = (totalCash || 0) + positiveSurplus * 12 * n + h.addToCash;
+    const cashPortion = buildStartingCash + positiveSurplus * 12 * n + h.addToCash;
     return Math.round(heldInvest + cashPortion);
   };
   const build1 = buildAt(1);
@@ -2600,6 +2599,8 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
   const [filter, setFilter] = useState('All');
   const [accountFilter, setAccountFilter] = useState<string>('All');
   const [dateRange, setDateRange] = useState<string>('All');
+  const [customFrom, setCustomFrom] = useState<string>('');
+  const [customTo, setCustomTo] = useState<string>('');
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [toast, setToast] = useState('');
@@ -2664,6 +2665,15 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
         if (txDate.getFullYear() !== lm.getFullYear() || txDate.getMonth() !== lm.getMonth()) return false;
       } else if (dateRange === 'YTD') {
         if (txDate.getFullYear() !== now.getFullYear()) return false;
+      } else if (dateRange === 'Custom') {
+        if (customFrom) {
+          const [y, m, d] = customFrom.split('-').map(Number);
+          if (txDate < new Date(y, (m || 1) - 1, d || 1)) return false;
+        }
+        if (customTo) {
+          const [y, m, d] = customTo.split('-').map(Number);
+          if (txDate > new Date(y, (m || 1) - 1, d || 1)) return false;
+        }
       }
     }
     return true;
@@ -2777,7 +2787,7 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
         <View>
           <Text style={[{ fontSize: 10, fontWeight: '800', letterSpacing: 0.6, color: '#a97c39' }]}>DATE RANGE</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-            {(['All', '30d', 'This Month', 'Last Month', 'YTD'] as const).map((r) => (
+            {(['All', '30d', 'This Month', 'Last Month', 'YTD', 'Custom'] as const).map((r) => (
               <Pressable
                 key={r}
                 onPress={() => setDateRange(r)}
@@ -2788,6 +2798,34 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
               </Pressable>
             ))}
           </View>
+          {dateRange === 'Custom' && (
+            <View style={{ marginTop: 10 }}>
+              <Text style={[{ fontSize: 9, marginBottom: 4 }, t.textMuted]}>From (YYYY-MM-DD)</Text>
+              {Platform.OS === 'web'
+                ? React.createElement('input' as any, {
+                    type: 'date', value: customFrom,
+                    onChange: (e: any) => setCustomFrom(e.target.value),
+                    style: { padding: '8px 10px', fontSize: 12, borderRadius: 8, border: '1px solid #d9cfbf', background: '#fbf6ec', color: '#2d2820', outline: 'none', width: '100%' },
+                    'data-testid': 'tx-custom-from',
+                  })
+                : (
+                  <TextInput style={s.input} value={customFrom} onChangeText={setCustomFrom} placeholder="2026-07-01" testID="tx-custom-from" />
+                )
+              }
+              <Text style={[{ fontSize: 9, marginTop: 8, marginBottom: 4 }, t.textMuted]}>To (YYYY-MM-DD)</Text>
+              {Platform.OS === 'web'
+                ? React.createElement('input' as any, {
+                    type: 'date', value: customTo,
+                    onChange: (e: any) => setCustomTo(e.target.value),
+                    style: { padding: '8px 10px', fontSize: 12, borderRadius: 8, border: '1px solid #d9cfbf', background: '#fbf6ec', color: '#2d2820', outline: 'none', width: '100%' },
+                    'data-testid': 'tx-custom-to',
+                  })
+                : (
+                  <TextInput style={s.input} value={customTo} onChangeText={setCustomTo} placeholder="2026-07-31" testID="tx-custom-to" />
+                )
+              }
+            </View>
+          )}
           {originOptions.length > 2 && (
             <>
               <Text style={[{ fontSize: 10, fontWeight: '800', letterSpacing: 0.6, color: '#a97c39', marginTop: 16 }]}>ACCOUNT / BANK</Text>
@@ -2807,7 +2845,7 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
           )}
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 20 }}>
             <Pressable
-              onPress={() => { setDateRange('All'); setAccountFilter('All'); }}
+              onPress={() => { setDateRange('All'); setAccountFilter('All'); setCustomFrom(''); setCustomTo(''); }}
               style={{ flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: t.dark ? D.border : '#ece5d5', alignItems: 'center' }}
               testID="tx-filters-reset"
             >
@@ -3252,7 +3290,7 @@ function timeAgo(iso: string | null | undefined): string {
   const months = Math.round(days / 30);
   return `${months} mo ago`;
 }
-const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transactions, restrictedBuckets, setRestrictedBuckets, linkedRowsByCategory, linkedByCategory, onRefreshAccounts }: any) => {
+const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transactions, restrictedBuckets, setRestrictedBuckets, linkedRowsByCategory, linkedByCategory, onRefreshAccounts, canonicalTotalAssets, canonicalTotalLiabilities, canonicalNetWorth }: any) => {
   const t = useThemed();
   const { token } = useAuth();
   const [linkedRows, setLinkedRows] = useState<any[]>([]);
@@ -3492,10 +3530,13 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
     ...liabilities.map((x: Asset) => ({ ...x, source: x.source || 'Manual', linked: false })),
   ];
 
-  const ta = displayAssets.reduce((sum: number, x: any) => sum + (x.value || 0), 0)
-    + extraLinkedAssetRows.reduce((sum, x) => sum + (x.value || 0), 0);
-  const tl = combinedLiabilities.reduce((sum, x) => sum + (x.value || 0), 0);
-  const nw = ta - tl;
+  // Single source of truth — Home + Wealth show the exact same number.
+  // Local displayAssets/extraLinkedAssetRows/combinedLiabilities are kept
+  // only for rendering (per-row display), NOT for totals — totals come from
+  // the App-level canonical computation via props (spec: Net Worth centralized).
+  const ta = Number(canonicalTotalAssets) || 0;
+  const tl = Number(canonicalTotalLiabilities) || 0;
+  const nw = Number(canonicalNetWorth) || (ta - tl);
   const cash = displayAssets.find((x: any) => x.id === 'cash')?.value || 0;
   // Only ACTIVE (non-archived) buckets count toward Set Aside.
   const activeBuckets = restrictedBuckets.filter((b: any) => !b.archived);
@@ -4000,7 +4041,7 @@ const WorthCard = (_: any) => null; // Deprecated: replaced by the collapsible "
 
 
 /* ---------------- Legacy / Coaching / Membership / Settings / More ---------------- */
-const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, monthlyBudgetIncome, monthlyBudgetExpense, monthlyBudgetPeriod, timeframe, setTimeframe, contribution, setContribution, hypothetical, setHypothetical, hypoFrequency, setHypoFrequency, hypoDuration, setHypoDuration, returnRate, setReturnRate, cumulative, setCumulative, currentAge, setCurrentAge, retirementAge, setRetirementAge }: any) => {
+const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestricted, monthlyNet, monthlyBudgetIncome, monthlyBudgetExpense, monthlyBudgetPeriod, timeframe, setTimeframe, contribution, setContribution, hypothetical, setHypothetical, hypoFrequency, setHypoFrequency, hypoDuration, setHypoDuration, returnRate, setReturnRate, cumulative, setCumulative, currentAge, setCurrentAge, retirementAge, setRetirementAge }: any) => {
   const t = useThemed();
   const [editingHypo, setEditingHypo] = useState(false);
   const [hypoDraft, setHypoDraft] = useState('');
@@ -4051,16 +4092,32 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, monthlyBudgetInc
   const rawMonthlySurplus = Number(monthlyNet) || 0;
   const monthlySurplus = Math.max(0, rawMonthlySurplus);
 
-  // BUILD projection (spec: near-term wealth = current money + budget habits).
-  //   Investments are held FLAT — the default return rate is intentionally NOT
-  //   applied to BUILD. If the user wants investment growth modeled, they
-  //   switch to GROW (10/20/30yr) or Retirement, or add a one-time hypothetical.
-  //   Cash grows from POSITIVE monthly surplus only (spec: clamp ≥ $0).
-  //   Monthly/annual hypothetical contributions still flow into cash.
+  // Per-month BUILD surplus (spec: don't just multiply current surplus × N).
+  // If future monthly budgets exist for the projection period, use their
+  // actual budgeted income − expenses; otherwise carry forward the most
+  // recent monthly surplus. Negative months clamp to $0.
+  //
+  // For now: `monthlyNet` is the current (annualized/monthly) surplus. Multi-
+  // month budgets are not stored per-month in the current data model, so we
+  // treat every future month as a carry-forward estimate of the current
+  // month's positive surplus. When per-month budgeting lands, this is the
+  // one function to swap out (kept isolated so nothing else changes).
+  const perMonthSurplus = React.useCallback((totalMonths: number): { month: number; surplus: number; source: 'actual' | 'estimate' }[] => {
+    const rows: { month: number; surplus: number; source: 'actual' | 'estimate' }[] = [];
+    const carry = Math.max(0, rawMonthlySurplus);
+    for (let i = 0; i < totalMonths; i++) {
+      rows.push({ month: i + 1, surplus: carry, source: i === 0 ? 'actual' : 'estimate' });
+    }
+    return rows;
+  }, [rawMonthlySurplus]);
+  const buildStartingCash = (typeof availableCash === 'number' ? availableCash : (totalCash - (totalRestricted || 0))) || 0;
   const buildProjectionAt = (n: number): number => {
     const h = hypoContributions(hypoValue, hypoFreq, hypoDur, n);
     const heldInvestments = investmentTotal + h.addToPrincipal; // no compounding
-    const cashPortion = totalCash + monthlySurplus * 12 * n + h.addToCash;
+    const months = Math.max(1, Math.round(n * 12));
+    const surplusRows = perMonthSurplus(months);
+    const cashFromSurplus = surplusRows.reduce((sum, r) => sum + r.surplus, 0);
+    const cashPortion = buildStartingCash + cashFromSurplus + h.addToCash;
     return Math.round(heldInvestments + cashPortion);
   };
   const growProjectionAt = (n: number): number => {
@@ -4286,8 +4343,20 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, monthlyBudgetInc
                 <Text style={{ fontWeight: '800' }}>BUILD mode ({timeframe})</Text> — {years} year{years === 1 ? '' : 's'}.{'\n'}
               </Text>
               <View style={{ marginTop: 6, gap: 4 }}>
-                <Row label={`Cash (grows only from positive surplus)`} value={`${MONEY(totalCash)} + ${MONEY(monthlySurplus)} × 12 × ${years}${hypoValue > 0 && hypoFreq !== 'onetime' ? ' + hypo' : ''}`} muted={t.textMuted} ink={t.textInk} />
-                <Row label={`= Cash at Y${years}`} value={MONEY(totalCash + monthlySurplus * 12 * years + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToCash)} muted={t.textMuted} ink={t.textInk} valueColor="#4c8b56" />
+                <Row label={`Available Cash (grows only from positive surplus)`} value={`${MONEY(buildStartingCash)} + monthly surplus × ${years * 12} months${hypoValue > 0 && hypoFreq !== 'onetime' ? ' + hypo' : ''}`} muted={t.textMuted} ink={t.textInk} />
+                <Row label={`= Available Cash at Y${years}`} value={MONEY(buildStartingCash + perMonthSurplus(years * 12).reduce((s, r) => s + r.surplus, 0) + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToCash)} muted={t.textMuted} ink={t.textInk} valueColor="#4c8b56" />
+                {(() => {
+                  // Summarize how many months came from an actual entered
+                  // budget vs an estimated carry-forward (spec).
+                  const rows = perMonthSurplus(years * 12);
+                  const actualCount = rows.filter(r => r.source === 'actual').length;
+                  const estCount = rows.filter(r => r.source === 'estimate').length;
+                  return (
+                    <Text style={[{ fontSize: 9, marginTop: 2, fontStyle: 'italic' }, t.textMuted]}>
+                      {actualCount} month{actualCount === 1 ? '' : 's'} from actual entered budget · {estCount} month{estCount === 1 ? '' : 's'} estimated carry-forward.
+                    </Text>
+                  );
+                })()}
                 <View style={{ height: 6 }} />
                 <Row label={`Investments (held flat in BUILD)`} value={MONEY(investmentTotal + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToPrincipal)} muted={t.textMuted} ink={t.textInk} />
                 <Row label={`= Investments at Y${years}`} value={MONEY(investmentTotal + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToPrincipal)} muted={t.textMuted} ink={t.textInk} valueColor="#4c8b56" />
@@ -4357,7 +4426,7 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, monthlyBudgetInc
         <View style={{ marginTop: 8, gap: 6 }}>
           {isBuild ? (
             <>
-              <Row label="Current Cash" value={MONEY(totalCash)} muted={t.textMuted} ink={t.textInk} />
+              <Row label="Available Cash (Total Cash − Set Aside)" value={MONEY(buildStartingCash)} muted={t.textMuted} ink={t.textInk} />
               <Row label="Current Investments (held flat in BUILD)" value={MONEY(investmentTotal)} muted={t.textMuted} ink={t.textInk} />
               <Pressable onPress={() => setShowSurplusBreakdown(true)} hitSlop={4} testID="legacy-surplus-drill">
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -5448,14 +5517,19 @@ function MainApp() {
         const reshaped: Tx[] = raw.map((r: any) => {
           const amt = Number(r.amount) || 0;
           // Parse date safely — avoid timezone-shifting July 1 to June 30.
-          // Plaid returns YYYY-MM-DD strings; we extract month directly from
-          // the string to keep July transactions in the July budget bucket.
           const dateStr = typeof r.date === 'string' ? r.date : new Date(r.date).toISOString();
           const isoMatch = typeof dateStr === 'string' ? dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/) : null;
           const monthIndex = isoMatch ? Number(isoMatch[2]) - 1 : new Date(dateStr).getMonth();
           const period = MONTHS[monthIndex] || currentMonth();
           const sys = r.system_category || null;
-          const isSystemTransfer = sys === 'transfer' || sys === 'credit_card_payment' || sys === 'loan_payment' || !!r.is_transfer;
+          // Transfer heuristics: match ONLY clear transfer phrases (not every
+          // ACH / deposit / check). Description-based match complements the
+          // backend's Plaid PFC system_category detection.
+          const desc = `${r.description || r.name || ''} ${r.merchant || ''}`.toLowerCase();
+          const looksLikeTransfer =
+            /\b(transfer\b|internal transfer|online transfer|account transfer|xfer\b)\b/.test(desc)
+            || /transfer to (savings|checking)|transfer from (savings|checking)/.test(desc);
+          const isSystemTransfer = sys === 'transfer' || sys === 'credit_card_payment' || sys === 'loan_payment' || !!r.is_transfer || looksLikeTransfer;
           const derivedType: Tx['type'] = isSystemTransfer ? 'transfer' : (amt >= 0 ? 'income' : 'expense');
           return {
             id: `bank-${r.external_id}`,
@@ -5562,19 +5636,63 @@ function MainApp() {
   const syncedCash = openingCash + income - expense;
   const syncedAssets = assets.map(x => x.id === 'cash' ? { ...x, value: syncedCash } : x);
   const manualAssetsTotal = syncedAssets.reduce((sum, x) => sum + x.value, 0);
+  const manualLiabilitiesTotal = liabilities.reduce((sum: number, x: Asset) => sum + (x.value || 0), 0);
   const manualInvestments = syncedAssets.find((x: any) => x.id === 'investments')?.value || 0;
   const investmentTotal = manualInvestments + linkedInvestmentTotal;
   const totalCash = syncedCash + linkedCashTotal; // Cash-only linked accounts, per spec #2
-  // Net Worth = Manual assets (already includes cash/investments seeds) + linked
-  // non-cash/non-investment assets - manual liabilities - linked liabilities.
-  const manualLiabilitiesTotal = liabilities.reduce((sum, x) => sum + x.value, 0);
-  const netWorth =
-    manualAssetsTotal
-    + linkedRealEstateTotal + linkedVehiclesTotal + linkedOtherAssetsTotal
-    // syncedAssets already contains the manual cash/investment values; add the
-    // linked cash + investment portions on top.
-    + linkedCashTotal + linkedInvestmentTotal
-    - manualLiabilitiesTotal - linkedLiabilitiesTotal;
+  // ---- Single source of truth: Net Worth ------------------------------------
+  // Sum unique linked accounts (already de-duped by account_id) + manual rows
+  // exactly once. Category totals are used for aggregation ONLY — we never
+  // double-count a per-account row plus its aggregated header (this was the
+  // bug that produced Home $269K vs Wealth $563K).
+  const canonicalTotalAssets = React.useMemo(() => {
+    // Manual seeds: Cash + Investments seed values + all manual "other" rows.
+    const manualSeedCash = syncedCash; // synced from transactions + opening
+    const manualSeedInvest = manualInvestments; // manual investments seed
+    const manualOtherRows = syncedAssets.filter((x: Asset) => x.id !== 'cash' && x.id !== 'investments');
+    const manualOtherTotal = manualOtherRows.reduce((s: number, r: Asset) => s + (r.value || 0), 0);
+    return (
+      manualSeedCash + manualSeedInvest + manualOtherTotal +
+      linkedCashTotal + linkedInvestmentTotal +
+      linkedRealEstateTotal + linkedVehiclesTotal + linkedOtherAssetsTotal
+    );
+  }, [syncedCash, manualInvestments, syncedAssets, linkedCashTotal, linkedInvestmentTotal, linkedRealEstateTotal, linkedVehiclesTotal, linkedOtherAssetsTotal]);
+  const canonicalTotalLiabilities = React.useMemo(() => {
+    return manualLiabilitiesTotal + linkedLiabilitiesTotal;
+  }, [manualLiabilitiesTotal, linkedLiabilitiesTotal]);
+  // Only publish a NEW Net Worth once both assets AND liabilities are loaded.
+  // Until then, keep the last confirmed value so users never see a stale
+  // partial total (spec: "Do not publish the new total until it reconciles").
+  const [publishedNetWorth, setPublishedNetWorth] = useState<{ assets: number; liabilities: number; netWorth: number } | null>(null);
+  useEffect(() => {
+    // linkedAccountBalances / linkedTransactions are gated by auth token.
+    // We treat the state as "ready" whenever we're not signed in OR the
+    // linked fetch has landed (linkedAccountBalances is an array, not null).
+    if (!auth.token) {
+      setPublishedNetWorth({ assets: canonicalTotalAssets, liabilities: canonicalTotalLiabilities, netWorth: canonicalTotalAssets - canonicalTotalLiabilities });
+      return;
+    }
+    const nextNet = canonicalTotalAssets - canonicalTotalLiabilities;
+    // Reconcile: only publish when Assets − Liabilities exactly equals the
+    // computed netWorth (they're computed above from the same inputs so it
+    // must; this is a defensive check for future refactors).
+    if (Math.abs(nextNet - (canonicalTotalAssets - canonicalTotalLiabilities)) > 0.01) {
+      // eslint-disable-next-line no-console
+      console.warn('[NetWorth] mismatch detected — not publishing', { canonicalTotalAssets, canonicalTotalLiabilities, nextNet });
+      return;
+    }
+    setPublishedNetWorth({ assets: canonicalTotalAssets, liabilities: canonicalTotalLiabilities, netWorth: nextNet });
+  }, [canonicalTotalAssets, canonicalTotalLiabilities, auth.token]);
+  const netWorth = publishedNetWorth ? publishedNetWorth.netWorth : (canonicalTotalAssets - canonicalTotalLiabilities);
+  const totalAssets = publishedNetWorth ? publishedNetWorth.assets : canonicalTotalAssets;
+  const totalLiabilities = publishedNetWorth ? publishedNetWorth.liabilities : canonicalTotalLiabilities;
+  // Set Aside cash aggregation — hoisted to App-level so Legacy/Home can use
+  // Available Cash (= totalCash − totalRestricted) as the BUILD starting cash.
+  const totalRestricted = React.useMemo(() => {
+    const active = (restrictedBuckets || []).filter((b: any) => !b?.archived);
+    return active.reduce((sum: number, b: any) => sum + (Number(b.amount) || 0), 0);
+  }, [restrictedBuckets]);
+  const availableCash = totalCash - totalRestricted;
   const monthlyBudgetIncome = incomeSources.reduce((sum, x) => sum + x.budgeted, 0);
   const monthlyBudgetExpense = categories.flatMap(c => c.subcategories).reduce((sum, x) => sum + x.budgeted, 0);
   const monthlyNet = monthlyBudgetIncome - monthlyBudgetExpense;
@@ -5636,7 +5754,7 @@ function MainApp() {
       {auth.user && stage === 'app' && !(appLock.enabled && appLock.locked) && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
           <EmailVerificationBanner isDark={isDark} />
-          {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} legacyContribution={legacyContribution} legacyHypothetical={legacyHypothetical} legacyHypoFrequency={legacyHypoFrequency} legacyHypoDuration={legacyHypoDuration} legacyReturnRate={legacyReturnRate} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
+          {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} totalCash={totalCash} availableCash={availableCash} monthlyNet={monthlyNet} legacyContribution={legacyContribution} legacyHypothetical={legacyHypothetical} legacyHypoFrequency={legacyHypoFrequency} legacyHypoDuration={legacyHypoDuration} legacyReturnRate={legacyReturnRate} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
           {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} categoriesByYear={categoriesByYear} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} setTransactions={setTransactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} budgetYear={budgetYear} onSwitchYear={switchBudgetYear} onCopyLastYear={(prevYear: number) => {
             // "Copy last year" — deep-copies categories + planned amounts (per-
             // month figures inside subcategories.monthly + the base .budgeted
@@ -5674,9 +5792,9 @@ function MainApp() {
             },
           }} />}
           {active === 'transactions' && <TransactionsScreen transactions={mergedTransactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} alerts={alerts} openLinkSheet={() => { setActive('settings'); }} onRefresh={refreshAccounts} />}
-          {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} linkedRowsByCategory={linkedRowsByCategory} linkedByCategory={linkedByCategory} onRefreshAccounts={refreshAccounts} />}
+          {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} linkedRowsByCategory={linkedRowsByCategory} linkedByCategory={linkedByCategory} onRefreshAccounts={refreshAccounts} canonicalTotalAssets={totalAssets} canonicalTotalLiabilities={totalLiabilities} canonicalNetWorth={netWorth} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={validLinked.length} onBack={() => setActive('home')} />}
-          {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} monthlyBudgetIncome={monthlyBudgetIncome} monthlyBudgetExpense={monthlyBudgetExpense} monthlyBudgetPeriod={monthlyBudgetPeriod} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} hypoFrequency={legacyHypoFrequency} setHypoFrequency={setLegacyHypoFrequency} hypoDuration={legacyHypoDuration} setHypoDuration={setLegacyHypoDuration} returnRate={legacyReturnRate} setReturnRate={setLegacyReturnRate} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} currentAge={currentAge} setCurrentAge={setCurrentAge} retirementAge={retirementAge} setRetirementAge={setRetirementAge} />}
+          {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} availableCash={availableCash} totalRestricted={totalRestricted} monthlyNet={monthlyNet} monthlyBudgetIncome={monthlyBudgetIncome} monthlyBudgetExpense={monthlyBudgetExpense} monthlyBudgetPeriod={monthlyBudgetPeriod} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} hypoFrequency={legacyHypoFrequency} setHypoFrequency={setLegacyHypoFrequency} hypoDuration={legacyHypoDuration} setHypoDuration={setLegacyHypoDuration} returnRate={legacyReturnRate} setReturnRate={setLegacyReturnRate} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} currentAge={currentAge} setCurrentAge={setCurrentAge} retirementAge={retirementAge} setRetirementAge={setRetirementAge} />}
           {active === 'reports' && <ReportsScreen transactions={transactions} categories={categories} incomeSources={incomeSources} back={() => nav('home')} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}

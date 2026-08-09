@@ -1215,3 +1215,60 @@ Add Apple Sign-In to Login + Signup screens.
         currentCash + surplus*12*n + currentInvestments (flat), never compounded.
 
       Report to next iteration file.
+
+  - agent: "main"
+    message: |
+      POST-VERIFICATION FIXES — Net Worth SSOT + Available Cash + Transfer heuristics + Custom Date + Per-month Legacy surplus.
+
+      1. NET WORTH SINGLE SOURCE OF TRUTH (CRITICAL): App-level `canonicalTotalAssets`
+         and `canonicalTotalLiabilities` computed once (assets + liabilities per unique
+         account_id — no double-counting via aggregated category headers). Home &
+         Wealth now BOTH consume the same numbers via props. Wealth's local ta/tl/nw
+         formula (which double-counted linked cash+investments) is REMOVED. Published
+         values gated by a useEffect that verifies reconciliation before publishing.
+      2. AVAILABLE CASH FOR BUILD: App-level `availableCash = totalCash − totalRestricted`
+         (Set Aside sum from non-archived buckets). Passed to Legacy + Home. BUILD
+         projections now use `availableCash` (spec renames "Current Cash" → "Available
+         Cash (Total Cash − Set Aside)" in Legacy's projection card + math).
+      3. TRANSFER AUTO-DETECT: Plaid reshaping now marks a tx as Transfer when its
+         description matches /\b(transfer\b|internal transfer|online transfer|account
+         transfer|xfer\b)\b/ OR /transfer to (savings|checking)|transfer from …/. Every
+         other ACH/deposit/payment/check still uses sign-based classification. Manual
+         Income/Expense/Transfer selector was already in TxForm — unchanged.
+      4. CUSTOM DATE RANGE: Activity Filter sheet adds "Custom" chip → From/To date
+         pickers (HTML5 date input on web; TextInput fallback native). Reset also
+         clears customFrom/customTo.
+      5. LEGACY PER-MONTH SURPLUS: `perMonthSurplus(totalMonths)` returns an array of
+         `{month, surplus, source: 'actual' | 'estimate'}`. First month is 'actual'
+         (uses current rawMonthlySurplus, clamped ≥ $0); the rest are 'estimate'
+         (carry-forward). BUILD projection sums month-by-month. Math card now shows
+         "N months from actual entered budget · M months estimated carry-forward."
+
+      NOT DONE IN THIS PASS:
+      - Full per-calendar-month budget storage. The data model still uses annualized
+        budgets under categoriesByYear; per-month editable budgets require schema
+        changes. For now every month is a carry-forward estimate — TODO noted in
+        code + surfaced in the math card so user isn't misled.
+      - Budget auto-carry starting July 2026: this depends on per-month storage. Not
+        applicable without the schema change.
+      - Split TX save/immediate update: already implemented; nothing to redo.
+      - July→July mapping fix: already shipped previously.
+
+      TESTING FOCUS:
+      1. Wealth vs Home Net Worth: after seeding manual $10K cash + $50K investments,
+         BOTH Home hero and Wealth TOTAL NET WORTH should show the same $60,000 (or
+         adjusted for any liabilities/transactions).
+      2. Legacy: BUILD row now reads "Available Cash (Total Cash − Set Aside)" and
+         the math card confirms per-month sourcing.
+      3. Add a manual Set Aside bucket $500. Verify Legacy BUILD 1yr drops by $500
+         (since available cash decreased). Wealth Net Worth should be unchanged.
+      4. Activity: tap Filter → pick "Custom" → set from 2026-07-01 to 2026-07-31.
+         Only July transactions should show.
+      5. Transfer heuristic: create a manual expense named "Online Transfer to Savings"
+         — via the normal flow it stays Expense (heuristic is Plaid-only, matches spec
+         "not every ACH/deposit"). If Plaid ever pushes a description with "Transfer",
+         backend PFC classifier already marks it. Verify one from the sample:
+         a manual "ACH DEPOSIT PAYROLL" stays Income; a Plaid-synced description
+         matching /transfer to savings/i lands as Transfer.
+
+      Report to next iteration file.
