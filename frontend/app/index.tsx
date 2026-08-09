@@ -2818,8 +2818,14 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
               </Pressable>
               <View style={{ marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>Allocated {MONEY(splitsTotal)} / {MONEY(parsedAmount)}</Text>
-                <Text style={{ fontSize: 10, fontWeight: '800', color: Math.abs(splitsRemaining) < 0.01 ? '#4c8b56' : '#b06a5b' }}>
-                  {splitsRemaining > 0 ? `${MONEY(splitsRemaining)} left` : splitsRemaining < 0 ? `${MONEY(-splitsRemaining)} over` : 'Balanced'}
+                <Text style={{ fontSize: 10, fontWeight: '800', color: splitsValid ? '#4c8b56' : '#b06a5b' }}>
+                  {splitsValid
+                    ? 'Balanced'
+                    : splitsRemaining > 0
+                      ? `${MONEY(splitsRemaining)} left`
+                      : splitsRemaining < 0
+                        ? `${MONEY(-splitsRemaining)} over`
+                        : (tx.splits && tx.splits.length < 2 ? 'Add another row' : 'Each row needs an amount')}
                 </Text>
               </View>
             </View>
@@ -2988,6 +2994,10 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
   // the UI never lies (spec fix). Manual seeds for Cash/Investments are
   // included in the totals via `manualCash` / `manualInvest` — they render
   // as a "Manual (edit)" row so users can still adjust them by tapping.
+  // NOTE: manualCash/manualInvest are hoisted here (before buildCategoryGroups
+  // is invoked) to avoid a temporal-dead-zone crash on the Wealth tab.
+  const manualCash = assets.find((x: Asset) => x.id === 'cash')?.value || 0;
+  const manualInvest = assets.find((x: Asset) => x.id === 'investments')?.value || 0;
   const buildCategoryGroups = (side: 'assets' | 'liabilities') => {
     const slugs: string[] = side === 'assets'
       ? ['cash', 'investments', 'real_estate', 'vehicles', 'other_assets']
@@ -3058,8 +3068,7 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
   };
 
   // ---- Build the display asset list: Cash & Investments are auto-computed. Real estate / vehicles stay manual. ----
-  const manualCash = assets.find((x: Asset) => x.id === 'cash')?.value || 0;
-  const manualInvest = assets.find((x: Asset) => x.id === 'investments')?.value || 0;
+  // manualCash and manualInvest were hoisted above (before buildCategoryGroups).
   const manualOther = assets.filter((x: Asset) => x.id !== 'cash' && x.id !== 'investments');
   const displayAssets: (Asset & { linked?: boolean; account?: any })[] = [
     // Cash & Investments show a category header + one row per linked account

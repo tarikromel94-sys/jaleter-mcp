@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 44 — Phase 1 retest of the two blocker fixes from iteration_43 at 390x844 mobile viewport with alex+test1@jaleter.app. Both fixes PASS. (a) TDZ CRASH FIXED — tapping nav-networth no longer throws a red screen. NetWorthScreen mounts cleanly and renders all four required sections: Net Worth hero card ($0), Total Cash / Set Aside / Available strip, Assets card ($0 with 'Connect an account or add an asset...' empty state), Liabilities card ($0 with 4 seeded manual liability rows Mortgage/Auto Loan/Credit Cards/Student Loans), and the new WEALTH BY CATEGORY card with 'Sync' button + 'No sync yet' status + ASSETS $0 header + LIABILITIES $0 header. Because alex+test1 has pre-seeded manual liabilities but zero-value linked accounts, only categories with at least 1 linked account render (wealth-cat-real_estate, wealth-cat-vehicles, wealth-cat-credit_cards, wealth-cat-mortgage, wealth-cat-auto_loans, wealth-cat-student_loans all present, each showing '1 account / $0'). Verified index.tsx L2999-3000 hoists `const manualCash` and `const manualInvest` BEFORE buildCategoryGroups at L3001 — TDZ resolved. (b) SYNC BUTTON works — tapping wealth-sync-all dispatched network calls to both /api/plaid/sync AND /api/accounts/sync in parallel (observed via request interception), no crash, and the tab remains mounted. Note: /api/plaid/sync fired twice (likely React StrictMode double-mount in dev), which does not affect correctness. (c) SPLIT 'Balanced' CHIP FIX verified across 3 scenarios: SCEN1 amount=$180 with rows [100, 80] → chip='Balanced' in green rgb(76,139,86) + tx-save aria-disabled=null (enabled) ✅ ; SCEN2 amount=$180 with rows [100, 80, 0] (3rd row empty via tx-split-add) → chip='Each row needs an amount' in red rgb(176,106,91) + tx-save aria-disabled=true ✅ (this is the exact previously-buggy case that showed a misleading green 'Balanced' — now correctly gates on splitsValid at index.tsx:2822); SCEN3 amount=$180 with rows [100, empty] → chip='$80 left' in red + tx-save disabled ✅. Split flow save button + chip label are now consistent with splitsValid. No new regressions observed on Activity filters, TxForm type picker, merchant field, or bottom navigation. Deprecated packages / RN issues: pre-existing shadow* CSS warning still present (non-blocking).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "shadow* style props", "issue": "Pre-existing (not part of Phase 1 scope) — RN Web console warning: '\"shadow*\" style props are deprecated. Use \"boxShadow\".' Reference: /app/frontend/app/index.tsx StyleSheet blocks. Non-blocking."}
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter44/01_welcome.jpeg",
+    "/app/test_reports/screenshots/iter44/02_login_form.jpeg",
+    "/app/test_reports/screenshots/iter44/03_after_login.jpeg",
+    "/app/test_reports/screenshots/iter44/05_wealth_tab.jpeg",
+    "/app/test_reports/screenshots/iter44/07_wealth_cat_card.jpeg",
+    "/app/test_reports/screenshots/iter44/08_after_sync.jpeg",
+    "/app/test_reports/screenshots/iter44/14_scen1_balanced.jpeg",
+    "/app/test_reports/screenshots/iter44/15_scen2_empty_row.jpeg",
+    "/app/test_reports/screenshots/iter44/16_scen3_cleared.jpeg"
+  ],
+  "action_items": [
+    "None required for Phase 1. Both blocker fixes from iteration_43 are verified working. Main agent may proceed with next Phase 1 items or ship.",
+    "P3 (Optional / pre-existing) — Migrate deprecated shadow* StyleSheet props to boxShadow to silence RN Web console warning."
+  ],
+  "critical_code_review_comments": [
+    "TDZ fix confirmed — /app/frontend/app/index.tsx L2999-3000: `const manualCash` and `const manualInvest` are now declared ABOVE `buildCategoryGroups` (L3001) and above its call sites (L3031-3032 assetGroups/liabilityGroups). L3505 and L3076/L3086 still reference the same bindings correctly. No duplicate declarations.",
+    "Split chip fix confirmed — L2821-2828: label ternary now leads with `splitsValid ? 'Balanced' : ...`. Since splitsValid at L2557 requires (a) length>=2, (b) |remaining|<0.01, AND (c) every sp.amount > 0, the chip only turns green when Save is also enabled. The previously misleading 'Balanced' green label when a row was $0 is gone. Chip color at L2821 uses same splitsValid guard.",
+    "Sync handler doSyncAll at index.tsx L3036 (approx.) dispatches both endpoints via Promise.all([fetch('/api/plaid/sync'), fetch('/api/accounts/sync')]) — confirmed via network interception in this test run."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only retest)", "frontend": "100% (4/4 target scenarios pass: Wealth tab load, WEALTH BY CATEGORY renders at $0, Sync dispatches both endpoints, Split chip guards 'Balanced' on splitsValid)"},
+  "seed_data_creation": "None. Used existing test account alex+test1@jaleter.app / password123. Note: this account already has 4 seeded manual liabilities (Mortgage/Auto Loan/Credit Cards/Student Loans, all $0) and several $0-balance linked accounts from prior iterations (Real Estate, Vehicles, Credit Cards, Mortgage, Auto Loan, Student Loans), which allowed the WEALTH BY CATEGORY card to render at least 6 category rows.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration_43 blockers cleared. If a subsequent iteration re-touches NetWorthScreen or split validation, verify: (1) tapping nav-networth after login does not throw a red screen (testIDs wealth-sync-all, wealth-last-sync, wealth-cat-<slug> all present); (2) tapping wealth-sync-all triggers network requests to /api/plaid/sync AND /api/accounts/sync (interception via `page.on('request')`); (3) split chip logic — 2 rows summing to total both>0 → chip 'Balanced' green + save enabled; add empty 3rd row → chip 'Each row needs an amount' red + save disabled; clear a row so sum!=total → chip '$X left' red + save disabled. TxForm testIDs: tx-add opens modal, tx-name/tx-merchant/tx-amount, tx-split-toggle, tx-split-{idx}-amount/remove, tx-split-add, tx-save. Welcome→login navigation on web is via `window.postMessage('navigate:login', '*')` because the welcome screen is rendered in a sandboxed iframe.",
+  "rca_of_issue": "N/A — this iteration is a retest verifying prior fixes. Both fixes (TDZ hoist of manualCash/manualInvest, and splitsValid-gated chip label) are correctly applied per code inspection AND runtime observation."
+}
