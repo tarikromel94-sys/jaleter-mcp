@@ -1072,31 +1072,52 @@ const Paywall = ({ onContinue }: any) => {
 
 /* ---------------- Home ---------------- */
 // Shared legacy math — kept next to Home so both Home and Legacy show the
-// exact same numbers for the checkpoint cards. Rate stays at 7% here to match
-// the assumption printed on the Legacy screen.
-const LEGACY_RATE = 7;
-function shortTermCash(totalCash: number, investmentTotal: number, hypothetical: number, monthlyNet: number, year: number): number {
-  return Math.round(totalCash + investmentTotal + hypothetical + monthlyNet * 12 * year);
+// exact same numbers for the checkpoint cards. The rate is user-editable on
+// the Legacy screen and hoisted into App state so Home + Legacy always agree.
+const DEFAULT_LEGACY_RATE = 7; // % annual (used until user edits it)
+// Applies a hypothetical (one-time / monthly / annual, optional duration) to
+// a projection horizon and returns amounts that should be added to cash and
+// to the invested principal at year `n`. Kept here so Home and Legacy compute
+// hypotheticals identically.
+function hypoContributions(hypoAmount: number, freq: 'onetime' | 'monthly' | 'annual', duration: number | null, n: number) {
+  if (!hypoAmount || hypoAmount <= 0) return { addToPrincipal: 0, addToCash: 0, addToMonthlyContrib: 0 };
+  const active = duration && duration > 0 ? Math.min(duration, n) : n; // years the hypo is active
+  if (freq === 'onetime') return { addToPrincipal: hypoAmount, addToCash: 0, addToMonthlyContrib: 0 };
+  if (freq === 'monthly') return { addToPrincipal: 0, addToCash: hypoAmount * 12 * active, addToMonthlyContrib: hypoAmount };
+  return { addToPrincipal: 0, addToCash: hypoAmount * active, addToMonthlyContrib: hypoAmount / 12 };
 }
-function longTermInvestment(investmentTotal: number, hypothetical: number, monthlyContribution: number, year: number): number {
-  const totalInvested = investmentTotal + hypothetical;
-  const r = LEGACY_RATE / 100;
+// Cash-only growth. Investments are NOT included here — they compound
+// separately at the return rate. This fixes the confusing Y1/Y5/Y10 mix.
+function shortTermCash(totalCash: number, monthlyNet: number, year: number, hypoCashAdd: number = 0): number {
+  return Math.round(totalCash + monthlyNet * 12 * year + hypoCashAdd);
+}
+function longTermInvestment(investmentTotal: number, hypoPrincipal: number, monthlyContribution: number, year: number, ratePct: number = DEFAULT_LEGACY_RATE): number {
+  const totalInvested = investmentTotal + hypoPrincipal;
+  const r = ratePct / 100;
+  if (r === 0) return Math.round(totalInvested + monthlyContribution * 12 * year);
   return Math.round(totalInvested * Math.pow(1 + r, year) + monthlyContribution * 12 * ((Math.pow(1 + r, year) - 1) / r));
 }
 
-const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, totalCash, monthlyNet, legacyContribution, legacyHypothetical, budgetUsage, alertsEnabled, navigate }: any) => {
+const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, totalCash, monthlyNet, legacyContribution, legacyHypothetical, legacyHypoFrequency, legacyHypoDuration, legacyReturnRate, budgetUsage, alertsEnabled, navigate }: any) => {
   const t = useThemed();
   const q = dailyQuote(experience as QuoteType, new Date());
   const hypoValue = Math.max(0, Number((legacyHypothetical || '').replace(/[^0-9.]/g, '')) || 0);
-  // Same math as the Legacy screen: compound the user's real investment total at 7% (LEGACY_RATE) over 33 years.
-  const projected = investmentTotal > 0 ? longTermInvestment(investmentTotal, hypoValue, legacyContribution || 0, 33) : 0;
+  const hypoFreq: 'onetime' | 'monthly' | 'annual' = legacyHypoFrequency || 'onetime';
+  const hypoDur: number | null = typeof legacyHypoDuration === 'number' ? legacyHypoDuration : null;
+  const rate = Number(legacyReturnRate) || DEFAULT_LEGACY_RATE;
+  const hypoAt = (n: number) => hypoContributions(hypoValue, hypoFreq, hypoDur, n);
+  // Home teaser projection — 33yr compound of current investments at the user's chosen rate.
+  const h33 = hypoAt(33);
+  const projected = investmentTotal > 0 ? longTermInvestment(investmentTotal, h33.addToPrincipal, (legacyContribution || 0) + h33.addToMonthlyContrib, 33, rate) : 0;
   const hasProjection = projected > 0;
-  // Legacy snapshot values — mirror the Legacy tab exactly.
-  const cashY1 = shortTermCash(totalCash || 0, investmentTotal || 0, hypoValue, monthlyNet || 0, 1);
-  const cashY5 = shortTermCash(totalCash || 0, investmentTotal || 0, hypoValue, monthlyNet || 0, 5);
-  const cashY10 = shortTermCash(totalCash || 0, investmentTotal || 0, hypoValue, monthlyNet || 0, 10);
-  const invest20 = longTermInvestment(investmentTotal || 0, hypoValue, legacyContribution || 0, 20);
-  const invest30 = longTermInvestment(investmentTotal || 0, hypoValue, legacyContribution || 0, 30);
+  // Cash checkpoints — cash only, no investment growth.
+  const cashY1 = shortTermCash(totalCash || 0, monthlyNet || 0, 1, hypoAt(1).addToCash);
+  const cashY5 = shortTermCash(totalCash || 0, monthlyNet || 0, 5, hypoAt(5).addToCash);
+  const cashY10 = shortTermCash(totalCash || 0, monthlyNet || 0, 10, hypoAt(10).addToCash);
+  // Investment checkpoints — compound at chosen rate, monthly contribution stream applied.
+  const invest10 = longTermInvestment(investmentTotal || 0, hypoAt(10).addToPrincipal, (legacyContribution || 0) + hypoAt(10).addToMonthlyContrib, 10, rate);
+  const invest20 = longTermInvestment(investmentTotal || 0, hypoAt(20).addToPrincipal, (legacyContribution || 0) + hypoAt(20).addToMonthlyContrib, 20, rate);
+  const invest30 = longTermInvestment(investmentTotal || 0, hypoAt(30).addToPrincipal, (legacyContribution || 0) + hypoAt(30).addToMonthlyContrib, 30, rate);
   const showSnapshot = (totalCash || 0) > 0 || (investmentTotal || 0) > 0 || (monthlyNet || 0) > 0;
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
   return (
@@ -1177,7 +1198,7 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
           <>
             <Text style={s.legacyStrong}>{MONEY(projected)}</Text>
             <Text style={{ color: '#aaa297', fontSize: 10, lineHeight: 15, marginBottom: 14 }}>
-              33-year compounding of your current investments at {LEGACY_RATE}%.
+              33-year compounding of your current investments at {rate}%.
             </Text>
             <View style={s.teaserBarsFlow}>
               {[28, 36, 44, 57, 70, 88].map((h, i) => (
@@ -1200,34 +1221,42 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
       </Pressable>
 
       {/* Legacy Snapshot — mirrors the exact same numbers as the Legacy tab so
-          Home and Legacy never disagree. Only rendered when the user has data;
-          skipped when everything is zero to keep the empty state clean. */}
+          Home and Legacy never disagree. Cash and Investments are now shown
+          on separate rows with clear labels so users understand that cash
+          does not compound at 7% — only investments do. */}
       {showSnapshot && (
         <Pressable style={[s.assumptionsCard, t.cardBg, { marginTop: 12 }]} onPress={() => navigate('legacy')} testID="home-legacy-snapshot">
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <Text style={[{ fontSize: 11, fontWeight: '800', letterSpacing: 0.4 }, t.textInk]}>LEGACY SNAPSHOT</Text>
             <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#aaa39a'} />
           </View>
-          <Text style={[{ fontSize: 9, marginBottom: 8 }, t.textMuted]}>Cash checkpoints + retirement — matches your Legacy tab.</Text>
-          <View style={{ flexDirection: 'row', gap: 6 }}>
+          <Text style={[{ fontSize: 9, marginBottom: 6 }, t.textMuted]}>
+            Cash grows from your monthly surplus only. Investments compound at {rate}%.
+          </Text>
+          {/* Cash row — no growth applied, just surplus × time */}
+          <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8, marginTop: 4 }}>CASH · GROWS FROM SURPLUS</Text>
+          <View style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
             {[
               { label: 'Y1', v: cashY1 },
               { label: 'Y5', v: cashY5 },
               { label: 'Y10', v: cashY10 },
             ].map((row) => (
               <View key={row.label} style={{ flex: 1, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: t.dark ? '#3a342b' : '#f0e7d1', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
-                <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8 }}>{row.label} CASH</Text>
+                <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8 }}>{row.label}</Text>
                 <Text style={[{ fontSize: 11, fontWeight: '800', marginTop: 3 }, t.textInk]} numberOfLines={1}>{MONEY(row.v)}</Text>
               </View>
             ))}
           </View>
-          <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
+          {/* Investments row — compounds at chosen rate */}
+          <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8, marginTop: 10 }}>INVESTMENTS · COMPOUND @ {rate}%</Text>
+          <View style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
             {[
-              { label: '20yr Retirement', v: invest20 },
-              { label: '30yr Retirement', v: invest30 },
+              { label: 'Y10', v: invest10 },
+              { label: 'Y20', v: invest20 },
+              { label: 'Y30', v: invest30 },
             ].map((row) => (
               <View key={row.label} style={{ flex: 1, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: t.dark ? '#3a342b' : '#f0e7d1', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
-                <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8 }}>{row.label.toUpperCase()}</Text>
+                <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8 }}>{row.label}</Text>
                 <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 3 }, t.textInk]} numberOfLines={1}>{MONEY(row.v)}</Text>
               </View>
             ))}
@@ -1483,7 +1512,7 @@ async function exportTransactionsCsv(categories: Category[], incomeSources: any[
 }
 
 /* ---------------- Budget Screen ---------------- */
-const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSources, setIncomeSources, transactions, focusCategory, clearFocus, alerts, budgetYear, onSwitchYear, onCopyLastYear }: any) => {
+const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSources, setIncomeSources, transactions, setTransactions, focusCategory, clearFocus, alerts, budgetYear, onSwitchYear, onCopyLastYear }: any) => {
   const t = useThemed();
   const [period, setPeriod] = useState<string>(currentMonth());
   const [view, setView] = useState<'cards' | 'grid'>('cards');
@@ -1501,6 +1530,13 @@ const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSourc
   const [newSubName, setNewSubName] = useState('');
   const [draft, setDraft] = useState('');
   const [toast, setToast] = useState('');
+  // Reassign-before-delete state (spec #1). When a user tries to delete a
+  // subcategory that has transactions, we open this sheet to require them to
+  // move the affected transactions to another subcategory. Financial history
+  // is never lost — only the label changes.
+  const [reassignFrom, setReassignFrom] = useState<{ groupId: string; sub: Subcategory; affected: Tx[] } | null>(null);
+  const [reassignTargetId, setReassignTargetId] = useState<string>(''); // sub id OR '__new__'
+  const [reassignNewName, setReassignNewName] = useState<string>('');
   const annual = period === 'Year';
   const mIdx = annual ? -1 : monthIndex(period);
   useEffect(() => { if (focusCategory) { setExpanded(x => x.includes(focusCategory) ? x : [...x, focusCategory]); clearFocus(); } }, [focusCategory]);
@@ -1602,6 +1638,25 @@ const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSourc
     const cat = categories.find((c: Category) => c.id === groupId);
     const sub = cat?.subcategories.find((x: Subcategory) => x.id === subId);
     const name = sub?.name || 'this subcategory';
+    // Count affected transactions across ALL time (not just current period),
+    // because deleting the subcategory affects historical rows too.
+    const affected = (transactions || []).filter((tx: Tx) => tx.detailId === subId);
+    if (affected.length > 0 && sub) {
+      // Open the reassign sheet — user must pick a destination before we
+      // delete the subcategory. This keeps every dollar & transaction intact.
+      setReassignFrom({ groupId, sub, affected });
+      // Default target: the first other sub in the same category, else the
+      // first sub anywhere. If there is truly no other sub the user can
+      // create a new one via '__new__'.
+      const otherInSame = cat?.subcategories.filter((x: Subcategory) => x.id !== subId) || [];
+      const anyOther: Subcategory[] = otherInSame.length
+        ? otherInSame
+        : categories.flatMap((c: Category) => c.subcategories).filter((x: Subcategory) => x.id !== subId);
+      setReassignTargetId(anyOther[0]?.id || '__new__');
+      setReassignNewName(`${sub.name} (moved)`);
+      return;
+    }
+    // No affected transactions → simple confirm+delete.
     const doIt = () => {
       setCategories((prev: Category[]) => prev.map((c) => c.id !== groupId ? c : { ...c, subcategories: c.subcategories.filter((x) => x.id !== subId) }));
       setToast('Subcategory removed.');
@@ -1615,6 +1670,37 @@ const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSourc
         { text: 'Delete', style: 'destructive', onPress: doIt },
       ]);
     }
+  };
+  const commitReassign = () => {
+    if (!reassignFrom) return;
+    const { groupId, sub, affected } = reassignFrom;
+    let destGroupId = groupId;
+    let destSubId = reassignTargetId;
+    // Create-new branch: append a new subcategory to the same group and
+    // move all affected transactions to it.
+    if (destSubId === '__new__') {
+      const name = (reassignNewName || `${sub.name} (moved)`).trim();
+      if (!name) return;
+      const newId = `sub-${Date.now().toString(36)}`;
+      setCategories((prev: Category[]) => prev.map((c) => c.id !== groupId ? c : {
+        ...c,
+        subcategories: [...c.subcategories, { id: newId, name, budgeted: 0 }],
+      }));
+      destSubId = newId;
+    } else {
+      // Find which group the target sub belongs to so we can update
+      // transactions' groupId too when moving cross-group.
+      for (const c of categories as Category[]) {
+        if (c.subcategories.some((x: Subcategory) => x.id === destSubId)) { destGroupId = c.id; break; }
+      }
+    }
+    // Reassign every affected transaction, preserving all financial data.
+    const affectedIds = new Set(affected.map((tx) => tx.id));
+    setTransactions((prev: Tx[]) => prev.map((tx: Tx) => affectedIds.has(tx.id) ? { ...tx, detailId: destSubId, groupId: destGroupId } : tx));
+    // Finally delete the source subcategory.
+    setCategories((prev: Category[]) => prev.map((c) => c.id !== groupId ? c : { ...c, subcategories: c.subcategories.filter((x) => x.id !== sub.id) }));
+    setToast(`Moved ${affected.length} transaction${affected.length === 1 ? '' : 's'} · deleted "${sub.name}".`);
+    setReassignFrom(null); setReassignTargetId(''); setReassignNewName('');
   };
 
   return (
@@ -2006,6 +2092,102 @@ const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSourc
             <GoldButton label="Add" onPress={() => addingSubTo && addSubcategory(addingSubTo)} testID="sub-add-save" />
           </View>
         </View>
+      </Sheet>
+
+      {/* Reassign-before-delete sheet — required whenever the target
+          subcategory has transactions attached to it. Financial history is
+          preserved by moving each transaction's `detailId` (and groupId if
+          the destination lives under a different category). */}
+      <Sheet
+        visible={!!reassignFrom}
+        close={() => { setReassignFrom(null); setReassignTargetId(''); setReassignNewName(''); }}
+        title={reassignFrom ? `Reassign "${reassignFrom.sub.name}"` : ''}
+        subtitle="This subcategory has transactions. Choose where to move them before deleting. Your transaction totals stay unchanged — only the label moves."
+      >
+        {reassignFrom && (
+          <View>
+            <View style={{ padding: 10, backgroundColor: t.dark ? '#3a2f22' : '#fbf1de', borderRadius: 8, borderLeftWidth: 3, borderLeftColor: '#c49450', marginBottom: 12 }}>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: '#9a6d32' }}>
+                {reassignFrom.affected.length} transaction{reassignFrom.affected.length === 1 ? '' : 's'} affected
+              </Text>
+              <Text style={{ fontSize: 10, color: '#8d806e', marginTop: 2 }}>
+                All existing spend & history moves with them. Nothing is deleted.
+              </Text>
+            </View>
+
+            <Text style={[s.label, { marginBottom: 6 }]}>Move to</Text>
+            <View style={{ borderWidth: 1, borderColor: t.dark ? D.border : '#ece5d5', borderRadius: 10 }}>
+              {/* List of other subcategories, grouped by category */}
+              {categories.map((c: Category) => {
+                const eligible = c.subcategories.filter((x: Subcategory) => x.id !== reassignFrom.sub.id);
+                if (eligible.length === 0) return null;
+                return (
+                  <View key={c.id}>
+                    <Text style={{ fontSize: 9, fontWeight: '800', letterSpacing: 0.8, color: '#a97c39', paddingHorizontal: 10, paddingTop: 8 }}>
+                      {c.name.toUpperCase()}
+                    </Text>
+                    {eligible.map((sc: Subcategory) => (
+                      <Pressable
+                        key={sc.id}
+                        onPress={() => setReassignTargetId(sc.id)}
+                        style={{ flexDirection: 'row', alignItems: 'center', padding: 10, borderBottomWidth: 1, borderBottomColor: t.dark ? '#3a342b' : '#f1ede6' }}
+                        testID={`reassign-target-${sc.id}`}
+                      >
+                        <Ionicons
+                          name={reassignTargetId === sc.id ? 'radio-button-on' : 'radio-button-off'}
+                          size={16}
+                          color={reassignTargetId === sc.id ? '#9a6d32' : (t.dark ? D.textMuted : C.muted)}
+                        />
+                        <Text style={[{ fontSize: 12, marginLeft: 10, flex: 1 }, t.textInk]}>{sc.name}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                );
+              })}
+              {/* Create-new option */}
+              <View>
+                <Text style={{ fontSize: 9, fontWeight: '800', letterSpacing: 0.8, color: '#a97c39', paddingHorizontal: 10, paddingTop: 8 }}>OR CREATE NEW</Text>
+                <Pressable
+                  onPress={() => setReassignTargetId('__new__')}
+                  style={{ flexDirection: 'row', alignItems: 'center', padding: 10 }}
+                  testID="reassign-target-new"
+                >
+                  <Ionicons
+                    name={reassignTargetId === '__new__' ? 'radio-button-on' : 'radio-button-off'}
+                    size={16}
+                    color={reassignTargetId === '__new__' ? '#9a6d32' : (t.dark ? D.textMuted : C.muted)}
+                  />
+                  <Text style={[{ fontSize: 12, marginLeft: 10 }, t.textInk]}>
+                    Create a new subcategory in {reassignFrom ? (categories.find((c: Category) => c.id === reassignFrom.groupId)?.name || 'this category') : 'this category'}
+                  </Text>
+                </Pressable>
+                {reassignTargetId === '__new__' && (
+                  <View style={{ paddingHorizontal: 10, paddingBottom: 10 }}>
+                    <TextInput
+                      style={s.input}
+                      value={reassignNewName}
+                      onChangeText={setReassignNewName}
+                      placeholder="Name for the new subcategory"
+                      testID="reassign-new-name"
+                    />
+                  </View>
+                )}
+              </View>
+            </View>
+
+            <View style={{ marginTop: 14 }}>
+              <GoldButton
+                label={`Move & delete "${reassignFrom.sub.name}"`}
+                onPress={commitReassign}
+                disabled={!reassignTargetId || (reassignTargetId === '__new__' && !reassignNewName.trim())}
+                testID="reassign-confirm"
+              />
+            </View>
+            <Pressable onPress={() => { setReassignFrom(null); setReassignTargetId(''); setReassignNewName(''); }} style={{ marginTop: 10, alignItems: 'center' }}>
+              <Text style={{ color: C.muted2, fontSize: 11 }}>Cancel — keep subcategory</Text>
+            </Pressable>
+          </View>
+        )}
       </Sheet>
 
       {toast ? <Toast message={toast} onHide={() => setToast('')} /> : null}
@@ -2474,10 +2656,19 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
   const { token } = useAuth();
   const [linkedRows, setLinkedRows] = useState<any[]>([]);
   const [restrictedOpen, setRestrictedOpen] = useState(false);
+  // Legacy "adding" sheet — kept for backwards-compat with existing tests but
+  // the new redesign uses an inline editing card (setEditingBucket).
   const [addingRestricted, setAddingRestricted] = useState(false);
   const [newBucketName, setNewBucketName] = useState('');
   const [newBucketAmt, setNewBucketAmt] = useState('');
+  const [newBucketTarget, setNewBucketTarget] = useState('');
+  const [newBucketTargetDate, setNewBucketTargetDate] = useState('');
+  const [newBucketRecurring, setNewBucketRecurring] = useState('');
   const [editingBucket, setEditingBucket] = useState<any>(null);
+  // "Add" or "Use" mini-flow for a bucket (increment / decrement).
+  const [txBucket, setTxBucket] = useState<{ bucket: any; action: 'add' | 'use' } | null>(null);
+  const [txAmt, setTxAmt] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
   const [editRow, setEditRow] = useState<{ side: 'assets' | 'liabilities'; row: Asset } | null>(null);
   const [rowDraftName, setRowDraftName] = useState('');
   const [rowDraftAmt, setRowDraftAmt] = useState('');
@@ -2599,7 +2790,99 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
   const tl = combinedLiabilities.reduce((sum, x) => sum + (x.value || 0), 0);
   const nw = ta - tl;
   const cash = displayAssets.find((x: any) => x.id === 'cash')?.value || 0;
-  const totalRestricted = restrictedBuckets.reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
+  // Only ACTIVE (non-archived) buckets count toward Set Aside.
+  const activeBuckets = restrictedBuckets.filter((b: any) => !b.archived);
+  const archivedBuckets = restrictedBuckets.filter((b: any) => b.archived);
+  const totalRestricted = activeBuckets.reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
+  const available = cash - totalRestricted; // may be negative; we now render red instead of clamping to 0
+  const BUCKET_PRESETS = [
+    { name: 'Emergency Fund', icon: 'shield-checkmark-outline' },
+    { name: 'Taxes', icon: 'document-text-outline' },
+    { name: 'Vacation / Travel', icon: 'airplane-outline' },
+    { name: 'Home', icon: 'home-outline' },
+    { name: 'Auto', icon: 'car-outline' },
+    { name: 'Medical', icon: 'medkit-outline' },
+    { name: 'Education', icon: 'school-outline' },
+    { name: 'Gifts / Holidays', icon: 'gift-outline' },
+    { name: 'Business', icon: 'briefcase-outline' },
+    { name: 'Other', icon: 'ellipsis-horizontal-outline' },
+  ];
+  const resetBucketDraft = () => {
+    setNewBucketName(''); setNewBucketAmt(''); setNewBucketTarget(''); setNewBucketTargetDate(''); setNewBucketRecurring('');
+  };
+  const openNewBucket = (presetName?: string) => {
+    resetBucketDraft();
+    if (presetName) setNewBucketName(presetName);
+    setEditingBucket(null);
+    setAddingRestricted(true);
+  };
+  const openEditBucket = (b: any) => {
+    setEditingBucket(b);
+    setNewBucketName(b.name);
+    setNewBucketAmt(String(b.amount || 0));
+    setNewBucketTarget(b.target ? String(b.target) : '');
+    setNewBucketTargetDate(b.targetDate || '');
+    setNewBucketRecurring(b.recurring ? String(b.recurring) : '');
+    setAddingRestricted(true);
+  };
+  const saveBucket = () => {
+    const cleanAmt = Math.max(0, Math.round(Number((newBucketAmt || '').replace(/[^0-9.]/g, '')) || 0));
+    const cleanTarget = Math.max(0, Math.round(Number((newBucketTarget || '').replace(/[^0-9.]/g, '')) || 0));
+    const cleanRecurring = Math.max(0, Math.round(Number((newBucketRecurring || '').replace(/[^0-9.]/g, '')) || 0));
+    const cleanName = newBucketName.trim();
+    if (!cleanName) return;
+    if (editingBucket) {
+      setRestrictedBuckets((prev: any[]) => prev.map((x: any) => x.id === editingBucket.id ? {
+        ...x,
+        name: cleanName,
+        amount: cleanAmt,
+        target: cleanTarget > 0 ? cleanTarget : undefined,
+        targetDate: newBucketTargetDate ? newBucketTargetDate.trim() : undefined,
+        recurring: cleanRecurring > 0 ? cleanRecurring : undefined,
+      } : x));
+    } else {
+      // Cap at 20 active buckets to keep UI usable and prevent runaway lists.
+      if (activeBuckets.length >= 20) return;
+      setRestrictedBuckets((prev: any[]) => [...prev, {
+        id: `bucket-${Date.now().toString(36)}`,
+        name: cleanName,
+        amount: cleanAmt,
+        target: cleanTarget > 0 ? cleanTarget : undefined,
+        targetDate: newBucketTargetDate ? newBucketTargetDate.trim() : undefined,
+        recurring: cleanRecurring > 0 ? cleanRecurring : undefined,
+        createdAt: new Date().toISOString(),
+      }]);
+    }
+    setAddingRestricted(false); setEditingBucket(null);
+    resetBucketDraft();
+  };
+  const archiveBucket = (id: string) => {
+    setRestrictedBuckets((prev: any[]) => prev.map((x: any) => x.id === id ? { ...x, archived: !x.archived } : x));
+  };
+  const deleteBucket = (id: string) => {
+    const b = restrictedBuckets.find((x: any) => x.id === id);
+    const name = b?.name || 'this bucket';
+    const doIt = () => setRestrictedBuckets((prev: any[]) => prev.filter((x: any) => x.id !== id));
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(`Delete "${name}"?\n\nThe money returns to Available Cash. This cannot be undone.`)) doIt();
+    } else {
+      Alert.alert(`Delete "${name}"?`, 'The money returns to Available Cash. This cannot be undone.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: doIt },
+      ]);
+    }
+  };
+  const commitBucketTx = () => {
+    if (!txBucket) return;
+    const raw = Math.max(0, Math.round(Number((txAmt || '').replace(/[^0-9.]/g, '')) || 0));
+    if (raw <= 0) { setTxBucket(null); setTxAmt(''); return; }
+    setRestrictedBuckets((prev: any[]) => prev.map((x: any) => {
+      if (x.id !== txBucket.bucket.id) return x;
+      const nextAmt = txBucket.action === 'add' ? (x.amount || 0) + raw : Math.max(0, (x.amount || 0) - raw);
+      return { ...x, amount: nextAmt };
+    }));
+    setTxBucket(null); setTxAmt('');
+  };
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Net Worth" subtitle="Your full financial picture, in one place." action={
@@ -2627,68 +2910,177 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
         <Pressable onPress={() => setRestrictedOpen(true)} style={{ flex: 1 }} testID="nw-restricted">
           <Text style={[s.cpSmall, t.textMuted]}>SET ASIDE</Text>
           <Text style={[s.cpStrong, t.textInk]}>{MONEY(totalRestricted)}</Text>
-          <Text style={{ color: '#c9a56c', fontSize: 8, marginTop: 2 }}>{restrictedBuckets.length > 0 ? `${restrictedBuckets.length} bucket${restrictedBuckets.length > 1 ? 's' : ''} · tap to manage` : 'tap to add'}</Text>
+          <Text style={{ color: '#c9a56c', fontSize: 8, marginTop: 2 }}>{activeBuckets.length > 0 ? `${activeBuckets.length} bucket${activeBuckets.length > 1 ? 's' : ''} · tap to manage` : 'tap to add'}</Text>
         </Pressable>
         <Text style={{ color: '#b99a6c' }}>=</Text>
-        <View style={[{ flex: 1.2 }, s.cpAvailable]}><Text style={[s.cpSmall, { color: '#c8b494' }]}>AVAILABLE</Text><Text style={[s.cpStrong, { color: '#f3dfbd' }]}>{MONEY(Math.max(0, cash - totalRestricted))}</Text></View>
-      </View>
-      <Sheet visible={restrictedOpen} close={() => { setRestrictedOpen(false); setAddingRestricted(false); setEditingBucket(null); setNewBucketName(''); setNewBucketAmt(''); }} title="Set Aside Cash" subtitle="Create named buckets for money set aside — taxes, gifts, goals. Each bucket is subtracted from Available Cash.">
-        <View>
-          {restrictedBuckets.length === 0 && !addingRestricted && (
-            <Text style={{ fontSize: 11, color: C.muted2, marginBottom: 12 }}>No buckets yet. Tap the button below to add your first.</Text>
+        <View style={[{ flex: 1.2 }, s.cpAvailable]}>
+          <Text style={[s.cpSmall, { color: '#c8b494' }]}>AVAILABLE</Text>
+          <Text style={[s.cpStrong, { color: available < 0 ? '#f2b1a8' : '#f3dfbd' }]}>{MONEY(available)}</Text>
+          {available < 0 && (
+            <Text style={{ color: '#f2b1a8', fontSize: 8, marginTop: 2, fontWeight: '700' }}>Over-allocated</Text>
           )}
-          {restrictedBuckets.map((b: any) => (
-            <View key={b.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f1ede6' }}>
-              <Pressable onPress={() => { setEditingBucket(b); setNewBucketName(b.name); setNewBucketAmt(String(b.amount)); setAddingRestricted(true); }} style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>{b.name}</Text>
-                  <Text style={{ fontSize: 9, color: C.muted2 }}>tap to edit</Text>
-                </View>
-                <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>{MONEY(b.amount)}</Text>
-              </Pressable>
-              <Pressable onPress={() => {
-                const doIt = () => setRestrictedBuckets((prev: any[]) => prev.filter((x: any) => x.id !== b.id));
-                if (Platform.OS === 'web') { if (typeof window !== 'undefined' && window.confirm(`Remove "${b.name}"?`)) doIt(); }
-                else { Alert.alert(`Remove "${b.name}"?`, 'This allocation returns to Available Cash.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Remove', style: 'destructive', onPress: doIt }]); }
-              }} hitSlop={6} style={{ paddingHorizontal: 8, paddingVertical: 6 }} testID={`bucket-del-${b.id}`}>
-                <Ionicons name="close-circle-outline" size={16} color="#b06a5b" />
-              </Pressable>
+        </View>
+      </View>
+      <Sheet visible={restrictedOpen} close={() => { setRestrictedOpen(false); setAddingRestricted(false); setEditingBucket(null); resetBucketDraft(); }} title="Set Aside Cash" subtitle="Named buckets for money set aside — taxes, gifts, goals. Each bucket is subtracted from Available Cash but stays part of your Total Cash and Net Worth.">
+        <View>
+          {/* Preset chips — always visible so users can quickly add common
+              buckets. Tapping a chip pre-fills the name in the add form. */}
+          {!addingRestricted && activeBuckets.length < 20 && (
+            <View style={{ marginBottom: 12 }}>
+              <Text style={[{ fontSize: 9, fontWeight: '800', letterSpacing: 0.8, color: '#a97c39', marginBottom: 6 }]}>QUICK ADD</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                {BUCKET_PRESETS.map((p) => (
+                  <Pressable key={p.name} onPress={() => openNewBucket(p.name)} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14, borderWidth: 1, borderColor: '#e6dcc5', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }} testID={`bucket-preset-${p.name.replace(/\W+/g, '-').toLowerCase()}`}>
+                    <Ionicons name={p.icon as any} size={12} color="#9a6d32" />
+                    <Text style={{ fontSize: 10, color: '#9a6d32', fontWeight: '700' }}>{p.name}</Text>
+                  </Pressable>
+                ))}
+              </View>
             </View>
-          ))}
+          )}
+
+          {activeBuckets.length === 0 && !addingRestricted && (
+            <Text style={{ fontSize: 11, color: C.muted2, marginBottom: 12 }}>No active buckets yet. Tap a preset above or the button below to create your first.</Text>
+          )}
+
+          {/* Active buckets list — each with Add/Use quick actions and progress bar */}
+          {activeBuckets.map((b: any) => {
+            const target = Number(b.target || 0);
+            const amt = Number(b.amount || 0);
+            const pct = target > 0 ? Math.min(100, (amt / target) * 100) : 0;
+            return (
+              <View key={b.id} style={{ paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: t.dark ? '#3a342b' : '#f1ede6' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Pressable onPress={() => openEditBucket(b)} style={{ flex: 1 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+                      <View style={{ flex: 1, marginRight: 8 }}>
+                        <Text style={[{ fontSize: 13, fontWeight: '700' }, t.textInk]} numberOfLines={1}>{b.name}</Text>
+                        {target > 0 && (
+                          <Text style={{ fontSize: 9, color: C.muted2 }}>
+                            {MONEY(amt)} of {MONEY(target)}{b.targetDate ? ` · by ${b.targetDate}` : ''}
+                          </Text>
+                        )}
+                        {target === 0 && (
+                          <Text style={{ fontSize: 9, color: C.muted2 }}>Tap to set a target or details</Text>
+                        )}
+                      </View>
+                      <Text style={[{ fontSize: 14, fontWeight: '800', color: '#9a6d32' }]}>{MONEY(amt)}</Text>
+                    </View>
+                    {target > 0 && (
+                      <View style={{ height: 5, borderRadius: 4, backgroundColor: t.dark ? '#3a342b' : '#f0e7d1', marginTop: 6, overflow: 'hidden' }}>
+                        <View style={{ height: '100%', width: `${pct}%`, backgroundColor: pct >= 100 ? '#4c8b56' : '#c49450' }} />
+                      </View>
+                    )}
+                  </Pressable>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
+                  <Pressable onPress={() => { setTxBucket({ bucket: b, action: 'add' }); setTxAmt(''); }} style={{ flex: 1, paddingVertical: 7, borderRadius: 8, borderWidth: 1, borderColor: '#c49450', alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 4 }} testID={`bucket-add-${b.id}`}>
+                    <Ionicons name="add-circle-outline" size={13} color="#9a6d32" />
+                    <Text style={{ fontSize: 10, color: '#9a6d32', fontWeight: '800' }}>Add</Text>
+                  </Pressable>
+                  <Pressable onPress={() => { setTxBucket({ bucket: b, action: 'use' }); setTxAmt(''); }} style={{ flex: 1, paddingVertical: 7, borderRadius: 8, borderWidth: 1, borderColor: '#c49450', alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 4 }} testID={`bucket-use-${b.id}`}>
+                    <Ionicons name="remove-circle-outline" size={13} color="#9a6d32" />
+                    <Text style={{ fontSize: 10, color: '#9a6d32', fontWeight: '800' }}>Use</Text>
+                  </Pressable>
+                  <Pressable onPress={() => archiveBucket(b.id)} style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, borderWidth: 1, borderColor: '#e6dcc5', alignItems: 'center', justifyContent: 'center' }} testID={`bucket-archive-${b.id}`}>
+                    <Ionicons name="archive-outline" size={14} color="#9a6d32" />
+                  </Pressable>
+                  <Pressable onPress={() => deleteBucket(b.id)} style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, borderWidth: 1, borderColor: '#e6dcc5', alignItems: 'center', justifyContent: 'center' }} testID={`bucket-del-${b.id}`}>
+                    <Ionicons name="trash-outline" size={14} color="#b06a5b" />
+                  </Pressable>
+                </View>
+              </View>
+            );
+          })}
+
           {addingRestricted ? (
             <View style={{ marginTop: 12 }}>
               <Text style={s.label}>Bucket name</Text>
               <TextInput style={s.input} value={newBucketName} onChangeText={setNewBucketName} placeholder="e.g., Q3 Taxes, Christmas Gifts" autoFocus testID="bucket-name" />
-              <Text style={s.label}>Amount</Text>
+              <Text style={[s.label, { marginTop: 10 }]}>Current amount</Text>
               <View style={s.amountInput}>
                 <Text style={s.amountPrefix}>$</Text>
                 <TextInput style={[s.input, { paddingLeft: 26 }]} value={newBucketAmt} onChangeText={setNewBucketAmt} keyboardType="numeric" placeholder="0" testID="bucket-amount" />
               </View>
-              <View style={{ marginTop: 12 }}>
-                <GoldButton label={editingBucket ? 'Save bucket' : 'Add bucket'} onPress={() => {
-                  const cleanAmt = Math.max(0, Math.round(Number((newBucketAmt || '').replace(/[^0-9.]/g, '')) || 0));
-                  const cleanName = newBucketName.trim();
-                  if (!cleanName) return;
-                  if (editingBucket) {
-                    setRestrictedBuckets((prev: any[]) => prev.map((x: any) => x.id === editingBucket.id ? { ...x, name: cleanName, amount: cleanAmt } : x));
-                  } else {
-                    setRestrictedBuckets((prev: any[]) => [...prev, { id: `bucket-${Date.now()}`, name: cleanName, amount: cleanAmt }]);
-                  }
-                  setAddingRestricted(false); setEditingBucket(null);
-                  setNewBucketName(''); setNewBucketAmt('');
-                }} disabled={!newBucketName.trim()} testID="bucket-save" />
+              <Text style={[s.label, { marginTop: 10 }]}>Target amount (optional)</Text>
+              <View style={s.amountInput}>
+                <Text style={s.amountPrefix}>$</Text>
+                <TextInput style={[s.input, { paddingLeft: 26 }]} value={newBucketTarget} onChangeText={setNewBucketTarget} keyboardType="numeric" placeholder="0" testID="bucket-target" />
               </View>
-              <Pressable onPress={() => { setAddingRestricted(false); setEditingBucket(null); setNewBucketName(''); setNewBucketAmt(''); }} style={{ marginTop: 10, alignItems: 'center' }}>
+              <Text style={[s.label, { marginTop: 10 }]}>Target date (optional)</Text>
+              <TextInput style={s.input} value={newBucketTargetDate} onChangeText={setNewBucketTargetDate} placeholder="e.g., Dec 2026" testID="bucket-target-date" />
+              <Text style={[s.label, { marginTop: 10 }]}>Recurring contribution / mo (optional)</Text>
+              <View style={s.amountInput}>
+                <Text style={s.amountPrefix}>$</Text>
+                <TextInput style={[s.input, { paddingLeft: 26 }]} value={newBucketRecurring} onChangeText={setNewBucketRecurring} keyboardType="numeric" placeholder="0" testID="bucket-recurring" />
+              </View>
+              <Text style={[{ fontSize: 9, marginTop: 4 }, t.textMuted]}>
+                Recurring is informational for now — a reminder of your plan. It never auto-moves money.
+              </Text>
+              <View style={{ marginTop: 14 }}>
+                <GoldButton label={editingBucket ? 'Save bucket' : 'Add bucket'} onPress={saveBucket} disabled={!newBucketName.trim()} testID="bucket-save" />
+              </View>
+              <Pressable onPress={() => { setAddingRestricted(false); setEditingBucket(null); resetBucketDraft(); }} style={{ marginTop: 10, alignItems: 'center' }}>
                 <Text style={{ color: C.muted2, fontSize: 11 }}>Cancel</Text>
               </Pressable>
             </View>
           ) : (
-            <Pressable onPress={() => { setEditingBucket(null); setNewBucketName(''); setNewBucketAmt(''); setAddingRestricted(true); }} style={[s.subcategoryRow, { justifyContent: 'center', marginTop: 8 }]} testID="bucket-add">
-              <Ionicons name="add-circle-outline" size={16} color="#9a6d32" />
-              <Text style={{ color: '#9a6d32', fontSize: 11, fontWeight: '700', marginLeft: 6 }}>Add set-aside bucket</Text>
-            </Pressable>
+            activeBuckets.length < 20 && (
+              <Pressable onPress={() => openNewBucket()} style={[s.subcategoryRow, { justifyContent: 'center', marginTop: 12 }]} testID="bucket-add">
+                <Ionicons name="add-circle-outline" size={16} color="#9a6d32" />
+                <Text style={{ color: '#9a6d32', fontSize: 11, fontWeight: '700', marginLeft: 6 }}>Add custom bucket</Text>
+              </Pressable>
+            )
+          )}
+
+          {activeBuckets.length >= 20 && !addingRestricted && (
+            <Text style={{ fontSize: 10, color: C.muted2, marginTop: 8, textAlign: 'center' }}>
+              You&apos;ve reached the 20-bucket limit. Archive or delete one to add more.
+            </Text>
+          )}
+
+          {archivedBuckets.length > 0 && (
+            <View style={{ marginTop: 14 }}>
+              <Pressable onPress={() => setShowArchived(!showArchived)} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6 }} testID="bucket-archived-toggle">
+                <Text style={[{ fontSize: 10, fontWeight: '800', letterSpacing: 0.8, color: '#a97c39' }]}>ARCHIVED ({archivedBuckets.length})</Text>
+                <Ionicons name={showArchived ? 'chevron-down' : 'chevron-forward'} size={13} color="#a97c39" />
+              </Pressable>
+              {showArchived && archivedBuckets.map((b: any) => (
+                <View key={b.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, opacity: 0.6 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{b.name}</Text>
+                    <Text style={{ fontSize: 9, color: C.muted2 }}>{MONEY(b.amount)} · archived (not counted)</Text>
+                  </View>
+                  <Pressable onPress={() => archiveBucket(b.id)} style={{ paddingHorizontal: 8, paddingVertical: 6 }} testID={`bucket-unarchive-${b.id}`}>
+                    <Ionicons name="arrow-undo-outline" size={14} color="#9a6d32" />
+                  </Pressable>
+                  <Pressable onPress={() => deleteBucket(b.id)} style={{ paddingHorizontal: 8, paddingVertical: 6 }}>
+                    <Ionicons name="trash-outline" size={14} color="#b06a5b" />
+                  </Pressable>
+                </View>
+              ))}
+            </View>
           )}
         </View>
+      </Sheet>
+
+      {/* Add / Use money sheet — quick +/- flow. Never lets a bucket go below $0. */}
+      <Sheet visible={!!txBucket} close={() => { setTxBucket(null); setTxAmt(''); }} title={txBucket ? `${txBucket.action === 'add' ? 'Add to' : 'Use from'} ${txBucket.bucket.name}` : ''} subtitle={txBucket?.action === 'add' ? 'Allocate money from Available Cash to this bucket.' : 'Return money from this bucket to Available Cash. Bucket stays at $0 minimum.'}>
+        {txBucket && (
+          <View>
+            <Text style={s.label}>Amount</Text>
+            <View style={s.amountInput}>
+              <Text style={s.amountPrefix}>$</Text>
+              <TextInput style={[s.input, { paddingLeft: 26 }]} value={txAmt} onChangeText={setTxAmt} keyboardType="numeric" placeholder="0" autoFocus testID="bucket-tx-amt" />
+            </View>
+            <Text style={[{ fontSize: 9, marginTop: 6 }, t.textMuted]}>
+              Current: {MONEY(txBucket.bucket.amount)}{txBucket.action === 'use' ? ` · Max you can use: ${MONEY(txBucket.bucket.amount)}` : ''}
+            </Text>
+            <View style={{ marginTop: 14 }}>
+              <GoldButton label={`${txBucket.action === 'add' ? 'Add' : 'Use'} money`} onPress={commitBucketTx} testID="bucket-tx-save" />
+            </View>
+          </View>
+        )}
       </Sheet>
       <Sheet visible={!!editRow} close={() => setEditRow(null)} title={editRow ? `Edit · ${editRow.row.name}` : ''} subtitle={editRow?.row.id === 'cash' || editRow?.row.id === 'investments' ? 'This value is added on top of any linked account balances.' : 'Update the name or amount at any time.'}>
         {editRow && (
@@ -2863,20 +3255,28 @@ const WorthCard = ({ title, total, rows, hidden, onRowPress, onAdd }: any) => {
 };
 
 /* ---------------- Legacy / Coaching / Membership / Settings / More ---------------- */
-const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTimeframe, contribution, setContribution, hypothetical, setHypothetical, cumulative, setCumulative, currentAge, setCurrentAge, retirementAge, setRetirementAge }: any) => {
+const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTimeframe, contribution, setContribution, hypothetical, setHypothetical, hypoFrequency, setHypoFrequency, hypoDuration, setHypoDuration, returnRate, setReturnRate, cumulative, setCumulative, currentAge, setCurrentAge, retirementAge, setRetirementAge }: any) => {
   const t = useThemed();
   const [editingHypo, setEditingHypo] = useState(false);
   const [hypoDraft, setHypoDraft] = useState('');
+  const [hypoFreqDraft, setHypoFreqDraft] = useState<'onetime' | 'monthly' | 'annual'>('onetime');
+  const [hypoDurDraft, setHypoDurDraft] = useState<string>('');
+  const [editingRate, setEditingRate] = useState(false);
+  const [rateDraft, setRateDraft] = useState<string>(String(returnRate ?? DEFAULT_LEGACY_RATE));
+  const [showMath, setShowMath] = useState(false);
   const [ageDraft, setAgeDraft] = useState<string>(String(currentAge ?? ''));
   const [retDraft, setRetDraft] = useState<string>(String(retirementAge ?? ''));
   // Whenever the persisted ages change (e.g. loaded from storage), sync the
   // drafts so users always see the current value in the inputs.
   React.useEffect(() => { setAgeDraft(String(currentAge ?? '')); }, [currentAge]);
   React.useEffect(() => { setRetDraft(String(retirementAge ?? '')); }, [retirementAge]);
+  React.useEffect(() => { setRateDraft(String(returnRate ?? DEFAULT_LEGACY_RATE)); }, [returnRate]);
   const [ageError, setAgeError] = useState('');
 
   // Rate assumption used across every Legacy projection + mirrored on Home.
-  const RATE = 0.07;                    // 7% annual
+  // Now user-editable — defaults to DEFAULT_LEGACY_RATE (7%) but can be
+  // adjusted via the assumption chip beside the projection card.
+  const RATE = (Number(returnRate) || DEFAULT_LEGACY_RATE) / 100;   // e.g. 0.07
   const MONTHLY_RATE = RATE / 12;       // monthly compounding
 
   // ---- BUILD vs GROW split (spec #21) --------------------------------------
@@ -2895,28 +3295,34 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
     : (isRetirement ? yearsUntilRetirement : (GROW[timeframe]?.years || 0));
 
   const hypoValue = Math.max(0, Number((hypothetical || '').replace(/[^0-9.]/g, '')) || 0);
+  const hypoFreq: 'onetime' | 'monthly' | 'annual' = hypoFrequency || 'onetime';
+  const hypoDur: number | null = typeof hypoDuration === 'number' ? hypoDuration : null;
   const monthlySurplus = Number(monthlyNet) || 0; // may be negative
 
   // ---- Projection math -----------------------------------------------------
-  // BUILD (1-5yr): current cash + investments compounded at 7% + surplus over the period.
-  // GROW (10yr+ / Retirement): investments ONLY, monthly compounding, monthly contributions.
+  // BUILD (1-5yr): current cash + investments compounded at RATE + surplus over the period.
+  //   Hypotheticals: one-time adds to invest principal; monthly/annual add to
+  //   cash accretion for their active duration (capped at n if user set one).
+  // GROW (10yr+ / Retirement): investments ONLY, monthly compounding + monthly contributions.
+  //   Hypotheticals: one-time adds to starting principal; monthly adds to
+  //   contribution stream; annual becomes annual/12 added to contribution.
   const buildProjectionAt = (n: number): number => {
-    const grownInvest = (investmentTotal + hypoValue) * Math.pow(1 + RATE, n);
-    // Cash grows only by the added surplus (no rate applied). Negative
-    // surplus reduces cash but never below zero when we display it — the
-    // "surplus" row separately shows the actual (possibly-negative) figure.
-    const cashPortion = totalCash + monthlySurplus * 12 * n;
+    const h = hypoContributions(hypoValue, hypoFreq, hypoDur, n);
+    const grownInvest = (investmentTotal + h.addToPrincipal) * Math.pow(1 + RATE, n);
+    const cashPortion = totalCash + monthlySurplus * 12 * n + h.addToCash;
     return Math.round(grownInvest + cashPortion);
   };
   const growProjectionAt = (n: number): number => {
+    const h = hypoContributions(hypoValue, hypoFreq, hypoDur, n);
     // Monthly compounding: FV = P * (1+r/12)^(n*12) + C * [((1+r/12)^(n*12) - 1) / (r/12)]
     const months = Math.max(0, Math.round(n * 12));
     const growthFactor = Math.pow(1 + MONTHLY_RATE, months);
-    const startingPrincipal = investmentTotal + hypoValue;
+    const startingPrincipal = investmentTotal + h.addToPrincipal;
+    const effectiveContribution = contribution + h.addToMonthlyContrib;
     const fvPrincipal = startingPrincipal * growthFactor;
     const fvContrib = MONTHLY_RATE > 0
-      ? contribution * ((growthFactor - 1) / MONTHLY_RATE)
-      : contribution * months;
+      ? effectiveContribution * ((growthFactor - 1) / MONTHLY_RATE)
+      : effectiveContribution * months;
     return Math.round(fvPrincipal + fvContrib);
   };
   const projectionAtYear = (n: number): number => (isBuild ? buildProjectionAt(n) : growProjectionAt(n));
@@ -2935,13 +3341,25 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
     }
     return rows;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [years, isBuild, totalCash, investmentTotal, hypoValue, monthlySurplus, contribution, currentAge, retirementAge]);
+  }, [years, isBuild, totalCash, investmentTotal, hypoValue, hypoFreq, hypoDur, monthlySurplus, contribution, currentAge, retirementAge, RATE, MONTHLY_RATE]);
 
   const commitHypo = () => {
     const clean = Math.max(0, Math.round(Number(hypoDraft.replace(/[^0-9.]/g, '')) || 0));
+    const durClean = (hypoDurDraft || '').replace(/[^0-9]/g, '');
+    const durNum = durClean ? Math.max(1, Math.min(50, Number(durClean))) : null;
     setHypothetical(clean > 0 ? String(clean) : '');
+    setHypoFrequency(clean > 0 ? hypoFreqDraft : 'onetime');
+    setHypoDuration(clean > 0 && hypoFreqDraft !== 'onetime' ? durNum : null);
     setEditingHypo(false);
     setHypoDraft('');
+    setHypoDurDraft('');
+  };
+
+  const commitRate = () => {
+    const cleanNum = Number((rateDraft || '').replace(/[^0-9.]/g, ''));
+    const clamped = !isFinite(cleanNum) || cleanNum <= 0 ? DEFAULT_LEGACY_RATE : Math.min(30, Math.max(0.1, cleanNum));
+    setReturnRate(clamped);
+    setEditingRate(false);
   };
 
   const commitAges = () => {
@@ -2966,8 +3384,16 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
 
   const projectionTitle = isBuild ? 'PROJECTED WEALTH' : 'PROJECTED INVESTMENTS';
   const projectionSubtitle = isBuild
-    ? 'Based on your current cash, investments, and monthly budget surplus.'
+    ? `Cash grows from surplus only. Investments compound at ${Math.round(RATE * 100)}%.`
     : `Assumes a ${Math.round(RATE * 100)}% annual return and your selected monthly contribution.`;
+
+  const hypoDesc = hypoValue > 0
+    ? (hypoFreq === 'onetime'
+        ? `${MONEY(hypoValue)} one-time`
+        : hypoFreq === 'monthly'
+          ? `${MONEY(hypoValue)}/mo${hypoDur ? ` for ${hypoDur}yr${hypoDur === 1 ? '' : 's'}` : ''}`
+          : `${MONEY(hypoValue)}/yr${hypoDur ? ` for ${hypoDur}yr${hypoDur === 1 ? '' : 's'}` : ''}`)
+    : '+ Add';
 
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
@@ -3043,6 +3469,105 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
         </View>
       </View>
 
+      {/* Assumption chips — tap any to edit. These are the exact inputs used
+          in the projection above so users can see and adjust them inline. */}
+      <View style={[s.assumptionsCard, t.cardBg]} testID="legacy-assumptions">
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 0.4 }, t.textInk]}>YOUR ASSUMPTIONS</Text>
+          <Text style={[{ fontSize: 8 }, t.textMuted]}>Tap to edit</Text>
+        </View>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+          {/* Return rate chip — always shown */}
+          <Pressable onPress={() => { setRateDraft(String(returnRate ?? DEFAULT_LEGACY_RATE)); setEditingRate(true); }} style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 1, borderColor: '#c49450', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }} testID="legacy-chip-rate">
+            <Text style={{ fontSize: 8, color: '#a97c39', fontWeight: '800', letterSpacing: 0.6 }}>RETURN</Text>
+            <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 2 }, t.textInk]}>{Math.round(RATE * 100)}%</Text>
+          </Pressable>
+          {/* Monthly contribution — GROW modes only */}
+          {!isBuild && (
+            <Pressable onPress={() => setContribution(contribution)} style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 1, borderColor: '#c49450', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
+              <Text style={{ fontSize: 8, color: '#a97c39', fontWeight: '800', letterSpacing: 0.6 }}>CONTRIB / MO</Text>
+              <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 2 }, t.textInk]}>{MONEY(contribution)}</Text>
+            </Pressable>
+          )}
+          {/* Cash chip — BUILD modes only */}
+          {isBuild && (
+            <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 1, borderColor: '#e6dcc5', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
+              <Text style={{ fontSize: 8, color: '#a97c39', fontWeight: '800', letterSpacing: 0.6 }}>CASH</Text>
+              <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 2 }, t.textInk]}>{MONEY(totalCash)}</Text>
+            </View>
+          )}
+          <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 1, borderColor: '#e6dcc5', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
+            <Text style={{ fontSize: 8, color: '#a97c39', fontWeight: '800', letterSpacing: 0.6 }}>INVESTMENTS</Text>
+            <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 2 }, t.textInk]}>{MONEY(investmentTotal)}</Text>
+          </View>
+          <Pressable onPress={() => { setHypoDraft(hypothetical || ''); setHypoFreqDraft(hypoFreq); setHypoDurDraft(hypoDur ? String(hypoDur) : ''); setEditingHypo(true); }} style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 1, borderColor: '#c49450', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }} testID="legacy-chip-hypo">
+            <Text style={{ fontSize: 8, color: '#a97c39', fontWeight: '800', letterSpacing: 0.6 }}>HYPOTHETICAL</Text>
+            <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 2 }, t.textInk]}>{hypoDesc}</Text>
+          </Pressable>
+          {isRetirement && (
+            <>
+              <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 1, borderColor: '#e6dcc5', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
+                <Text style={{ fontSize: 8, color: '#a97c39', fontWeight: '800', letterSpacing: 0.6 }}>YEARS</Text>
+                <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 2 }, t.textInk]}>{yearsUntilRetirement}</Text>
+              </View>
+            </>
+          )}
+        </View>
+        <Text style={[{ fontSize: 8, marginTop: 8, fontStyle: 'italic' }, t.textMuted]}>
+          Actual data · assumptions in gold borders are user-editable.
+        </Text>
+      </View>
+
+      {/* How the math works — collapsible explanation directly wired to the
+          numbers above. Answers "why is my Y1 not just 1.07x my money?". */}
+      <Pressable onPress={() => setShowMath(!showMath)} style={[s.assumptionsCard, t.cardBg, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]} testID="legacy-math-toggle">
+        <View style={{ flex: 1 }}>
+          <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>How this is calculated</Text>
+          <Text style={[{ fontSize: 9, marginTop: 2 }, t.textMuted]}>Step-by-step math for the number above.</Text>
+        </View>
+        <Ionicons name={showMath ? 'chevron-down' : 'chevron-forward'} size={16} color={t.dark ? D.textMuted : '#aaa39a'} />
+      </Pressable>
+      {showMath && (
+        <View style={[s.assumptionsCard, t.cardBg]}>
+          {isBuild ? (
+            <>
+              <Text style={[{ fontSize: 10, lineHeight: 15 }, t.textInk]}>
+                <Text style={{ fontWeight: '800' }}>BUILD mode ({timeframe})</Text> — {years} year{years === 1 ? '' : 's'}.{'\n'}
+              </Text>
+              <View style={{ marginTop: 6, gap: 4 }}>
+                <Row label={`Cash (grows only from surplus)`} value={`${MONEY(totalCash)} + ${MONEY(monthlySurplus)} × 12 × ${years}${hypoValue > 0 && hypoFreq !== 'onetime' ? ' + hypo' : ''}`} muted={t.textMuted} ink={t.textInk} />
+                <Row label={`= Cash at Y${years}`} value={MONEY(totalCash + monthlySurplus * 12 * years + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToCash)} muted={t.textMuted} ink={t.textInk} valueColor="#4c8b56" />
+                <View style={{ height: 6 }} />
+                <Row label={`Investments (compound @ ${Math.round(RATE * 100)}%)`} value={`${MONEY(investmentTotal + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToPrincipal)} × (1 + ${(RATE).toFixed(2)})^${years}`} muted={t.textMuted} ink={t.textInk} />
+                <Row label={`= Investments at Y${years}`} value={MONEY(Math.round((investmentTotal + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToPrincipal) * Math.pow(1 + RATE, years)))} muted={t.textMuted} ink={t.textInk} valueColor="#4c8b56" />
+                <View style={{ height: 6 }} />
+                <Row label="TOTAL PROJECTION" value={MONEY(projection)} muted={t.textMuted} ink={t.textInk} valueColor="#9a6d32" />
+              </View>
+              <Text style={[{ fontSize: 9, marginTop: 8, lineHeight: 13 }, t.textMuted]}>
+                Cash does not grow at {Math.round(RATE * 100)}% — only what you add to it (your monthly surplus). The {Math.round(RATE * 100)}% return applies only to the invested portion.
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text style={[{ fontSize: 10, lineHeight: 15 }, t.textInk]}>
+                <Text style={{ fontWeight: '800' }}>GROW mode ({isRetirement ? `${years}yr Retirement` : timeframe})</Text> — investments only.{'\n'}
+              </Text>
+              <View style={{ marginTop: 6, gap: 4 }}>
+                <Row label="Starting principal" value={MONEY(investmentTotal + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToPrincipal)} muted={t.textMuted} ink={t.textInk} />
+                <Row label={`× (1 + ${Math.round(RATE * 100)}%/12)^(${years} × 12)`} value={MONEY(Math.round((investmentTotal + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToPrincipal) * Math.pow(1 + MONTHLY_RATE, years * 12)))} muted={t.textMuted} ink={t.textInk} />
+                <View style={{ height: 4 }} />
+                <Row label={`Monthly contributions (${MONEY(contribution + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToMonthlyContrib)}/mo × ${years * 12})`} value={MONEY(Math.round(MONTHLY_RATE > 0 ? (contribution + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToMonthlyContrib) * ((Math.pow(1 + MONTHLY_RATE, years * 12) - 1) / MONTHLY_RATE) : (contribution + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToMonthlyContrib) * years * 12))} muted={t.textMuted} ink={t.textInk} />
+                <View style={{ height: 6 }} />
+                <Row label="TOTAL PROJECTION" value={MONEY(projection)} muted={t.textMuted} ink={t.textInk} valueColor="#9a6d32" />
+              </View>
+              <Text style={[{ fontSize: 9, marginTop: 8, lineHeight: 13 }, t.textMuted]}>
+                Cash is intentionally excluded from GROW projections — retirement wealth compounds from your invested portion + ongoing contributions.
+              </Text>
+            </>
+          )}
+        </View>
+      )}
+
       {/* Cumulative-year toggle. */}
       {years > 0 && (
         <Pressable onPress={() => setCumulative(!cumulative)} style={[s.assumptionsCard, t.cardBg, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]} testID="legacy-cumulative-toggle">
@@ -3104,7 +3629,7 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
             </>
           )}
           {hypoValue > 0 && (
-            <Row label="+ Hypothetical (modeled)" value={MONEY(hypoValue)} muted={t.textMuted} ink={t.textInk} valueColor="#c9a56c" labelColor="#c9a56c" />
+            <Row label={`+ Hypothetical (${hypoFreq === 'onetime' ? 'one-time' : hypoFreq === 'monthly' ? 'monthly' : 'annual'}${hypoDur ? ` × ${hypoDur}yr` : ''})`} value={MONEY(hypoValue)} muted={t.textMuted} ink={t.textInk} valueColor="#c9a56c" labelColor="#c9a56c" />
           )}
         </View>
       </View>
@@ -3124,7 +3649,7 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
       )}
 
       {/* Hypothetical amount — clearly labeled as modeling only (spec #25). */}
-      <Pressable onPress={() => { setHypoDraft(hypothetical || ''); setEditingHypo(true); }} style={[s.assumptionsCard, t.cardBg]} testID="legacy-hypo-open">
+      <Pressable onPress={() => { setHypoDraft(hypothetical || ''); setHypoFreqDraft(hypoFreq); setHypoDurDraft(hypoDur ? String(hypoDur) : ''); setEditingHypo(true); }} style={[s.assumptionsCard, t.cardBg]} testID="legacy-hypo-open">
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
           <View style={{ flex: 1 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -3137,20 +3662,85 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
               For what-if modeling only. Never changes your actual Wealth, Budget, or account balances.
             </Text>
           </View>
-          <Text style={{ fontSize: 18, fontWeight: '700', color: '#9a6d32', marginLeft: 12 }}>{hypoValue > 0 ? MONEY(hypoValue) : '+ Add'}</Text>
+          <Text style={{ fontSize: 18, fontWeight: '700', color: '#9a6d32', marginLeft: 12 }}>{hypoDesc}</Text>
         </View>
       </Pressable>
 
-      <Sheet visible={editingHypo} close={() => { setEditingHypo(false); setHypoDraft(''); }} title="Add hypothetical amount" subtitle="This is imaginary money — used only for what-if modeling on this screen.">
+      <Sheet visible={editingHypo} close={() => { setEditingHypo(false); setHypoDraft(''); setHypoDurDraft(''); }} title="Add hypothetical amount" subtitle="Model a what-if. Choose one-time, monthly, or annual — with an optional duration.">
         <View>
-          <Text style={s.label}>One-time amount</Text>
+          <Text style={s.label}>Frequency</Text>
+          <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12 }}>
+            {(['onetime', 'monthly', 'annual'] as const).map((f) => (
+              <Pressable
+                key={f}
+                onPress={() => setHypoFreqDraft(f)}
+                style={{
+                  flex: 1,
+                  paddingVertical: 10,
+                  borderRadius: 10,
+                  borderWidth: 1,
+                  alignItems: 'center',
+                  borderColor: hypoFreqDraft === f ? '#c49450' : (t.dark ? D.border : '#ece5d5'),
+                  backgroundColor: hypoFreqDraft === f ? '#c4945018' : 'transparent',
+                }}
+                testID={`legacy-hypo-freq-${f}`}
+              >
+                <Text style={{ fontSize: 11, fontWeight: '700', color: hypoFreqDraft === f ? '#9a6d32' : (t.dark ? D.textMuted : C.muted2) }}>
+                  {f === 'onetime' ? 'One-time' : f === 'monthly' ? 'Monthly' : 'Annual'}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          <Text style={s.label}>{hypoFreqDraft === 'onetime' ? 'One-time amount' : hypoFreqDraft === 'monthly' ? 'Amount per month' : 'Amount per year'}</Text>
           <View style={s.amountInput}>
             <Text style={s.amountPrefix}>$</Text>
             <TextInput style={[s.input, { paddingLeft: 26 }]} value={hypoDraft} onChangeText={setHypoDraft} keyboardType="numeric" placeholder="0" autoFocus testID="legacy-hypo-amount" />
           </View>
+          {hypoFreqDraft !== 'onetime' && (
+            <>
+              <Text style={[s.label, { marginTop: 12 }]}>Duration in years (optional)</Text>
+              <TextInput
+                style={s.input}
+                value={hypoDurDraft}
+                onChangeText={(v) => setHypoDurDraft(v.replace(/[^0-9]/g, ''))}
+                keyboardType="numeric"
+                placeholder="Leave blank to apply for the full projection horizon"
+                placeholderTextColor={t.dark ? D.textMuted : C.muted}
+                testID="legacy-hypo-duration"
+              />
+              <Text style={[{ fontSize: 9, marginTop: 4 }, t.textMuted]}>
+                Blank = ongoing (applies for the entire 1/5/10/20/30yr horizon). Set a number to model a bounded item like a car loan or bonus period.
+              </Text>
+            </>
+          )}
           <View style={{ marginTop: 14 }}>
             <GoldButton label={hypoValue > 0 && Number(hypoDraft.replace(/[^0-9.]/g, '') || 0) === 0 ? 'Remove hypothetical' : 'Save'} onPress={commitHypo} testID="legacy-hypo-save" />
           </View>
+        </View>
+      </Sheet>
+
+      {/* Return rate sheet — tap the RETURN chip to edit. Clamped 0.1-30%. */}
+      <Sheet visible={editingRate} close={() => setEditingRate(false)} title="Expected annual return" subtitle="This is the compounding rate applied to your invested portion. 7% is a common long-term U.S. stock market assumption.">
+        <View>
+          <Text style={s.label}>Return %</Text>
+          <TextInput
+            style={s.input}
+            value={rateDraft}
+            onChangeText={(v) => setRateDraft(v.replace(/[^0-9.]/g, ''))}
+            keyboardType="numeric"
+            placeholder="7"
+            autoFocus
+            testID="legacy-rate-input"
+          />
+          <Text style={[{ fontSize: 9, marginTop: 4 }, t.textMuted]}>
+            Reasonable values: 3-4% conservative (bonds/CDs), 6-8% balanced, 9-10% aggressive equities. Past performance is not a guarantee.
+          </Text>
+          <View style={{ marginTop: 14 }}>
+            <GoldButton label="Save" onPress={commitRate} testID="legacy-rate-save" />
+          </View>
+          <Pressable onPress={() => { setRateDraft(String(DEFAULT_LEGACY_RATE)); }} style={{ marginTop: 10, alignItems: 'center' }}>
+            <Text style={{ color: '#9a6d32', fontSize: 11, fontWeight: '700' }}>Reset to {DEFAULT_LEGACY_RATE}%</Text>
+          </Pressable>
         </View>
       </Sheet>
 
@@ -3900,7 +4490,15 @@ function MainApp() {
   const [legacyTimeframe, setLegacyTimeframe] = useState<string>('Retirement');
   const [legacyContribution, setLegacyContribution] = useState<number>(0);
   const [legacyHypothetical, setLegacyHypothetical] = useState<string>('');
+  // Hypothetical frequency + optional duration (years). Undefined duration
+  // means "for the entire projection horizon". Frequency defaults to onetime
+  // so existing users' saved hypos behave the same as before.
+  const [legacyHypoFrequency, setLegacyHypoFrequency] = useState<'onetime' | 'monthly' | 'annual'>('onetime');
+  const [legacyHypoDuration, setLegacyHypoDuration] = useState<number | null>(null);
   const [legacyCumulative, setLegacyCumulative] = useState<boolean>(false);
+  // User-editable return-rate assumption for the Legacy projection. Persisted
+  // so users can model different assumptions and have them survive reload.
+  const [legacyReturnRate, setLegacyReturnRate] = useState<number>(DEFAULT_LEGACY_RATE);
   // Retirement-age inputs (Phase 5 #24) — sensible defaults so first-time
   // users see a plausible projection instantly.
   const [currentAge, setCurrentAge] = useState<number>(30);
@@ -3934,7 +4532,10 @@ function MainApp() {
           if (typeof data.legacyTimeframe === 'string') setLegacyTimeframe(data.legacyTimeframe);
           if (typeof data.legacyContribution === 'number') setLegacyContribution(data.legacyContribution);
           if (typeof data.legacyHypothetical === 'string') setLegacyHypothetical(data.legacyHypothetical);
+          if (data.legacyHypoFrequency === 'onetime' || data.legacyHypoFrequency === 'monthly' || data.legacyHypoFrequency === 'annual') setLegacyHypoFrequency(data.legacyHypoFrequency);
+          if (typeof data.legacyHypoDuration === 'number' || data.legacyHypoDuration === null) setLegacyHypoDuration(data.legacyHypoDuration);
           if (typeof data.legacyCumulative === 'boolean') setLegacyCumulative(data.legacyCumulative);
+          if (typeof data.legacyReturnRate === 'number' && data.legacyReturnRate > 0 && data.legacyReturnRate <= 30) setLegacyReturnRate(data.legacyReturnRate);
           if (typeof data.currentAge === 'number') setCurrentAge(data.currentAge);
           if (typeof data.retirementAge === 'number') setRetirementAge(data.retirementAge);
           if (typeof data.budgetYear === 'number') setBudgetYear(data.budgetYear);
@@ -3947,8 +4548,8 @@ function MainApp() {
   // Persist on change (skip auth-managed fields)
   useEffect(() => {
     if (!hydrated) return;
-    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyCumulative, budgetYear, categoriesByYear, currentAge, retirementAge })).catch(() => {});
-  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyCumulative, budgetYear, categoriesByYear, currentAge, retirementAge]);
+    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyHypoFrequency, legacyHypoDuration, legacyCumulative, legacyReturnRate, budgetYear, categoriesByYear, currentAge, retirementAge })).catch(() => {});
+  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyHypoFrequency, legacyHypoDuration, legacyCumulative, legacyReturnRate, budgetYear, categoriesByYear, currentAge, retirementAge]);
 
   // Listen for SnapTrade OAuth callback deep link (jaleter://snaptrade-callback).
   useEffect(() => {
@@ -4176,8 +4777,8 @@ function MainApp() {
       {auth.user && stage === 'app' && !(appLock.enabled && appLock.locked) && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
           <EmailVerificationBanner isDark={isDark} />
-          {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} legacyContribution={legacyContribution} legacyHypothetical={legacyHypothetical} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
-          {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} categoriesByYear={categoriesByYear} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} budgetYear={budgetYear} onSwitchYear={switchBudgetYear} onCopyLastYear={(prevYear: number) => {
+          {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} legacyContribution={legacyContribution} legacyHypothetical={legacyHypothetical} legacyHypoFrequency={legacyHypoFrequency} legacyHypoDuration={legacyHypoDuration} legacyReturnRate={legacyReturnRate} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
+          {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} categoriesByYear={categoriesByYear} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} setTransactions={setTransactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} budgetYear={budgetYear} onSwitchYear={switchBudgetYear} onCopyLastYear={(prevYear: number) => {
             // "Copy last year" — deep-copies categories + planned amounts (per-
             // month figures inside subcategories.monthly + the base .budgeted
             // value) but strips any actual transactions. Categories that only
@@ -4207,13 +4808,16 @@ function MainApp() {
               timeframe: legacyTimeframe,
               contribution: legacyContribution,
               hypothetical: legacyHypothetical,
+              hypoFrequency: legacyHypoFrequency,
+              hypoDuration: legacyHypoDuration,
+              returnRate: legacyReturnRate,
               cumulative: legacyCumulative,
             },
           }} />}
           {active === 'transactions' && <TransactionsScreen transactions={mergedTransactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} alerts={alerts} openLinkSheet={() => { setActive('settings'); }} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={validLinked.length} onBack={() => setActive('home')} />}
-          {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} currentAge={currentAge} setCurrentAge={setCurrentAge} retirementAge={retirementAge} setRetirementAge={setRetirementAge} />}
+          {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} hypoFrequency={legacyHypoFrequency} setHypoFrequency={setLegacyHypoFrequency} hypoDuration={legacyHypoDuration} setHypoDuration={setLegacyHypoDuration} returnRate={legacyReturnRate} setReturnRate={setLegacyReturnRate} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} currentAge={currentAge} setCurrentAge={setCurrentAge} retirementAge={retirementAge} setRetirementAge={setRetirementAge} />}
           {active === 'reports' && <ReportsScreen transactions={transactions} categories={categories} incomeSources={incomeSources} back={() => nav('home')} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}
@@ -4236,6 +4840,9 @@ function MainApp() {
             setLegacyTimeframe('Retirement');
             setLegacyContribution(0);
             setLegacyHypothetical('');
+            setLegacyHypoFrequency('onetime');
+            setLegacyHypoDuration(null);
+            setLegacyReturnRate(DEFAULT_LEGACY_RATE);
             setLegacyCumulative(false);
             setCurrentAge(30);
             setRetirementAge(65);

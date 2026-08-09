@@ -913,3 +913,94 @@ Add Apple Sign-In to Login + Signup screens.
       NOTE for tester: on iOS build the Apple button IS shown and works. Not testable in Expo Go/web/Playwright — this is a platform restriction, not a bug.
 
       Report to /app/test_reports/iteration_17.json.
+
+  - agent: "main"
+    message: |
+      PRE-LAUNCH PUNCH-LIST — Option #1 (all 6 items) implemented in a single turn.
+      All changes are FRONTEND-ONLY in /app/frontend/app/index.tsx. No backend schema
+      or endpoint changes were required — all new state persists via existing
+      storage.setItem STORAGE_KEY payload.
+
+      TESTING SCOPE (frontend only via Playwright web preview at localhost:3000):
+
+      1. HOME LEGACY SNAPSHOT (fix) — /app/frontend/app/index.tsx `HomeScreen`.
+         - Log in as alex+test1@jaleter.app / password123 (or register a new account).
+         - On Home tab, scroll to the "LEGACY SNAPSHOT" card (only visible when the
+           user has any assets/investments/monthly-surplus data).
+         - Expected: TWO clearly-labeled rows —
+             CASH · GROWS FROM SURPLUS  → Y1 / Y5 / Y10 (cash only)
+             INVESTMENTS · COMPOUND @ 7%  → Y10 / Y20 / Y30 (compound)
+         - Confirm the numbers are DIFFERENT for cash vs investments (previously
+           bug: both rows mixed cash + invest + hypo).
+
+      2. LEGACY MATH TRANSPARENCY — LegacyScreen.
+         - Navigate to Legacy tab (bottom nav).
+         - Confirm the projection card is followed by a "YOUR ASSUMPTIONS" chip strip
+           showing tap-editable chips: RETURN (%), CONTRIB/MO, CASH (BUILD only),
+           INVESTMENTS, HYPOTHETICAL, YEARS (Retirement only).
+         - Tap "RETURN" chip → sheet opens ("Expected annual return"). Change to 8,
+           save, confirm projection recalculates.
+         - Confirm a "How this is calculated" collapsible card appears below the
+           assumptions strip. Tap to expand — verify it shows step-by-step math with
+           the actual dollar amounts, and the note explaining cash vs investments.
+
+      3. HYPOTHETICAL FREQUENCY PICKER — LegacyScreen.
+         - Tap "HYPOTHETICAL" chip (or the Hypothetical Amount card below).
+         - Sheet should show:
+           * Frequency segmented control: One-time / Monthly / Annual
+           * Amount input (label changes based on frequency)
+           * Duration in years field (visible only for Monthly/Annual, optional)
+         - Set: Monthly $500 for 5 years, save.
+         - Verify the projection recalculates and the chip now reads "$500/mo for 5yrs".
+
+      4. SET ASIDE REDESIGN — NetWorthScreen.
+         - Navigate to Net Worth tab.
+         - Confirm the Total Cash − Set Aside = Available strip. When Set Aside > Cash,
+           AVAILABLE should render in red with "Over-allocated" label (not clamped to 0).
+         - Tap SET ASIDE. Sheet should show:
+           * "QUICK ADD" preset chips: Emergency Fund, Taxes, Vacation / Travel, Home,
+             Auto, Medical, Education, Gifts / Holidays, Business, Other.
+           * Tap "Vacation / Travel" preset — inline form opens with name pre-filled.
+             Add Amount $1000, Target $5000, Target date "Dec 2026", save.
+           * Bucket appears with progress bar (20%).
+         - Tap the "Add" button on the bucket → sheet opens → add $500 → bucket now $1500.
+         - Tap "Use" button → sheet opens → use $2000 → bucket clamps to $0 (never negative).
+         - Tap archive icon → bucket moves to "ARCHIVED (n)" section.
+         - Expand archived → un-archive button restores; delete button confirms + removes.
+
+      5. BUDGET SUBCATEGORY REASSIGNMENT — BudgetScreen.
+         - Navigate to Budget tab.
+         - Expand "Steward" category. Add a subcategory "Test Delete" with $10.
+         - Log a manual transaction in Transactions tab against "Test Delete" — $50 expense.
+         - Return to Budget, tap the trash/close icon on "Test Delete".
+         - EXPECTED: A "Reassign" sheet opens with:
+           * Warning: "1 transaction affected"
+           * Radio list of every other subcategory grouped by category
+           * "Create new subcategory" option with name field
+         - Pick another subcategory (e.g. "Groceries"), tap "Move & delete Test Delete".
+         - Verify: (a) toast shows "Moved 1 transaction · deleted..." (b) transaction still
+           exists in Transactions, now assigned to Groceries; (c) financial totals unchanged.
+         - Repeat with a subcategory that has ZERO transactions — plain confirm dialog
+           should appear (no reassignment sheet).
+
+      6. RETIREMENT ASSUMPTION INPUTS — LegacyScreen.
+         - On Legacy tab, tap the "Retirement" pill under GROW.
+         - Confirm the Retirement Age card renders with Current age / Retirement age
+           inputs.
+         - Tap the RETURN chip in the assumptions strip — should still open the return-rate
+           sheet.
+         - Verify chip strip shows: RETURN, CONTRIB/MO, INVESTMENTS, HYPOTHETICAL, YEARS.
+
+      REGRESSION CHECKS:
+      - Home budget/networth cards still render.
+      - Transactions tab still lists all transactions.
+      - Adding / editing categories, subcategories, and earn sources still works.
+      - Legacy BUILD vs GROW toggle still works (1yr/2yr/.../30yr/Retirement).
+      - Reset App Data still clears everything (including new legacy state).
+      - Persistence: reload the page — new frequency, duration, return rate,
+        bucket data must all survive.
+
+      NO BACKEND changes. Skip backend tests unless the frontend calls surface an
+      unrelated regression.
+
+      Report to /app/test_reports/iteration_next.json (next available number).
