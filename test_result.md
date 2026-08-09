@@ -1153,3 +1153,65 @@ Add Apple Sign-In to Login + Signup screens.
           math card explaining it.
 
       Report to next iteration file.
+
+  - agent: "main"
+    message: |
+      POST-PHASE-3 REFINEMENT PASS — Legacy + Activity filters + Wealth cleanup + no-flash loading.
+
+      LEGACY (/app/frontend/app/index.tsx):
+      1. BUILD now holds investments FLAT (no 7% applied). Cash grows only from
+         positive monthly surplus. GROW / Retirement keep compounding at the
+         user-editable rate. Home Snapshot label updated:
+         BUILD · CASH + SURPLUS · INVESTMENTS FLAT
+         GROW · INVESTMENTS COMPOUND @ N%
+      2. Monthly Budget Surplus row is now TAPPABLE — opens a read-only
+         breakdown sheet showing:
+           Budgeted Monthly Income
+           − Budgeted Monthly Expenses
+           = Monthly Budget Surplus
+         + Source: "Based on <Month> <Year> budget"
+         When negative, sheet shows a "Surplus clamped to $0" banner + guidance.
+      3. Row text updated to "No positive budget surplus available for projection."
+         when the raw surplus is negative.
+
+      ACTIVITY:
+      4. Consolidated Date range + Account/bank filters into a single "Filter"
+         button that opens a bottom sheet with both sections + Reset/Done.
+         Filter button shows a gold dot when any advanced filter is active.
+
+      WEALTH (NetWorthScreen):
+      5. REMOVED the duplicate "Assets"/"Liabilities" WorthCards. Kept a single
+         collapsible "ASSETS & LIABILITIES" tree (renamed from WEALTH BY CATEGORY)
+         with per-category expand-to-account rows.
+      6. NEW top-of-page Sync banner ("Accounts synced" / "Updating your
+         accounts…" / "Syncing…" / "Refreshing…") with Last Synced timestamp
+         in the user's device local timezone (via toLocaleString('en-US', ...)).
+      7. No-flash loading state:
+         - Net Worth hero shows a skeleton bar until first fetch completes.
+         - Cash / Set Aside / Available strip shows "Updating your accounts…"
+           until linkedLoaded flips true.
+         - Removed the duplicate /accounts/all fetch inside NetWorthScreen so
+           there is only ONE request per token.
+         - refreshLinked keeps last-known linkedRows on failure — never wipes
+           to empty and never renders a $0 flash.
+      8. Timezone: all Last-Synced strings use toLocaleString('en-US', {...})
+         which is device-local by default; no hardcoded CST/CDT anywhere.
+
+      Frontend-only. NO backend schema changes required.
+
+      TESTING FOCUS:
+      - Legacy tab: verify BUILD 1yr/2yr/3yr/5yr and Retirement all display.
+        BUILD math no longer shows a 7% return applied to investments — they
+        should stay flat at the current value across all BUILD years.
+      - Legacy: tap "Monthly Budget Surplus" → drill-down sheet opens with
+        income/expense/surplus breakdown + "Based on <Month> <Year> budget".
+      - Activity: verify only ONE row of top filter pills + a "Filter" button;
+        tapping the button opens a sheet with Date range + Account chips.
+      - Wealth: on cold start, verify no negative/$0 net worth is briefly shown.
+        A "Updating your accounts…" strip should appear until data lands.
+        The old Assets/Liabilities cards are gone — only ONE collapsible
+        Assets & Liabilities card remains at the bottom.
+      - Home Legacy Snapshot: BUILD row (1YR/2YR/3YR/5YR) values should equal
+        currentCash + surplus*12*n + currentInvestments (flat), never compounded.
+
+      Report to next iteration file.
