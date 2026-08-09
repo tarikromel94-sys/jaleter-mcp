@@ -1004,3 +1004,56 @@ Add Apple Sign-In to Login + Signup screens.
       unrelated regression.
 
       Report to /app/test_reports/iteration_next.json (next available number).
+
+  - agent: "main"
+    message: |
+      PHASE 1 OF 3 — Data model + Wealth + Sync labels — implementation complete.
+
+      SCOPE:
+      1. Transaction TYPE now supports 'transfer' as a first-class type.
+         - Manual Transfer via TxForm PeriodPills — 3 options: Income / Expense / Transfer.
+         - Auto-classified from Plaid: system_category ∈ {transfer, credit_card_payment, loan_payment}
+           → Tx.type = 'transfer' at reshape time. Never counted as income or expense.
+         - isSystemTransaction now returns true when t.type === 'transfer' too.
+      2. `merchant` field added to Tx type + backend Plaid mapper (uses txn.merchant_name).
+         - New TextInput "Merchant" in the TxForm sheet.
+      3. `splits` array added to Tx type. Split allocations UI in TxForm:
+         - '+ Split this' button appends 2 rows (each with category/sub + amount).
+         - Allocated / Remaining summary + "Balanced" indicator.
+         - Save disabled until splits sum equals the total transaction amount.
+      4. Wealth de-dedupe by (link_id, account_id) — no more double-counting from repeat items.
+      5. Wealth zero-value insurance filter — term life / disability with $0 balance excluded.
+      6. New collapsible "WEALTH BY CATEGORY" card on NetWorthScreen:
+         - Assets: Cash / Investments / Real Estate / Vehicles / Other Assets.
+         - Liabilities: Credit Cards / Mortgage / Auto Loans / Student Loans / Other.
+         - Each row shows category total; expanding reveals every underlying
+           account (name, bank, last-sync, balance). Category totals = sum of rows.
+      7. Real "Last synced …" timestamp displayed atop the Wealth categories card
+         plus a Sync button that fires plaid/sync + accounts/sync.
+      8. Activity filters now include "Transfers" pill.
+      9. Activity rows display merchant (when different from description) + "Transfer"
+         badge + "Split (N)" badge for split transactions.
+
+      FILES CHANGED:
+      - /app/frontend/app/index.tsx (Tx type, isSystemTransaction, TxForm redesign,
+        Activity filter+rows, NetWorthScreen dedupe+collapsible categories)
+      - /app/backend/plaid_service.py (map_plaid_transaction now sets `merchant`)
+
+      NO backend schema changes required — merchant lands in existing bank_transactions
+      docs via the mapper; frontend Tx state persists via existing STORAGE_KEY.
+
+      TESTING TO PERFORM (frontend, both preview + code review acceptable):
+      - Add a manual Expense with a Merchant "Starbucks" and $10 — save, verify row
+        shows " · Starbucks" and $10 expense count updates.
+      - Add a manual Transfer $200 — verify:
+        * Doesn't show up in Income or Expense totals on Reports/Home.
+        * Activity row shows the swap icon and " · Transfer" tag.
+        * Activity Transfers pill filters to just this row.
+      - Add an Expense $180, tap "+ Split this", split $100/$80 across two subs.
+        Save disabled until amounts balance. Once balanced, save.
+      - Wealth tab: scroll to "WEALTH BY CATEGORY" card, verify:
+        * Last synced timestamp shown.
+        * Category totals collapsed by default; tap expands to show accounts.
+        * Category total == sum of expanded accounts.
+
+      NO backend changes required. Report to next iteration file.

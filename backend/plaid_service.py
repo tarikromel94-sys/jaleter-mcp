@@ -193,6 +193,10 @@ def map_plaid_transaction(user_id: str, item_id: str, account_id: str, org_name:
         or (txn.get('merchant_name') or '')
         or 'Transaction'
     )
+    # Merchant name — separate from description. Plaid supplies `merchant_name`
+    # (canonicalized retailer, e.g. "Starbucks") which is much more useful for
+    # Reports grouping than the raw description ("STARBUCKS #7842 SEATTLE WA").
+    merchant = (txn.get('merchant_name') or '').strip() or None
     category = ''
     cats = txn.get('personal_finance_category') or {}
     if isinstance(cats, dict) and cats.get('primary'):
@@ -212,6 +216,7 @@ def map_plaid_transaction(user_id: str, item_id: str, account_id: str, org_name:
         'currency': txn.get('iso_currency_code') or txn.get('unofficial_currency_code') or 'USD',
         'date': parsed,
         'description': description,
+        'merchant': merchant,
         'category': category,
         'pending': bool(txn.get('pending')),
         # Phase-3: system classification. `system_category` is the effective

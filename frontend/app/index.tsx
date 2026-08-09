@@ -305,7 +305,37 @@ const initialCategories = [
     { id: 'travel', name: 'Travel', budgeted: 0 }, { id: 'shopping', name: 'Shopping', budgeted: 0 }, { id: 'entertainment', name: 'Entertainment', budgeted: 0 }] },
 ];
 const initialIncome = [{ id: 'w2', name: 'W-2 Income', budgeted: 0 }, { id: 'contract', name: 'Contract Income', budgeted: 0 }, { id: 'business', name: 'Business Income', budgeted: 0 }];
-type Tx = { id: string; date: string; name: string; amount: number; type: 'income' | 'expense'; groupId: string; detailId?: string; origin: string; period: string; system_category?: string | null; is_transfer?: boolean; external_id?: string; };
+type Split = { groupId: string; detailId?: string; amount: number };
+type Tx = {
+  id: string;
+  date: string;
+  name: string;
+  amount: number;
+  // Type of transaction. `transfer` is a first-class type: an internal
+  // movement between the user's own accounts. Transfers never affect income
+  // or expense totals or net worth. Credit-card payments are automatically
+  // classified as transfers by the Plaid mapper.
+  type: 'income' | 'expense' | 'transfer';
+  groupId: string;
+  detailId?: string;
+  origin: string;
+  period: string;
+  // System classification set by the backend Plaid classifier — retained so
+  // reclassify sheets can surface the auto-detected value.
+  system_category?: string | null;
+  is_transfer?: boolean;
+  external_id?: string;
+  // Merchant name — canonical retailer name (e.g. "Costco Wholesale") used
+  // for grouping in Reports. Distinct from `name` which is the description.
+  merchant?: string;
+  // Split allocation — when populated, this transaction contributes to
+  // MULTIPLE budget categories. Sum of splits.amount should equal `amount`.
+  // If splits is empty/absent, the transaction uses top-level groupId/detailId.
+  splits?: Split[];
+  // Optional counterparty account references — only meaningful for `type: 'transfer'`.
+  transfer_from_account_id?: string;
+  transfer_to_account_id?: string;
+};
 
 // Phase-3 helper — a transaction that represents a self-move (transfer,
 // credit-card payment, or loan-principal payment) should NEVER inflate
@@ -313,6 +343,10 @@ type Tx = { id: string; date: string; name: string; amount: number; type: 'incom
 // the backend (Plaid PFC + description matching) and mirrored onto every
 // row surfaced to the app.
 const isSystemTransaction = (t: any): boolean => {
+  // Also treat top-level `type: 'transfer'` as system-excluded so manual
+  // transfers created by the user (no Plaid system_category) are still
+  // excluded from Budget actuals, Reports totals, and AI cash-flow.
+  if (t?.type === 'transfer') return true;
   const sc = (t?.system_category || '').toString().toLowerCase();
   return sc === 'transfer' || sc === 'credit_card_payment' || sc === 'loan_payment';
 };
@@ -2356,7 +2390,15 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
     } catch { setToast('Refresh failed. Please try again.'); }
     finally { setSyncing(false); }
   };
-  const shown = transactions.filter((tx: Tx) => filter === 'All' || (filter === 'Income' ? tx.type === 'income' : tx.type === 'expense'));
+  const shown = transactions.filter((tx: Tx) => {
+    if (filter === 'All') return true;
+    const isTransfer = tx.type === 'transfer' || isSystemTransaction(tx);
+    if (filter === 'Transfers') return isTransfer;
+    if (isTransfer) return false; // Income/Expense filters exclude transfers
+    if (filter === 'Income') return tx.type === 'income';
+    if (filter === 'Expenses') return tx.type === 'expense';
+    return true;
+  });
   const save = (t: any) => {
     setTransactions((xs: Tx[]) => xs.some(x => x.id === t.id) ? xs.map(x => x.id === t.id ? t : x) : [{ ...t, id: `manual-${Date.now()}`, origin: 'Manual', period: currentMonth() }, ...xs]);
     setEditing(null); setToast('Transaction saved and totals refreshed.');
@@ -2433,7 +2475,7 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
         </View>
         <Ionicons name={banner.kind === 'empty' ? 'chevron-forward' : (syncing ? 'sync-outline' : 'refresh-outline')} size={16} color={banner.iconColor} />
       </Pressable>
-      <PeriodPills values={['All','Income','Expenses']} value={filter} onChange={setFilter} testID="tx-filter" />
+      <PeriodPills values={['All','Income','Expenses','Transfers']} value={filter} onChange={setFilter} testID="tx-filter" />
       <View style={[s.transactionList, t.cardBg]}>
         {shown.length === 0 && (
           <View style={{ padding: 30, alignItems: 'center' }}>
@@ -2460,19 +2502,32 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
             </View>
           </View>
         )}
-        {shown.map((tx: Tx) => (
-          <Pressable key={tx.id} style={[s.transactionRow, t.dividerBorder]} onPress={() => setEditing(tx)} testID={`tx-${tx.id}`}>
-            <View style={[s.txIcon, tx.type === 'income' && { backgroundColor: '#e7f0e8' }]}>
-              <Ionicons name={tx.type === 'income' ? 'trending-up' : 'receipt-outline'} size={16} color={tx.type === 'income' ? '#4e765c' : '#886f4b'} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[{ fontSize: 11, fontWeight: '700', color: C.ink }, t.textInk]}>{tx.name}</Text>
-              <Text style={[{ fontSize: 8, color: C.muted2 }, t.textMuted]}>{tx.date} · {tx.origin}</Text>
-            </View>
-            <Text style={[{ fontSize: 11, fontWeight: '700', color: tx.type === 'income' ? '#568066' : C.ink }, tx.type === 'expense' && t.textInk]}>{tx.type === 'income' ? '+' : '−'}{EXACT(tx.amount)}</Text>
-            <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#b1aaa0'} />
-          </Pressable>
-        ))}
+        {shown.map((tx: Tx) => {
+          const isTransferRow = tx.type === 'transfer' || isSystemTransaction(tx);
+          const isIncomeRow = tx.type === 'income' && !isTransferRow;
+          const iconBg = isIncomeRow ? '#e7f0e8' : isTransferRow ? (t.dark ? '#2e2b3a' : '#e9e6f2') : undefined;
+          const iconName = isIncomeRow ? 'trending-up' : isTransferRow ? 'swap-horizontal-outline' : 'receipt-outline';
+          const iconColor = isIncomeRow ? '#4e765c' : isTransferRow ? '#6f5e9a' : '#886f4b';
+          const amountColor = isIncomeRow ? '#568066' : isTransferRow ? '#6f5e9a' : (t.dark ? D.text : C.ink);
+          const prefix = isIncomeRow ? '+' : isTransferRow ? '↔ ' : '−';
+          return (
+            <Pressable key={tx.id} style={[s.transactionRow, t.dividerBorder]} onPress={() => setEditing(tx)} testID={`tx-${tx.id}`}>
+              <View style={[s.txIcon, iconBg ? { backgroundColor: iconBg } : null]}>
+                <Ionicons name={iconName as any} size={16} color={iconColor} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[{ fontSize: 11, fontWeight: '700', color: C.ink }, t.textInk]} numberOfLines={1}>
+                  {tx.name}{tx.merchant && tx.merchant !== tx.name ? <Text style={[{ fontSize: 9, color: C.muted2 }, t.textMuted]}> · {tx.merchant}</Text> : null}
+                </Text>
+                <Text style={[{ fontSize: 8, color: C.muted2 }, t.textMuted]}>
+                  {tx.date?.slice(0, 10)} · {tx.origin}{isTransferRow ? ' · Transfer' : ''}{tx.splits && tx.splits.length > 0 ? ` · Split (${tx.splits.length})` : ''}
+                </Text>
+              </View>
+              <Text style={[{ fontSize: 11, fontWeight: '700', color: amountColor }]}>{prefix}{EXACT(tx.amount)}</Text>
+              <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#b1aaa0'} />
+            </Pressable>
+          );
+        })}
       </View>
       <Sheet visible={!!editing} close={() => setEditing(null)} title={editing?.id ? 'Edit transaction' : 'Add transaction'} subtitle="Manual changes immediately update Budget and cash.">
         {editing && <TxForm item={editing} categories={categories} incomeSources={incomeSources} save={save} remove={editing.id ? remove : null} />}
@@ -2482,60 +2537,111 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
   );
 };
 const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
-  const [t, setT] = useState({ ...item, amount: String(item.amount || '') });
+  const t = useThemed();
+  const [tx, setT] = useState<any>({
+    ...item,
+    amount: String(item.amount || ''),
+    merchant: item.merchant || '',
+    splits: Array.isArray(item.splits) ? item.splits.map((sp: any) => ({ ...sp, amount: String(sp.amount || '') })) : [],
+  });
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const isIncome = t.type === 'income';
-  const currentGroup = isIncome ? incomeSources.find((s: any) => s.id === t.groupId) : categories.find((c: any) => c.id === t.groupId);
+  const [showSplits, setShowSplits] = useState(Array.isArray(item.splits) && item.splits.length > 0);
+  const isIncome = tx.type === 'income';
+  const isTransfer = tx.type === 'transfer';
+  const currentGroup = isIncome ? incomeSources.find((s: any) => s.id === tx.groupId) : categories.find((c: any) => c.id === tx.groupId);
   const currentSubs = !isIncome && currentGroup ? currentGroup.subcategories : [];
+  const parsedAmount = Math.abs(Number((tx.amount || '').toString().replace(/[^0-9.]/g, '')) || 0);
+  // Splits accounting — sum of allocations vs total transaction amount.
+  const splitsTotal = (tx.splits || []).reduce((sum: number, sp: any) => sum + (Number(sp.amount) || 0), 0);
+  const splitsRemaining = parsedAmount > 0 ? parsedAmount - splitsTotal : 0;
+  const splitsValid = !showSplits || (tx.splits && tx.splits.length >= 2 && Math.abs(splitsRemaining) < 0.01 && tx.splits.every((sp: any) => (Number(sp.amount) || 0) > 0));
 
   // Parse the current date string. Fallback to today.
   const parsedDate = (() => {
-    if (!t.date) return new Date();
-    const d = new Date(t.date);
+    if (!tx.date) return new Date();
+    const d = new Date(tx.date);
     return isNaN(d.getTime()) ? new Date() : d;
   })();
   const displayDate = parsedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const isoDateForInput = parsedDate.toISOString().slice(0, 10); // yyyy-mm-dd for native <input type="date">
+  const isoDateForInput = parsedDate.toISOString().slice(0, 10);
 
   const setDateFromValue = (d: Date) => {
     if (!isNaN(d.getTime())) {
-      setT({ ...t, date: d.toISOString() });
+      setT({ ...tx, date: d.toISOString() });
     }
+  };
+
+  const addSplit = () => {
+    const firstCat = categories[0];
+    const firstSub = firstCat?.subcategories?.[0];
+    const seed = tx.splits && tx.splits.length > 0 ? tx.splits : [
+      { groupId: tx.groupId || firstCat?.id, detailId: tx.detailId || firstSub?.id, amount: '' },
+    ];
+    setT({
+      ...tx,
+      splits: [...seed, { groupId: firstCat?.id, detailId: firstSub?.id, amount: '' }],
+    });
+    setShowSplits(true);
+  };
+  const updateSplit = (idx: number, patch: any) => {
+    const next = [...(tx.splits || [])];
+    next[idx] = { ...next[idx], ...patch };
+    setT({ ...tx, splits: next });
+  };
+  const removeSplit = (idx: number) => {
+    const next = (tx.splits || []).filter((_: any, i: number) => i !== idx);
+    setT({ ...tx, splits: next });
+    if (next.length === 0) setShowSplits(false);
   };
 
   return (
     <View>
-      {/* Type selector — Income appears BEFORE Expense, both Title-Case */}
+      {/* Type selector — Income / Expense / Transfer. Transfers never affect
+          income or expense totals or Net Worth. */}
       <PeriodPills
-        values={['Income', 'Expense']}
-        value={t.type === 'income' ? 'Income' : 'Expense'}
+        values={['Income', 'Expense', 'Transfer']}
+        value={tx.type === 'income' ? 'Income' : tx.type === 'transfer' ? 'Transfer' : 'Expense'}
         onChange={(label: string) => {
           const v = label.toLowerCase();
           setT({
-            ...t,
+            ...tx,
             type: v,
-            groupId: v === 'income' ? (incomeSources[0]?.id || 'w2') : (categories[0]?.id || 'steward'),
-            detailId: v === 'income' ? undefined : (categories[0]?.subcategories?.[0]?.id),
+            // For Transfer, no group/sub is required — clear them.
+            groupId: v === 'transfer' ? '' : v === 'income' ? (incomeSources[0]?.id || 'w2') : (categories[0]?.id || 'steward'),
+            detailId: v === 'transfer' ? undefined : v === 'income' ? undefined : (categories[0]?.subcategories?.[0]?.id),
+            splits: v === 'transfer' ? [] : tx.splits,
           });
+          if (v === 'transfer') setShowSplits(false);
         }}
         testID="tx-type"
       />
       <Text style={s.label}>Description</Text>
-      <TextInput style={s.input} value={t.name} onChangeText={x => setT({ ...t, name: x })} testID="tx-name" />
+      <TextInput style={s.input} value={tx.name} onChangeText={x => setT({ ...tx, name: x })} testID="tx-name" />
+      <Text style={s.label}>Merchant <Text style={{ color: t.dark ? D.textMuted : C.muted, fontWeight: '400' }}>(optional)</Text></Text>
+      <TextInput
+        style={s.input}
+        value={tx.merchant}
+        onChangeText={(x) => setT({ ...tx, merchant: x })}
+        placeholder="e.g., Costco, Chevron, Whole Foods"
+        placeholderTextColor={t.dark ? D.textMuted : C.muted}
+        testID="tx-merchant"
+      />
+      <Text style={[{ fontSize: 9, marginTop: 3 }, t.textMuted]}>
+        Merchant is used in Reports to group your spending by retailer.
+      </Text>
       <Text style={s.label}>Amount</Text>
       <View style={s.amountInput}>
         <Text style={s.amountPrefix}>$</Text>
-        <TextInput style={[s.input, { paddingLeft: 26 }]} value={t.amount} onChangeText={x => setT({ ...t, amount: x })} keyboardType="numeric" testID="tx-amount" />
+        <TextInput style={[s.input, { paddingLeft: 26 }]} value={tx.amount} onChangeText={x => setT({ ...tx, amount: x })} keyboardType="numeric" testID="tx-amount" />
       </View>
 
       <Text style={s.label}>Date</Text>
       {Platform.OS === 'web' ? (
-        // Web: use native browser date picker (perfect UX in Safari/Chrome/Firefox)
         React.createElement('input' as any, {
           type: 'date',
           value: isoDateForInput,
           onChange: (e: any) => {
-            const iso = e.target.value; // yyyy-mm-dd
+            const iso = e.target.value;
             if (iso) {
               const [y, m, d] = iso.split('-').map(Number);
               setDateFromValue(new Date(y, m - 1, d));
@@ -2555,7 +2661,6 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
           'data-testid': 'tx-date-web',
         })
       ) : (
-        // Native (iOS/Android): open modal calendar picker
         <>
           <Pressable
             onPress={() => setShowDatePicker(true)}
@@ -2571,7 +2676,6 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
               mode="date"
               display={Platform.OS === 'ios' ? 'inline' : 'default'}
               onChange={(event: any, selected?: Date) => {
-                // On Android the picker closes automatically; on iOS keep it open until confirm
                 if (Platform.OS === 'android') setShowDatePicker(false);
                 if (event?.type === 'dismissed') { setShowDatePicker(false); return; }
                 if (selected) setDateFromValue(selected);
@@ -2587,45 +2691,167 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
       )}
 
       <Text style={s.label}>Month</Text>
-      <PeriodPills values={[...MONTHS]} value={t.period || currentMonth()} onChange={(v: string) => setT({ ...t, period: v })} testID="tx-month" />
-      <Text style={s.label}>{isIncome ? 'Earn source' : 'Category'}</Text>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-        {(isIncome ? incomeSources : categories).map((g: any) => {
-          const on = t.groupId === g.id;
-          return (
-            <Pressable
-              key={g.id}
-              onPress={() => setT({ ...t, groupId: g.id, detailId: isIncome ? undefined : g.subcategories?.[0]?.id })}
-              style={[s.pickerChip, on && s.pickerChipOn]}
-              testID={`tx-group-${g.id}`}
-            >
-              <Text style={[s.pickerChipText, on && { color: '#fff' }]}>{g.name}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
-      {!isIncome && currentSubs.length > 0 && (
+      <PeriodPills values={[...MONTHS]} value={tx.period || currentMonth()} onChange={(v: string) => setT({ ...tx, period: v })} testID="tx-month" />
+
+      {/* Transfer-specific: informational only. Transfers never affect
+          income/expense totals or Net Worth. */}
+      {isTransfer && (
+        <View style={{ padding: 10, marginTop: 12, borderRadius: 10, backgroundColor: t.dark ? '#3a2f22' : '#fbf1de', borderLeftWidth: 3, borderLeftColor: '#c49450' }}>
+          <Text style={{ fontSize: 11, fontWeight: '800', color: '#9a6d32' }}>Transfer</Text>
+          <Text style={{ fontSize: 10, color: '#8d806e', marginTop: 3, lineHeight: 14 }}>
+            This transaction is an internal movement between your own accounts (or a credit-card payment).
+            It won&apos;t affect income, expense, or Net Worth totals.
+          </Text>
+        </View>
+      )}
+
+      {/* Category / subcategory picker — hidden for Transfer. Also hidden
+          when the user has opted into a Split (categories are picked per-row). */}
+      {!isTransfer && !showSplits && (
         <>
-          <Text style={s.label}>Subcategory</Text>
+          <Text style={s.label}>{isIncome ? 'Earn source' : 'Category'}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-            {currentSubs.map((sub: any) => {
-              const on = t.detailId === sub.id;
+            {(isIncome ? incomeSources : categories).map((g: any) => {
+              const on = tx.groupId === g.id;
               return (
                 <Pressable
-                  key={sub.id}
-                  onPress={() => setT({ ...t, detailId: sub.id })}
+                  key={g.id}
+                  onPress={() => setT({ ...tx, groupId: g.id, detailId: isIncome ? undefined : g.subcategories?.[0]?.id })}
                   style={[s.pickerChip, on && s.pickerChipOn]}
-                  testID={`tx-sub-${sub.id}`}
+                  testID={`tx-group-${g.id}`}
                 >
-                  <Text style={[s.pickerChipText, on && { color: '#fff' }]}>{sub.name}</Text>
+                  <Text style={[s.pickerChipText, on && { color: '#fff' }]}>{g.name}</Text>
                 </Pressable>
               );
             })}
           </View>
+          {!isIncome && currentSubs.length > 0 && (
+            <>
+              <Text style={s.label}>Subcategory</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                {currentSubs.map((sub: any) => {
+                  const on = tx.detailId === sub.id;
+                  return (
+                    <Pressable
+                      key={sub.id}
+                      onPress={() => setT({ ...tx, detailId: sub.id })}
+                      style={[s.pickerChip, on && s.pickerChipOn]}
+                      testID={`tx-sub-${sub.id}`}
+                    >
+                      <Text style={[s.pickerChipText, on && { color: '#fff' }]}>{sub.name}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </>
+          )}
         </>
       )}
+
+      {/* Split allocations — only for expense (and income) transactions.
+          Each split assigns part of the amount to a different category. */}
+      {!isTransfer && (
+        <View style={{ marginTop: 14 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Split across categories</Text>
+            <Pressable onPress={() => {
+              if (!showSplits) {
+                addSplit();
+              } else {
+                setShowSplits(false);
+                setT({ ...tx, splits: [] });
+              }
+            }} testID="tx-split-toggle">
+              <Text style={{ color: '#9a6d32', fontWeight: '700', fontSize: 11 }}>{showSplits ? 'Remove split' : '+ Split this'}</Text>
+            </Pressable>
+          </View>
+          {showSplits && (
+            <View style={{ marginTop: 8, padding: 10, borderRadius: 10, borderWidth: 1, borderColor: t.dark ? D.border : '#ece5d5' }}>
+              {(tx.splits || []).map((sp: any, idx: number) => {
+                const gOptions = isIncome ? incomeSources : categories;
+                const g = gOptions.find((c: any) => c.id === sp.groupId);
+                const subs = !isIncome && g ? g.subcategories : [];
+                return (
+                  <View key={idx} style={{ paddingVertical: 8, borderBottomWidth: idx < (tx.splits.length - 1) ? 1 : 0, borderBottomColor: t.dark ? '#3a342b' : '#f1ede6' }}>
+                    <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                      <View style={{ flex: 1 }}>
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+                          {gOptions.map((c: any) => (
+                            <Pressable key={c.id} onPress={() => updateSplit(idx, { groupId: c.id, detailId: c.subcategories?.[0]?.id })} style={[s.pickerChip, sp.groupId === c.id && s.pickerChipOn, { paddingHorizontal: 8, paddingVertical: 4 }]} testID={`tx-split-${idx}-group-${c.id}`}>
+                              <Text style={[s.pickerChipText, sp.groupId === c.id && { color: '#fff' }, { fontSize: 10 }]}>{c.name}</Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                        {!isIncome && subs.length > 0 && (
+                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                            {subs.map((sub: any) => (
+                              <Pressable key={sub.id} onPress={() => updateSplit(idx, { detailId: sub.id })} style={[s.pickerChip, sp.detailId === sub.id && s.pickerChipOn, { paddingHorizontal: 8, paddingVertical: 4 }]} testID={`tx-split-${idx}-sub-${sub.id}`}>
+                                <Text style={[s.pickerChipText, sp.detailId === sub.id && { color: '#fff' }, { fontSize: 10 }]}>{sub.name}</Text>
+                              </Pressable>
+                            ))}
+                          </View>
+                        )}
+                      </View>
+                      <View style={{ width: 90 }}>
+                        <View style={s.amountInput}>
+                          <Text style={s.amountPrefix}>$</Text>
+                          <TextInput
+                            style={[s.input, { paddingLeft: 22, paddingRight: 6, fontSize: 12 }]}
+                            value={String(sp.amount || '')}
+                            onChangeText={(x) => updateSplit(idx, { amount: x })}
+                            keyboardType="numeric"
+                            placeholder="0"
+                            testID={`tx-split-${idx}-amount`}
+                          />
+                        </View>
+                      </View>
+                      <Pressable onPress={() => removeSplit(idx)} hitSlop={6} testID={`tx-split-${idx}-remove`}>
+                        <Ionicons name="close-circle-outline" size={16} color="#b06a5b" />
+                      </Pressable>
+                    </View>
+                  </View>
+                );
+              })}
+              <Pressable onPress={addSplit} style={{ marginTop: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }} testID="tx-split-add">
+                <Ionicons name="add-circle-outline" size={14} color="#9a6d32" />
+                <Text style={{ color: '#9a6d32', fontWeight: '700', fontSize: 11 }}>Add split</Text>
+              </Pressable>
+              <View style={{ marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>Allocated {MONEY(splitsTotal)} / {MONEY(parsedAmount)}</Text>
+                <Text style={{ fontSize: 10, fontWeight: '800', color: Math.abs(splitsRemaining) < 0.01 ? '#4c8b56' : '#b06a5b' }}>
+                  {splitsRemaining > 0 ? `${MONEY(splitsRemaining)} left` : splitsRemaining < 0 ? `${MONEY(-splitsRemaining)} over` : 'Balanced'}
+                </Text>
+              </View>
+            </View>
+          )}
+        </View>
+      )}
+
       <View style={{ marginTop: 14 }}>
-        <GoldButton label="Save transaction" onPress={() => save({ ...t, amount: Number(t.amount), origin: t.origin || 'Manual', period: t.period || currentMonth() })} disabled={!t.name || !Number(t.amount)} testID="tx-save" />
+        <GoldButton
+          label="Save transaction"
+          onPress={() => {
+            const merchantClean = (tx.merchant || '').toString().trim();
+            const splitsClean = showSplits && Array.isArray(tx.splits)
+              ? tx.splits.map((sp: any) => ({ groupId: sp.groupId, detailId: sp.detailId, amount: Number(sp.amount) || 0 }))
+              : undefined;
+            save({
+              ...tx,
+              amount: parsedAmount,
+              merchant: merchantClean || undefined,
+              splits: splitsClean,
+              origin: tx.origin || 'Manual',
+              period: tx.period || currentMonth(),
+            });
+          }}
+          disabled={!tx.name || !parsedAmount || !splitsValid}
+          testID="tx-save"
+        />
+        {showSplits && !splitsValid && (
+          <Text style={{ fontSize: 10, color: '#b06a5b', marginTop: 6, textAlign: 'center' }}>
+            Splits must total exactly {MONEY(parsedAmount)} and have at least 2 rows.
+          </Text>
+        )}
       </View>
       {remove && <Pressable onPress={() => remove(item.id)} style={{ marginTop: 12, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 }} testID="tx-delete">
         <Ionicons name="trash-outline" size={14} color={C.danger} /><Text style={{ color: C.danger, fontSize: 11 }}>Delete transaction</Text>
@@ -2677,11 +2903,16 @@ function timeAgo(iso: string | null | undefined): string {
   const months = Math.round(days / 30);
   return `${months} mo ago`;
 }
-const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transactions, restrictedBuckets, setRestrictedBuckets }: any) => {
+const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transactions, restrictedBuckets, setRestrictedBuckets, linkedRowsByCategory, linkedByCategory, onRefreshAccounts }: any) => {
   const t = useThemed();
   const { token } = useAuth();
   const [linkedRows, setLinkedRows] = useState<any[]>([]);
   const [restrictedOpen, setRestrictedOpen] = useState(false);
+  // Category-collapse state — persisted in-memory only. Default collapsed
+  // (categories expand on tap) so the Wealth screen stays scannable.
+  const [expandedCats, setExpandedCats] = useState<Record<string, boolean>>({});
+  const toggleCat = (slug: string) => setExpandedCats((prev) => ({ ...prev, [slug]: !prev[slug] }));
+  const [syncingAll, setSyncingAll] = useState(false);
   // Legacy "adding" sheet — kept for backwards-compat with existing tests but
   // the new redesign uses an inline editing card (setEditingBucket).
   const [addingRestricted, setAddingRestricted] = useState(false);
@@ -2718,7 +2949,25 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
   const [visible, setVisible] = useState(true);
 
   // ---- Aggregate live-linked balances by Jaleter category ----
-  const validLinks = linkedRows.filter((r: any) => !r.error);
+  // De-dupe by unique (link_id, account_id) to prevent double-counting when
+  // the same account appears via multiple items or holdings pulls. Skip
+  // zero-value insurance policies (term-life, disability, whole life w/
+  // zero cash value) so they never inflate the Investments category.
+  const validLinks = React.useMemo(() => {
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const r of linkedRows.filter((x: any) => !x.error)) {
+      const key = `${r.link_id || ''}::${r.account_id || r.name || ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const hay = `${r.name || ''} ${r.subtype || ''} ${r.type || ''}`.toLowerCase();
+      const looksInsurance = /(term life|term-life|disability insurance|whole life|umbrella|renters insurance|auto insurance|life insurance)/.test(hay);
+      const bal = Number(r.balance || 0);
+      if (looksInsurance && bal === 0) continue;
+      out.push(r);
+    }
+    return out;
+  }, [linkedRows]);
   const linkedByCat: Record<string, any[]> = {};
   for (const r of validLinks) {
     const cat = (r.category as string) || (isInvestmentAccount(r) ? 'investments' : 'cash');
@@ -2733,6 +2982,70 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
   const linkedOtherAssets = sumCat('other_assets');
   const cashSources = linkedByCat['cash'] || [];
   const investSources = linkedByCat['investments'] || [];
+  // ---- Category groups (collapsible) ---------------------------------------
+  // Each category row shows the group name + total; expanding reveals every
+  // underlying account. Category totals MUST equal the sum of the rows so
+  // the UI never lies (spec fix). Manual seeds for Cash/Investments are
+  // included in the totals via `manualCash` / `manualInvest` — they render
+  // as a "Manual (edit)" row so users can still adjust them by tapping.
+  const buildCategoryGroups = (side: 'assets' | 'liabilities') => {
+    const slugs: string[] = side === 'assets'
+      ? ['cash', 'investments', 'real_estate', 'vehicles', 'other_assets']
+      : ['credit_cards', 'mortgage', 'auto_loans', 'student_loans', 'other_liabilities'];
+    return slugs.map((slug) => {
+      const linkedRows = linkedByCat[slug] || [];
+      const linkedTotal = linkedRows.reduce((sum, r: any) => sum + Number(r.balance || 0), 0);
+      // For assets, we also fold in the manual seeds (Cash + Investments).
+      const manualSeedValue = slug === 'cash' ? manualCash : slug === 'investments' ? manualInvest : 0;
+      // Manual "other" rows (Real Estate / Vehicles / Other assets, or
+      // manual liabilities) — matched by icon lookup for the wealth slug.
+      const manualExtras = side === 'assets'
+        ? assets.filter((x: Asset) => {
+            if (slug === 'cash' || slug === 'investments') return false;
+            if (slug === 'real_estate') return x.id === 'real-estate';
+            if (slug === 'vehicles') return x.id === 'vehicles';
+            return x.id !== 'cash' && x.id !== 'investments' && x.id !== 'real-estate' && x.id !== 'vehicles';
+          })
+        : liabilities.filter((x: Asset) => {
+            if (slug === 'mortgage') return x.id === 'mortgage';
+            if (slug === 'auto_loans') return x.id === 'auto-loan';
+            if (slug === 'credit_cards') return x.id === 'credit-cards' || x.id === 'credit-card';
+            if (slug === 'student_loans') return x.id === 'student-loan' || x.id === 'student-loans';
+            return !['mortgage', 'auto-loan', 'credit-cards', 'credit-card', 'student-loan', 'student-loans'].includes(x.id);
+          });
+      const manualExtrasTotal = manualExtras.reduce((sum: number, r: any) => sum + Number(r.value || 0), 0);
+      const total = linkedTotal + manualSeedValue + manualExtrasTotal;
+      return { slug, label: CATEGORY_LABELS[slug], icon: CATEGORY_ICONS[slug], linkedRows, manualExtras, manualSeedValue, total };
+    });
+  };
+  const assetGroups = buildCategoryGroups('assets');
+  const liabilityGroups = buildCategoryGroups('liabilities');
+  const assetsCategoriesTotal = assetGroups.reduce((s, g) => s + g.total, 0);
+  const liabilitiesCategoriesTotal = liabilityGroups.reduce((s, g) => s + g.total, 0);
+  // Last-sync timestamp across all valid linked accounts — surfaced right
+  // above the categories so users know how fresh the data is.
+  const allSyncTimes = validLinks
+    .map((r: any) => r.last_sync_at)
+    .filter(Boolean)
+    .map((v: string) => new Date(v).getTime())
+    .filter((n: number) => !Number.isNaN(n));
+  const lastSyncMs = allSyncTimes.length ? Math.max(...allSyncTimes) : 0;
+  const lastSyncLabel = lastSyncMs
+    ? `Last synced ${new Date(lastSyncMs).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+    : 'No sync yet';
+  const doSyncAll = async () => {
+    if (!token || syncingAll) return;
+    setSyncingAll(true);
+    try {
+      await Promise.allSettled([
+        apiCall('/api/plaid/sync', { method: 'POST' }, token),
+        apiCall('/api/accounts/sync', { method: 'POST' }, token),
+      ]);
+      refreshLinked();
+      onRefreshAccounts && onRefreshAccounts();
+    } finally { setSyncingAll(false); }
+  };
+
   const sourceLabel = (rows: any[], fallback: string) => {
     if (rows.length === 0) return fallback;
     const providers = Array.from(new Set(rows.map((r: any) => r.provider)));
@@ -3189,6 +3502,86 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
         setRowDraftName(row.name);
         setRowDraftAmt(row.value ? String(row.value) : '');
       }} onAdd={() => setAddingRowSide('liabilities')} />
+
+      {/* By Category — collapsible list of Cash / Investments / Real Estate /
+          Vehicles / Credit Cards / Mortgage / Auto / Student / Other. Each
+          category shows its total; expanding reveals every account (bank,
+          balance, last-sync). Totals here ALWAYS equal the sum of the
+          accounts underneath (spec fix). */}
+      <View style={[s.assumptionsCard, t.cardBg, { marginTop: 12 }]}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <Text style={[{ fontSize: 11, fontWeight: '800', letterSpacing: 0.4 }, t.textInk]}>WEALTH BY CATEGORY</Text>
+          <Pressable onPress={doSyncAll} disabled={syncingAll} testID="wealth-sync-all" style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Ionicons name={syncingAll ? 'sync-outline' : 'refresh-outline'} size={12} color="#9a6d32" />
+            <Text style={{ fontSize: 10, color: '#9a6d32', fontWeight: '700' }}>{syncingAll ? 'Syncing…' : 'Sync'}</Text>
+          </Pressable>
+        </View>
+        <Text style={[{ fontSize: 9, marginBottom: 8 }, t.textMuted]} testID="wealth-last-sync">
+          {lastSyncLabel}
+        </Text>
+        {(['assets', 'liabilities'] as const).map((side) => {
+          const groups = side === 'assets' ? assetGroups : liabilityGroups;
+          const sideTotal = side === 'assets' ? assetsCategoriesTotal : liabilitiesCategoriesTotal;
+          return (
+            <View key={side} style={{ marginTop: 6 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: t.dark ? '#3a342b' : '#f1ede6' }}>
+                <Text style={[{ fontSize: 10, fontWeight: '800', letterSpacing: 0.6 }, t.textInk]}>{side === 'assets' ? 'ASSETS' : 'LIABILITIES'}</Text>
+                <Text style={[{ fontSize: 11, fontWeight: '800' }, t.textInk]}>{visible ? MONEY(sideTotal) : '••••'}</Text>
+              </View>
+              {groups.map((g) => {
+                const isOpen = !!expandedCats[g.slug];
+                const rowCount = g.linkedRows.length + g.manualExtras.length + (g.manualSeedValue > 0 ? 1 : 0);
+                if (g.total === 0 && rowCount === 0) return null;
+                return (
+                  <View key={g.slug}>
+                    <Pressable onPress={() => toggleCat(g.slug)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: t.dark ? '#3a342b' : '#f5f0e6' }} testID={`wealth-cat-${g.slug}`}>
+                      <Ionicons name={g.icon} size={14} color="#9a6d32" style={{ marginRight: 8 }} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>{g.label}</Text>
+                        <Text style={[{ fontSize: 8 }, t.textMuted]}>{rowCount} account{rowCount === 1 ? '' : 's'}</Text>
+                      </View>
+                      <Text style={[{ fontSize: 12, fontWeight: '800', marginRight: 6 }, t.textInk]}>{visible ? MONEY(g.total) : '••••'}</Text>
+                      <Ionicons name={isOpen ? 'chevron-down' : 'chevron-forward'} size={13} color={t.dark ? D.textMuted : '#aaa39a'} />
+                    </Pressable>
+                    {isOpen && (
+                      <View style={{ paddingLeft: 20, paddingVertical: 4 }}>
+                        {g.manualSeedValue > 0 && (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={[{ fontSize: 11, fontWeight: '600' }, t.textInk]}>{g.slug === 'cash' ? 'Manual cash' : 'Manual investments'}</Text>
+                              <Text style={[{ fontSize: 8 }, t.textMuted]}>Manual · edit in Wealth</Text>
+                            </View>
+                            <Text style={[{ fontSize: 11 }, t.textInk]}>{visible ? MONEY(g.manualSeedValue) : '••••'}</Text>
+                          </View>
+                        )}
+                        {g.linkedRows.map((r: any) => (
+                          <Pressable key={`${r.link_id}-${r.account_id}`} onPress={() => setReclassifyAccount(r)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }} testID={`wealth-cat-acc-${r.account_id}`}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={[{ fontSize: 11, fontWeight: '600' }, t.textInk]} numberOfLines={1}>{r.name}</Text>
+                              <Text style={[{ fontSize: 8 }, t.textMuted]}>{r.org_name || 'Linked'} · Synced{r.last_sync_at ? ' · ' + timeAgo(r.last_sync_at) : ''}</Text>
+                            </View>
+                            <Text style={[{ fontSize: 11 }, t.textInk]}>{visible ? MONEY(Number(r.balance || 0)) : '••••'}</Text>
+                          </Pressable>
+                        ))}
+                        {g.manualExtras.map((r: Asset) => (
+                          <Pressable key={`m-${r.id}`} onPress={() => { setEditRow({ side, row: r }); setRowDraftName(r.name); setRowDraftAmt(r.value ? String(r.value) : ''); }} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={[{ fontSize: 11, fontWeight: '600' }, t.textInk]}>{r.name}</Text>
+                              <Text style={[{ fontSize: 8 }, t.textMuted]}>Manual</Text>
+                            </View>
+                            <Text style={[{ fontSize: 11 }, t.textInk]}>{visible ? MONEY(r.value) : '••••'}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                );
+              })}
+            </View>
+          );
+        })}
+      </View>
+
       <Sheet
         visible={!!reclassifyAccount}
         close={() => setReclassifyAccount(null)}
@@ -4678,19 +5071,27 @@ function MainApp() {
           const amt = Number(r.amount) || 0;
           const dateStr = typeof r.date === 'string' ? r.date : new Date(r.date).toISOString();
           const period = MONTHS[new Date(dateStr).getMonth()] || currentMonth();
+          const sys = r.system_category || null;
+          // Any transfer / credit-card-payment / loan-payment auto-detected by
+          // the backend classifier becomes a first-class Transfer in the UI —
+          // so it's never counted as income or expense (spec: transfers must
+          // not affect Net Worth or Budget totals).
+          const isSystemTransfer = sys === 'transfer' || sys === 'credit_card_payment' || sys === 'loan_payment' || !!r.is_transfer;
+          const derivedType: Tx['type'] = isSystemTransfer ? 'transfer' : (amt >= 0 ? 'income' : 'expense');
           return {
             id: `bank-${r.external_id}`,
             external_id: r.external_id,
             date: dateStr,
             name: r.description || r.name || 'Transaction',
+            merchant: (r.merchant || '').trim() || undefined,
             amount: Math.abs(amt),
-            type: amt >= 0 ? 'income' : 'expense',
+            type: derivedType,
             groupId: '',
             detailId: '',
             origin: r.org_name || 'Linked',
             period,
-            system_category: r.system_category || null,
-            is_transfer: !!r.is_transfer,
+            system_category: sys,
+            is_transfer: !!r.is_transfer || isSystemTransfer,
           } as Tx;
         });
         setLinkedTransactions(reshaped);
@@ -4715,9 +5116,31 @@ function MainApp() {
     () => linkedAccountBalances.filter((r: any) => !r.error),
     [linkedAccountBalances],
   );
+  // De-duplicate by unique (link_id, account_id) — protects against the same
+  // account being counted twice when Plaid returns both a "raw" account and a
+  // holdings-derived twin, or when the same account is linked via two items.
+  // Also filters out zero-value insurance policies (term-life, disability) so
+  // they never inflate the Investments category (spec: "no cash value").
+  const dedupedLinked = React.useMemo(() => {
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const r of validLinked) {
+      const key = `${r.link_id || ''}::${r.account_id || r.name || ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      // Insurance policies with zero cash value → skip entirely. Users can
+      // still see them in Linked Accounts management, but they don't count.
+      const hay = `${r.name || ''} ${r.subtype || ''} ${r.type || ''}`.toLowerCase();
+      const looksInsurance = /(term life|term-life|disability insurance|whole life|umbrella|renters insurance|auto insurance|life insurance)/.test(hay);
+      const bal = Number(r.balance || 0);
+      if (looksInsurance && bal === 0) continue;
+      out.push(r);
+    }
+    return out;
+  }, [validLinked]);
   const linkedByCategory = React.useMemo(() => {
     const acc: Record<string, number> = {};
-    for (const r of validLinked) {
+    for (const r of dedupedLinked) {
       // Backend supplies `category`; if this row came from an older provider
       // that didn't classify, fall back to the legacy regex so we don't lose
       // data during the rollout.
@@ -4725,7 +5148,18 @@ function MainApp() {
       acc[cat] = (acc[cat] || 0) + Number(r.balance || 0);
     }
     return acc;
-  }, [validLinked]);
+  }, [dedupedLinked]);
+  // Rows grouped by category — used by the collapsible Wealth categories to
+  // render every underlying account row. Category totals below MUST equal
+  // the sum of these rows so the UI never lies.
+  const linkedRowsByCategory = React.useMemo(() => {
+    const acc: Record<string, any[]> = {};
+    for (const r of dedupedLinked) {
+      const cat = (r.category as string) || (isInvestmentAccount(r) ? 'investments' : 'cash');
+      (acc[cat] = acc[cat] || []).push(r);
+    }
+    return acc;
+  }, [dedupedLinked]);
   const linkedCashTotal = linkedByCategory['cash'] || 0;
   const linkedInvestmentTotal = linkedByCategory['investments'] || 0;
   const linkedRealEstateTotal = linkedByCategory['real_estate'] || 0;
@@ -4853,7 +5287,7 @@ function MainApp() {
             },
           }} />}
           {active === 'transactions' && <TransactionsScreen transactions={mergedTransactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} alerts={alerts} openLinkSheet={() => { setActive('settings'); }} onRefresh={refreshAccounts} />}
-          {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} />}
+          {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} linkedRowsByCategory={linkedRowsByCategory} linkedByCategory={linkedByCategory} onRefreshAccounts={refreshAccounts} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={validLinked.length} onBack={() => setActive('home')} />}
           {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} hypoFrequency={legacyHypoFrequency} setHypoFrequency={setLegacyHypoFrequency} hypoDuration={legacyHypoDuration} setHypoDuration={setLegacyHypoDuration} returnRate={legacyReturnRate} setReturnRate={setLegacyReturnRate} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} currentAge={currentAge} setCurrentAge={setCurrentAge} retirementAge={retirementAge} setRetirementAge={setRetirementAge} />}
           {active === 'reports' && <ReportsScreen transactions={transactions} categories={categories} incomeSources={incomeSources} back={() => nav('home')} />}
