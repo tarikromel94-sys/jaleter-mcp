@@ -1236,7 +1236,7 @@ function longTermInvestment(investmentTotal: number, hypoPrincipal: number, mont
   return Math.round(totalInvested * Math.pow(1 + r, year) + monthlyContribution * 12 * ((Math.pow(1 + r, year) - 1) / r));
 }
 
-const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, totalCash, availableCash, monthlyNet, legacyContribution, legacyHypothetical, legacyHypoFrequency, legacyHypoDuration, legacyReturnRate, budgetUsage, alertsEnabled, navigate }: any) => {
+const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, totalCash, availableCash, monthlyNet, legacyContribution, legacyHypothetical, legacyHypoFrequency, legacyHypoDuration, legacyReturnRate, budgetUsage, alertsEnabled, navigate, financialsReady }: any) => {
   const t = useThemed();
   const q = dailyQuote(experience as QuoteType, new Date());
   const hypoValue = Math.max(0, Number((legacyHypothetical || '').replace(/[^0-9.]/g, '')) || 0);
@@ -1312,16 +1312,16 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
       <View style={{ flexDirection: 'row', gap: 11 }}>
         <Pressable style={[s.snapshotCard, t.cardBg]} onPress={() => navigate('budget')} testID="home-budget-card">
           <Text style={[s.snapshotLabel, t.textMuted]}>Budget</Text>
-          <Text style={[s.snapshotValue, t.textInk]}>{Math.round(budgetUsage)}%</Text>
-          <View style={s.miniProgress}><View style={[s.miniProgressBar, { width: `${Math.min(budgetUsage, 100)}%` }]} /></View>
-          <Text style={[s.snapshotMeta, t.textMuted]}>used this month</Text>
+          <Text style={[s.snapshotValue, t.textInk]}>{financialsReady ? `${Math.round(budgetUsage)}%` : '••••'}</Text>
+          <View style={s.miniProgress}><View style={[s.miniProgressBar, { width: `${financialsReady ? Math.min(budgetUsage, 100) : 0}%` }]} /></View>
+          <Text style={[s.snapshotMeta, t.textMuted]}>{financialsReady ? 'used this month' : 'Updating…'}</Text>
         </Pressable>
         <Pressable style={[s.snapshotCard, s.snapshotDark]} onPress={() => navigate('networth')} testID="home-networth-card">
           <Text style={[s.snapshotLabel, { color: '#c4bdb2' }]}>Net Worth</Text>
-          <Text style={[s.snapshotValue, { color: '#fff' }]}>{MONEY(netWorth)}</Text>
+          <Text style={[s.snapshotValue, { color: '#fff' }]}>{financialsReady ? MONEY(netWorth) : '••••••'}</Text>
           <View style={{ flexDirection: 'row', gap: 3, marginTop: 8, alignItems: 'center' }}>
             <Ionicons name="wallet-outline" size={12} color={C.greenSoft} />
-            <Text style={{ color: C.greenSoft, fontSize: 9 }}>Assets − Liabilities</Text>
+            <Text style={{ color: C.greenSoft, fontSize: 9 }}>{financialsReady ? 'Assets − Liabilities' : 'Updating…'}</Text>
           </View>
         </Pressable>
       </View>
@@ -1344,7 +1344,12 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
       </View>
       <Pressable style={s.legacyTeaser} onPress={() => navigate('legacy')} testID="home-legacy">
         <Text style={{ color: '#c9a56c', fontSize: 8, letterSpacing: 1.3 }}>RETIREMENT PROJECTION</Text>
-        {hasProjection ? (
+        {!financialsReady ? (
+          <>
+            <Text style={s.legacyStrong}>••••••</Text>
+            <Text style={{ color: '#aaa297', fontSize: 10, lineHeight: 15, marginBottom: 14 }}>Updating your projections…</Text>
+          </>
+        ) : hasProjection ? (
           <>
             <Text style={s.legacyStrong}>{MONEY(projected)}</Text>
             <Text style={{ color: '#aaa297', fontSize: 10, lineHeight: 15, marginBottom: 14 }}>
@@ -1372,7 +1377,9 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
 
       {/* Legacy Snapshot — mirrors the Legacy tab exactly. BUILD row = 1/2/3/5
           year, GROW row = 10/20/30 year. Labels match so Home ↔ Legacy stay
-          in sync and users never see conflicting "Y10 Cash" numbers. */}
+          in sync and users never see conflicting "Y10 Cash" numbers. All
+          numbers are masked while the financials-ready gate is still false
+          so users never see a stale/partial projection. */}
       {showSnapshot && (
         <Pressable style={[s.assumptionsCard, t.cardBg, { marginTop: 12 }]} onPress={() => navigate('legacy')} testID="home-legacy-snapshot">
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
@@ -1380,7 +1387,9 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
             <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#aaa39a'} />
           </View>
           <Text style={[{ fontSize: 9, marginBottom: 6 }, t.textMuted]}>
-            BUILD uses cash + budget surplus (investments held flat). GROW compounds your investments at {rate}%.
+            {financialsReady
+              ? `BUILD uses cash + budget surplus (investments held flat). GROW compounds your investments at ${rate}%.`
+              : 'Updating projections — numbers will appear once your accounts finish loading.'}
           </Text>
           {/* BUILD row — near-term (1/2/3/5 yr). Same math as Legacy BUILD. */}
           <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8, marginTop: 4 }}>BUILD · CASH + SURPLUS · INVESTMENTS FLAT</Text>
@@ -1393,7 +1402,7 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
             ].map((row) => (
               <View key={row.label} style={{ flex: 1, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: t.dark ? '#3a342b' : '#f0e7d1', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
                 <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8 }}>{row.label}</Text>
-                <Text style={[{ fontSize: 11, fontWeight: '800', marginTop: 3 }, t.textInk]} numberOfLines={1}>{MONEY(row.v)}</Text>
+                <Text style={[{ fontSize: 11, fontWeight: '800', marginTop: 3 }, t.textInk]} numberOfLines={1}>{financialsReady ? MONEY(row.v) : '••••'}</Text>
               </View>
             ))}
           </View>
@@ -1407,7 +1416,7 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
             ].map((row) => (
               <View key={row.label} style={{ flex: 1, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: t.dark ? '#3a342b' : '#f0e7d1', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
                 <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8 }}>{row.label}</Text>
-                <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 3 }, t.textInk]} numberOfLines={1}>{MONEY(row.v)}</Text>
+                <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 3 }, t.textInk]} numberOfLines={1}>{financialsReady ? MONEY(row.v) : '••••'}</Text>
               </View>
             ))}
           </View>
@@ -3290,16 +3299,16 @@ function timeAgo(iso: string | null | undefined): string {
   const months = Math.round(days / 30);
   return `${months} mo ago`;
 }
-const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transactions, restrictedBuckets, setRestrictedBuckets, linkedRowsByCategory, linkedByCategory, onRefreshAccounts, canonicalTotalAssets, canonicalTotalLiabilities, canonicalNetWorth }: any) => {
+const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transactions, restrictedBuckets, setRestrictedBuckets, linkedRowsByCategory, linkedByCategory, onRefreshAccounts, canonicalTotalAssets, canonicalTotalLiabilities, canonicalNetWorth, financialsReady }: any) => {
   const t = useThemed();
   const { token } = useAuth();
   const [linkedRows, setLinkedRows] = useState<any[]>([]);
-  // linkedLoaded flips true once the first successful fetch has completed.
-  // While false, we avoid displaying totals derived from an incomplete
-  // dataset (which used to flash $0 / negative Net Worth for a beat). We
-  // cache the last-good rows in state so navigating away and back does not
-  // re-flash — the previous good values stay put until the fresh fetch lands.
+  // linkedLoaded flips true once the first successful fetch has completed
+  // (local flag). Use `financialsReady` (App-level) for the STRICT gate on
+  // rendering financial numbers — that gate also requires Net Worth
+  // reconciliation to succeed before publishing.
   const [linkedLoaded, setLinkedLoaded] = useState(false);
+  const readyForNumbers = !!financialsReady && linkedLoaded;
   const [linkedSyncing, setLinkedSyncing] = useState(false);
   const [restrictedOpen, setRestrictedOpen] = useState(false);
   // Category-collapse state — persisted in-memory only. Default collapsed
@@ -3647,14 +3656,14 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
         testID="wealth-sync-strip"
       >
         <View style={{ width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: t.dark ? '#3a342b' : '#f0e7d1' }}>
-          <Ionicons name={(syncingAll || linkedSyncing || !linkedLoaded) ? 'sync-outline' : 'refresh-outline'} size={14} color="#9a6d32" />
+          <Ionicons name={(syncingAll || linkedSyncing || !readyForNumbers) ? 'sync-outline' : 'refresh-outline'} size={14} color="#9a6d32" />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[{ fontSize: 11, fontWeight: '800' }, t.textInk]}>
-            {syncingAll ? 'Syncing…' : !linkedLoaded ? 'Updating your accounts…' : linkedSyncing ? 'Refreshing…' : validLinks.length === 0 ? 'No accounts linked' : 'Accounts synced'}
+            {syncingAll ? 'Syncing…' : !readyForNumbers ? 'Updating your accounts…' : linkedSyncing ? 'Refreshing…' : validLinks.length === 0 ? 'No accounts linked' : 'Accounts synced'}
           </Text>
           <Text style={[{ fontSize: 9, marginTop: 1 }, t.textMuted]}>
-            {(syncingAll || linkedSyncing || !linkedLoaded)
+            {(syncingAll || linkedSyncing || !readyForNumbers)
               ? 'Balances refresh once your bank data returns.'
               : validLinks.length === 0
                 ? 'Link a bank in Settings to pull balances automatically.'
@@ -3664,7 +3673,7 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
       </Pressable>
       <View style={s.nwHero}>
         <Text style={{ color: '#c3bbb0', fontSize: 9, letterSpacing: 1.3 }}>TOTAL NET WORTH</Text>
-        {linkedLoaded ? (
+        {readyForNumbers ? (
           <Text style={s.nwHeroStrong}>{visible ? MONEY(nw) : '••••••'}</Text>
         ) : (
           // Skeleton bar — same height as the strong hero number so the
@@ -3673,9 +3682,9 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
         )}
         <View style={{ flexDirection: 'row', gap: 4, alignItems: 'center' }}>
           <Ionicons name="trending-up" size={13} color="#7fac8d" />
-          <Text style={{ color: '#7fac8d', fontSize: 10 }}>{!linkedLoaded ? 'Fetching your latest balances…' : validLinks.length > 0 ? `Live from ${validLinks.length} linked account${validLinks.length > 1 ? 's' : ''}` : 'Updates with your linked accounts'}</Text>
+          <Text style={{ color: '#7fac8d', fontSize: 10 }}>{!readyForNumbers ? 'Fetching your latest balances…' : validLinks.length > 0 ? `Live from ${validLinks.length} linked account${validLinks.length > 1 ? 's' : ''}` : 'Updates with your linked accounts'}</Text>
         </View>
-        {nw > 0 && linkedLoaded && (
+        {nw > 0 && readyForNumbers && (
           <View style={s.nwChart}>
             {[62, 55, 48, 42, 33, 24, 15, 9].map((top, i, arr) => (
               <View key={i} style={[s.nwChartDot, { left: `${(i / (arr.length - 1)) * 100}%`, top }]} />
@@ -3684,7 +3693,7 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
         )}
       </View>
       <PeriodPills values={['Month','Quarter','Year']} value={period} onChange={setPeriod} testID="nw-period" />
-      {linkedLoaded ? (
+      {readyForNumbers ? (
         <View style={[s.cashProtection, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
           <View style={{ flex: 1 }}><Text style={[s.cpSmall, t.textMuted]}>TOTAL CASH</Text><Text style={[s.cpStrong, t.textInk]}>{MONEY(cash)}</Text></View>
           <Text style={{ color: '#b99a6c' }}>−</Text>
@@ -4041,7 +4050,7 @@ const WorthCard = (_: any) => null; // Deprecated: replaced by the collapsible "
 
 
 /* ---------------- Legacy / Coaching / Membership / Settings / More ---------------- */
-const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestricted, monthlyNet, monthlyBudgetIncome, monthlyBudgetExpense, monthlyBudgetPeriod, timeframe, setTimeframe, contribution, setContribution, hypothetical, setHypothetical, hypoFrequency, setHypoFrequency, hypoDuration, setHypoDuration, returnRate, setReturnRate, cumulative, setCumulative, currentAge, setCurrentAge, retirementAge, setRetirementAge }: any) => {
+const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestricted, monthlyNet, monthlyBudgetIncome, monthlyBudgetExpense, monthlyBudgetPeriod, financialsReady, timeframe, setTimeframe, contribution, setContribution, hypothetical, setHypothetical, hypoFrequency, setHypoFrequency, hypoDuration, setHypoDuration, returnRate, setReturnRate, cumulative, setCumulative, currentAge, setCurrentAge, retirementAge, setRetirementAge }: any) => {
   const t = useThemed();
   const [editingHypo, setEditingHypo] = useState(false);
   const [hypoDraft, setHypoDraft] = useState('');
@@ -4266,7 +4275,7 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
         <Text style={{ color: '#caa465', fontSize: 9, letterSpacing: 1.3, textAlign: 'center' }}>
           {projectionTitle} ({isRetirement && yearsUntilRetirement > 0 ? `${yearsUntilRetirement}yr` : timeframe})
         </Text>
-        <Text style={s.projectionStrong}>{years > 0 ? MONEY(projection) : '—'}</Text>
+        <Text style={s.projectionStrong}>{!financialsReady ? '••••••' : years > 0 ? MONEY(projection) : '—'}</Text>
         <Text style={{ color: '#b4ada3', fontSize: 12, textAlign: 'center', maxWidth: 300, alignSelf: 'center' }}>
           {projectionSubtitle}
         </Text>
@@ -4411,9 +4420,9 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
           {cumulativeRows.map((r) => (
             <View key={r.year} style={{ flexDirection: 'row', paddingVertical: 4 }}>
               <Text style={[{ flex: 1, fontSize: 10 }, t.textInk]}>Year {r.year}</Text>
-              <Text style={[{ flex: 1, fontSize: 10, fontWeight: '700', textAlign: 'right' }, t.textInk]}>{MONEY(r.value)}</Text>
+              <Text style={[{ flex: 1, fontSize: 10, fontWeight: '700', textAlign: 'right' }, t.textInk]}>{financialsReady ? MONEY(r.value) : '••••••'}</Text>
               <Text style={[{ flex: 1, fontSize: 10, textAlign: 'right' }, { color: r.delta >= 0 ? '#4c8b56' : '#b0453d' }]}>
-                {r.delta >= 0 ? '+' : ''}{MONEY(r.delta)}
+                {financialsReady ? `${r.delta >= 0 ? '+' : ''}${MONEY(r.delta)}` : '••••'}
               </Text>
             </View>
           ))}
@@ -5478,8 +5487,20 @@ function MainApp() {
   // happens in `mergedTransactions` below — the local `transactions` array
   // remains untouched so manual edits still persist across reloads.
   const [linkedTransactions, setLinkedTransactions] = useState<Tx[]>([]);
+  // Global loading gate. True only after BOTH /accounts/all AND
+  // /accounts/transactions have returned for the current session so we never
+  // publish a derived financial number (Net Worth, Budget %, Legacy, etc.)
+  // that could be temporarily wrong. When either fetch is still in flight,
+  // consumers mask their numbers with '••••••' / '$—' / skeleton.
+  const [balancesLoaded, setBalancesLoaded] = useState(false);
+  const [transactionsLoaded, setTransactionsLoaded] = useState(false);
   const [accountsRefreshTick, setAccountsRefreshTick] = useState(0);
-  const refreshAccounts = React.useCallback(() => setAccountsRefreshTick(n => n + 1), []);
+  const refreshAccounts = React.useCallback(() => {
+    // Force a reload cycle. Consumers should treat the interim as "loading".
+    setBalancesLoaded(false);
+    setTransactionsLoaded(false);
+    setAccountsRefreshTick(n => n + 1);
+  }, []);
   // Auto-sync Plaid on first mount per session so users don't have to remember
   // to tap "Refresh". Fire-and-forget — the useEffect below will re-fetch
   // /accounts/all + /accounts/transactions once the sync completes.
@@ -5493,7 +5514,7 @@ function MainApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.token]);
   useEffect(() => {
-    if (!auth.token) { setLinkedAccountBalances([]); setLinkedTransactions([]); return; }
+    if (!auth.token) { setLinkedAccountBalances([]); setLinkedTransactions([]); setBalancesLoaded(true); setTransactionsLoaded(true); return; }
     let alive = true;
     // 1. Account balances
     apiCall('/api/accounts/all', { method: 'GET' }, auth.token)
@@ -5507,7 +5528,8 @@ function MainApp() {
           setGlobalToast('Plaid needs to be reconnected. Open Settings → Linked Accounts.');
         }
       })
-      .catch(() => { if (alive) setLinkedAccountBalances([]); });
+      .catch(() => { if (alive) setLinkedAccountBalances([]); })
+      .finally(() => { if (alive) setBalancesLoaded(true); });
     // 2. Bank transactions (include everything — Activity shows all; other
     //    surfaces filter out transfers/CC payments via `isSystemTransaction`).
     apiCall('/api/accounts/transactions?limit=200&include_transfers=true', { method: 'GET' }, auth.token)
@@ -5549,7 +5571,8 @@ function MainApp() {
         });
         setLinkedTransactions(reshaped);
       })
-      .catch(() => { if (alive) setLinkedTransactions([]); });
+      .catch(() => { if (alive) setLinkedTransactions([]); })
+      .finally(() => { if (alive) setTransactionsLoaded(true); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.token, linkedAccounts.length, stage, accountsRefreshTick]);
@@ -5686,6 +5709,12 @@ function MainApp() {
   const netWorth = publishedNetWorth ? publishedNetWorth.netWorth : (canonicalTotalAssets - canonicalTotalLiabilities);
   const totalAssets = publishedNetWorth ? publishedNetWorth.assets : canonicalTotalAssets;
   const totalLiabilities = publishedNetWorth ? publishedNetWorth.liabilities : canonicalTotalLiabilities;
+  // Global financials-ready gate. Every derived $ value on Home / Wealth /
+  // Legacy / Reports should mask itself (••••••) until this flips true so
+  // users never see a stale/partial number during a refresh (spec).
+  const financialsReady = !auth.token
+    ? true
+    : (balancesLoaded && transactionsLoaded && publishedNetWorth !== null);
   // Set Aside cash aggregation — hoisted to App-level so Legacy/Home can use
   // Available Cash (= totalCash − totalRestricted) as the BUILD starting cash.
   const totalRestricted = React.useMemo(() => {
@@ -5754,7 +5783,7 @@ function MainApp() {
       {auth.user && stage === 'app' && !(appLock.enabled && appLock.locked) && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
           <EmailVerificationBanner isDark={isDark} />
-          {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} totalCash={totalCash} availableCash={availableCash} monthlyNet={monthlyNet} legacyContribution={legacyContribution} legacyHypothetical={legacyHypothetical} legacyHypoFrequency={legacyHypoFrequency} legacyHypoDuration={legacyHypoDuration} legacyReturnRate={legacyReturnRate} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} />}
+          {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} totalCash={totalCash} availableCash={availableCash} monthlyNet={monthlyNet} legacyContribution={legacyContribution} legacyHypothetical={legacyHypothetical} legacyHypoFrequency={legacyHypoFrequency} legacyHypoDuration={legacyHypoDuration} legacyReturnRate={legacyReturnRate} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} financialsReady={financialsReady} />}
           {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} categoriesByYear={categoriesByYear} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} setTransactions={setTransactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} budgetYear={budgetYear} onSwitchYear={switchBudgetYear} onCopyLastYear={(prevYear: number) => {
             // "Copy last year" — deep-copies categories + planned amounts (per-
             // month figures inside subcategories.monthly + the base .budgeted
@@ -5792,9 +5821,9 @@ function MainApp() {
             },
           }} />}
           {active === 'transactions' && <TransactionsScreen transactions={mergedTransactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} alerts={alerts} openLinkSheet={() => { setActive('settings'); }} onRefresh={refreshAccounts} />}
-          {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} linkedRowsByCategory={linkedRowsByCategory} linkedByCategory={linkedByCategory} onRefreshAccounts={refreshAccounts} canonicalTotalAssets={totalAssets} canonicalTotalLiabilities={totalLiabilities} canonicalNetWorth={netWorth} />}
+          {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} linkedRowsByCategory={linkedRowsByCategory} linkedByCategory={linkedByCategory} onRefreshAccounts={refreshAccounts} canonicalTotalAssets={totalAssets} canonicalTotalLiabilities={totalLiabilities} canonicalNetWorth={netWorth} financialsReady={financialsReady} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={validLinked.length} onBack={() => setActive('home')} />}
-          {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} availableCash={availableCash} totalRestricted={totalRestricted} monthlyNet={monthlyNet} monthlyBudgetIncome={monthlyBudgetIncome} monthlyBudgetExpense={monthlyBudgetExpense} monthlyBudgetPeriod={monthlyBudgetPeriod} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} hypoFrequency={legacyHypoFrequency} setHypoFrequency={setLegacyHypoFrequency} hypoDuration={legacyHypoDuration} setHypoDuration={setLegacyHypoDuration} returnRate={legacyReturnRate} setReturnRate={setLegacyReturnRate} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} currentAge={currentAge} setCurrentAge={setCurrentAge} retirementAge={retirementAge} setRetirementAge={setRetirementAge} />}
+          {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} availableCash={availableCash} totalRestricted={totalRestricted} monthlyNet={monthlyNet} monthlyBudgetIncome={monthlyBudgetIncome} monthlyBudgetExpense={monthlyBudgetExpense} monthlyBudgetPeriod={monthlyBudgetPeriod} financialsReady={financialsReady} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} hypoFrequency={legacyHypoFrequency} setHypoFrequency={setLegacyHypoFrequency} hypoDuration={legacyHypoDuration} setHypoDuration={setLegacyHypoDuration} returnRate={legacyReturnRate} setReturnRate={setLegacyReturnRate} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} currentAge={currentAge} setCurrentAge={setCurrentAge} retirementAge={retirementAge} setRetirementAge={setRetirementAge} />}
           {active === 'reports' && <ReportsScreen transactions={transactions} categories={categories} incomeSources={incomeSources} back={() => nav('home')} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}

@@ -1272,3 +1272,55 @@ Add Apple Sign-In to Login + Signup screens.
          matching /transfer to savings/i lands as Transfer.
 
       Report to next iteration file.
+
+  - agent: "main"
+    message: |
+      GLOBAL FINANCIAL MASKING GATE — implementation complete.
+
+      Added App-level `financialsReady` boolean: true only after BOTH
+      /accounts/all AND /accounts/transactions fetches have completed AND
+      `publishedNetWorth` has reconciled (Assets − Liabilities). Consumers
+      mask their numbers with '••••••' or skeleton until this flips true.
+
+      REFRESH BEHAVIOR: Calling `refreshAccounts()` now resets `balancesLoaded`
+      and `transactionsLoaded` to false, so any numbers reliant on server data
+      are masked mid-refresh (spec: never flash a stale value during sync).
+
+      MASKED FIELDS:
+      Home:
+        - Net Worth hero ('••••••' when not ready)
+        - Budget % (••••)
+        - Retirement Projection ('••••••' + "Updating your projections…")
+        - Legacy Snapshot BUILD row tiles (••••)
+        - Legacy Snapshot GROW row tiles (••••)
+      Wealth:
+        - Total Net Worth hero (skeleton bar)
+        - Cash / Set Aside / Available strip (whole strip hidden, "Updating…" placeholder)
+        - Sync banner reflects readiness state
+      Legacy:
+        - Projected Wealth / Projected Investments hero ('••••••')
+        - Cumulative years table values ('••••••' / '••••')
+
+      FILES CHANGED: /app/frontend/app/index.tsx
+        - App: balancesLoaded / transactionsLoaded states, financialsReady derivation, refresh reset.
+        - HomeScreen: signature +financialsReady, masked Net Worth / Budget% / Retirement / Legacy Snapshot.
+        - LegacyScreen: signature +financialsReady, masked projection hero and cumulative rows.
+        - NetWorthScreen: signature +financialsReady, `readyForNumbers = financialsReady && linkedLoaded`
+          gates every $ render.
+
+      TESTING FOCUS:
+      1. Under artificial network throttling (or immediately after cold reload with
+         auth token) the following must show masked values, never a temporary
+         wrong number:
+         - Home hero "Net Worth" shows '••••••'
+         - Home "Budget" tile shows '••••'
+         - Home "Retirement Projection" shows '••••••'
+         - Home "Legacy Snapshot" tiles show '••••'
+         - Wealth hero shows a skeleton bar
+         - Wealth Cash/Set Aside/Available strip shows "Updating your accounts…"
+      2. After fetch completes, all values reveal simultaneously — no field
+         reveals before another.
+      3. Tapping "Sync" on Wealth (calls refreshAccounts) re-triggers the masked
+         state until the new data lands.
+
+      NO backend changes. Report to next iteration file.
