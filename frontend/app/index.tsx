@@ -2313,15 +2313,22 @@ async function pickAndImport(token: string | null, onDone: (msg: string) => void
 }
 
 /* ---------------- Transactions ---------------- */
-const TransactionsScreen = ({ transactions, setTransactions, categories, incomeSources, openLinkSheet, alerts }: any) => {
+const TransactionsScreen = ({ transactions, setTransactions, categories, incomeSources, openLinkSheet, alerts, onRefresh }: any) => {
   const t = useThemed();
   const { token } = useAuth();
   const [filter, setFilter] = useState('All');
   const [editing, setEditing] = useState<any>(null);
   const [toast, setToast] = useState('');
   const [importing, setImporting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [linkedRows, setLinkedRows] = useState<any[]>([]);
   const [linkedLoaded, setLinkedLoaded] = useState(false);
+  const refreshLinkedRows = React.useCallback(() => {
+    if (!token) { setLinkedRows([]); setLinkedLoaded(true); return; }
+    apiCall('/api/accounts/all', { method: 'GET' }, token)
+      .then((data: any) => { setLinkedRows(Array.isArray(data?.accounts) ? data.accounts : []); setLinkedLoaded(true); })
+      .catch(() => { setLinkedRows([]); setLinkedLoaded(true); });
+  }, [token]);
   useEffect(() => {
     let alive = true;
     if (!token) { setLinkedRows([]); setLinkedLoaded(true); return; }
@@ -2330,6 +2337,25 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
       .catch(() => { if (alive) { setLinkedRows([]); setLinkedLoaded(true); } });
     return () => { alive = false; };
   }, [token, transactions.length]);
+  // Tap the sync banner to force a Plaid + SimpleFIN resync followed by a
+  // full refetch of accounts and transactions. Users kept asking "why aren't
+  // my new transactions showing?" — this makes the answer a single tap.
+  const runManualSync = async () => {
+    if (!token || syncing) return;
+    setSyncing(true);
+    try {
+      // Fire both provider syncs in parallel — silent on individual failures.
+      await Promise.allSettled([
+        apiCall('/api/plaid/sync', { method: 'POST' }, token),
+        apiCall('/api/accounts/sync', { method: 'POST' }, token),
+      ]);
+      refreshLinkedRows();
+      // Force the App-level useEffect that fetches /accounts/transactions to re-run.
+      onRefresh && onRefresh();
+      setToast('Refreshed. New transactions will appear momentarily.');
+    } catch { setToast('Refresh failed. Please try again.'); }
+    finally { setSyncing(false); }
+  };
   const shown = transactions.filter((tx: Tx) => filter === 'All' || (filter === 'Income' ? tx.type === 'income' : tx.type === 'expense'));
   const save = (t: any) => {
     setTransactions((xs: Tx[]) => xs.some(x => x.id === t.id) ? xs.map(x => x.id === t.id ? t : x) : [{ ...t, id: `manual-${Date.now()}`, origin: 'Manual', period: currentMonth() }, ...xs]);
@@ -2399,13 +2425,13 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
           </CircleBtn>
         </View>
       } />
-      <Pressable onPress={banner.kind === 'empty' ? openLinkSheet : undefined} style={[s.syncBanner, bannerBg]} testID="tx-sync-banner">
-        <View style={[s.syncIcon, { backgroundColor: t.dark ? '#00000033' : '#ffffffbb' }]}><Ionicons name={banner.icon} size={18} color={banner.iconColor} /></View>
+      <Pressable onPress={banner.kind === 'empty' ? openLinkSheet : runManualSync} disabled={syncing} style={[s.syncBanner, bannerBg, syncing && { opacity: 0.7 }]} testID="tx-sync-banner">
+        <View style={[s.syncIcon, { backgroundColor: t.dark ? '#00000033' : '#ffffffbb' }]}><Ionicons name={syncing ? 'sync-outline' : banner.icon} size={18} color={banner.iconColor} /></View>
         <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 10, fontWeight: '700', color: t.dark ? D.text : '#3a3428' }}>{banner.title}</Text>
-          <Text style={{ fontSize: 8, color: t.dark ? D.textMuted : '#7a6f5c' }}>{banner.sub}</Text>
+          <Text style={{ fontSize: 10, fontWeight: '700', color: t.dark ? D.text : '#3a3428' }}>{syncing ? 'Refreshing…' : banner.title}</Text>
+          <Text style={{ fontSize: 8, color: t.dark ? D.textMuted : '#7a6f5c' }}>{syncing ? 'Pulling the latest transactions from your linked banks.' : (banner.kind === 'empty' ? banner.sub : `${banner.sub} · Tap to refresh`)}</Text>
         </View>
-        <Ionicons name={banner.kind === 'empty' ? 'chevron-forward' : 'checkmark'} size={16} color={banner.iconColor} />
+        <Ionicons name={banner.kind === 'empty' ? 'chevron-forward' : (syncing ? 'sync-outline' : 'refresh-outline')} size={16} color={banner.iconColor} />
       </Pressable>
       <PeriodPills values={['All','Income','Expenses']} value={filter} onChange={setFilter} testID="tx-filter" />
       <View style={[s.transactionList, t.cardBg]}>
@@ -4614,6 +4640,18 @@ function MainApp() {
   const [linkedTransactions, setLinkedTransactions] = useState<Tx[]>([]);
   const [accountsRefreshTick, setAccountsRefreshTick] = useState(0);
   const refreshAccounts = React.useCallback(() => setAccountsRefreshTick(n => n + 1), []);
+  // Auto-sync Plaid on first mount per session so users don't have to remember
+  // to tap "Refresh". Fire-and-forget — the useEffect below will re-fetch
+  // /accounts/all + /accounts/transactions once the sync completes.
+  const [didAutoSync, setDidAutoSync] = useState(false);
+  useEffect(() => {
+    if (!auth.token || didAutoSync) return;
+    setDidAutoSync(true);
+    apiCall('/api/plaid/sync', { method: 'POST' }, auth.token)
+      .then(() => refreshAccounts())
+      .catch(() => {}); // silent — user can also tap the Activity banner
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.token]);
   useEffect(() => {
     if (!auth.token) { setLinkedAccountBalances([]); setLinkedTransactions([]); return; }
     let alive = true;
@@ -4814,14 +4852,14 @@ function MainApp() {
               cumulative: legacyCumulative,
             },
           }} />}
-          {active === 'transactions' && <TransactionsScreen transactions={mergedTransactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} alerts={alerts} openLinkSheet={() => { setActive('settings'); }} />}
+          {active === 'transactions' && <TransactionsScreen transactions={mergedTransactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} alerts={alerts} openLinkSheet={() => { setActive('settings'); }} onRefresh={refreshAccounts} />}
           {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={validLinked.length} onBack={() => setActive('home')} />}
           {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} monthlyNet={monthlyNet} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} hypoFrequency={legacyHypoFrequency} setHypoFrequency={setLegacyHypoFrequency} hypoDuration={legacyHypoDuration} setHypoDuration={setLegacyHypoDuration} returnRate={legacyReturnRate} setReturnRate={setLegacyReturnRate} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} currentAge={currentAge} setCurrentAge={setCurrentAge} retirementAge={retirementAge} setRetirementAge={setRetirementAge} />}
           {active === 'reports' && <ReportsScreen transactions={transactions} categories={categories} incomeSources={incomeSources} back={() => nav('home')} />}
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}
-          {active === 'settings' && <SettingsScreen initials={displayInitials} experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} categories={categories} appLock={appLock} setAppLock={(next: any) => setAppLock({ ...appLock, ...next })} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} linkedAccountCount={validLinked.length} addLinked={(a: any[]) => setLinkedAccounts([...linkedAccounts, ...a])} onResetAppData={async () => {
+          {active === 'settings' && <SettingsScreen initials={displayInitials} experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} categories={categories} appLock={appLock} setAppLock={(next: any) => setAppLock({ ...appLock, ...next })} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} linkedAccountCount={validLinked.length} addLinked={(a: any[]) => { setLinkedAccounts([...linkedAccounts, ...a]); refreshAccounts(); }} onResetAppData={async () => {
             // Spec #18 — Reset App Data behavior confirmed by the user:
             // KEEP Plaid connections, CLEAR synced data. Every locally-cached
             // financial artefact goes; Plaid items in the backend stay so
