@@ -1101,3 +1101,55 @@ Add Apple Sign-In to Login + Signup screens.
 
       NO breaking changes. Existing manual transactions still render/filter correctly.
       Report to next available iteration file.
+
+  - agent: "main"
+    message: |
+      PHASE 3 OF 3 — Reports + Legacy — implementation complete.
+
+      REPORTS FIXES (/app/frontend/src/ReportsScreen.tsx):
+      1. Classification now uses `tx.type` (not signed amount). All Jaleter tx
+         amounts are positive; type ∈ {income, expense, transfer}.
+      2. Transfers explicitly excluded via both system_category AND type='transfer'.
+      3. Splits-aware: each transaction contributes to categoryPie / incomePie /
+         subcategoryBars via a local `allocations()` helper that iterates splits.
+      4. Renamed sections:
+         - "Where the money came from (by source)" → "Income by Source"
+         - "Where the money went (by category)" → "Spending by Category"
+         - "Top merchants / sources" → "Top Merchants (spending)"
+      5. Category resolution now uses groupId → category name (was reading
+         legacy fields t.category / t.subcategory).
+
+      LEGACY FIXES (/app/frontend/app/index.tsx):
+      6. BUILD math clamps surplus at >= 0 per spec ("Only use surplus if positive").
+         Real (possibly-negative) surplus still surfaced in the "What we're
+         projecting from" card so users see it.
+      7. Home Legacy Snapshot rewritten to mirror Legacy tab exactly:
+         - BUILD row: 1YR / 2YR / 3YR / 5YR (drops old Y1/Y5/Y10 Cash split)
+         - GROW row: 10YR GROW / 20YR GROW / 30YR GROW
+         - Labels explicitly say "GROW" so users never confuse 10yr Cash
+           with 10yr investment compounding.
+      8. Math card note now explicitly explains negative-surplus clamp when
+         applicable, guiding the user to fix their Budget.
+
+      NO backend changes.
+
+      TESTING FOCUS:
+      - Reports tab:
+        * Add manual $500 Income (Salary) + $200 Expense (Groceries) + $50 Transfer.
+        * Income total should show $500 (never $700). Expense should show $200.
+        * Transfer excluded from all totals + pies.
+        * Section headers show "Income by Source" and "Spending by Category".
+        * Merchant chip in tx row appears in "Top Merchants (spending)".
+        * Add a split expense $180 = $100 Groceries + $80 Household. Both
+          subcategories appear in the "Spending by Category" pie with correct
+          shares.
+      - Home Legacy Snapshot:
+        * Verify BUILD row shows 4 tiles: 1YR / 2YR / 3YR / 5YR.
+        * Verify GROW row shows 3 tiles: 10YR GROW / 20YR GROW / 30YR GROW.
+        * Number of tiles: 7 total (not 6 as before).
+      - Legacy tab:
+        * BUILD projection with a NEGATIVE surplus (spending > income) must
+          NOT shrink cash further — clamp surplus at $0 with a note in the
+          math card explaining it.
+
+      Report to next iteration file.

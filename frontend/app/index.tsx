@@ -1248,14 +1248,30 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
   const h33 = hypoAt(33);
   const projected = investmentTotal > 0 ? longTermInvestment(investmentTotal, h33.addToPrincipal, (legacyContribution || 0) + h33.addToMonthlyContrib, 33, rate) : 0;
   const hasProjection = projected > 0;
-  // Cash checkpoints — cash only, no investment growth.
-  const cashY1 = shortTermCash(totalCash || 0, monthlyNet || 0, 1, hypoAt(1).addToCash);
-  const cashY5 = shortTermCash(totalCash || 0, monthlyNet || 0, 5, hypoAt(5).addToCash);
-  const cashY10 = shortTermCash(totalCash || 0, monthlyNet || 0, 10, hypoAt(10).addToCash);
-  // Investment checkpoints — compound at chosen rate, monthly contribution stream applied.
-  const invest10 = longTermInvestment(investmentTotal || 0, hypoAt(10).addToPrincipal, (legacyContribution || 0) + hypoAt(10).addToMonthlyContrib, 10, rate);
-  const invest20 = longTermInvestment(investmentTotal || 0, hypoAt(20).addToPrincipal, (legacyContribution || 0) + hypoAt(20).addToMonthlyContrib, 20, rate);
-  const invest30 = longTermInvestment(investmentTotal || 0, hypoAt(30).addToPrincipal, (legacyContribution || 0) + hypoAt(30).addToMonthlyContrib, 30, rate);
+  // BUILD checkpoints — match Legacy tab exactly (1/2/3/5 yr). Each checkpoint
+  // is the SAME math the Legacy tab uses: current cash + surplus × years +
+  // current investments compounded at `rate`. If the user has zero invested
+  // funds this simplifies to cash-only growth, which is exactly what BUILD
+  // means. The old "Y10 Cash" is intentionally gone — 10-year projections
+  // are always investment-compound math and belong under GROW below.
+  //
+  // Surplus is clamped to >= 0 per spec ("Only use surplus if positive").
+  const positiveSurplus = Math.max(0, monthlyNet || 0);
+  const buildAt = (n: number) => {
+    const h = hypoAt(n);
+    const grownInvest = ((investmentTotal || 0) + h.addToPrincipal) * Math.pow(1 + rate / 100, n);
+    const cashPortion = (totalCash || 0) + positiveSurplus * 12 * n + h.addToCash;
+    return Math.round(grownInvest + cashPortion);
+  };
+  const build1 = buildAt(1);
+  const build2 = buildAt(2);
+  const build3 = buildAt(3);
+  const build5 = buildAt(5);
+  // GROW checkpoint — 10yr labelled clearly as "10YR GROW" so users
+  // understand it is investment-compound math (never cash-linear).
+  const grow10 = longTermInvestment(investmentTotal || 0, hypoAt(10).addToPrincipal, (legacyContribution || 0) + hypoAt(10).addToMonthlyContrib, 10, rate);
+  const grow20 = longTermInvestment(investmentTotal || 0, hypoAt(20).addToPrincipal, (legacyContribution || 0) + hypoAt(20).addToMonthlyContrib, 20, rate);
+  const grow30 = longTermInvestment(investmentTotal || 0, hypoAt(30).addToPrincipal, (legacyContribution || 0) + hypoAt(30).addToMonthlyContrib, 30, rate);
   const showSnapshot = (totalCash || 0) > 0 || (investmentTotal || 0) > 0 || (monthlyNet || 0) > 0;
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
   return (
@@ -1358,10 +1374,9 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
         )}
       </Pressable>
 
-      {/* Legacy Snapshot — mirrors the exact same numbers as the Legacy tab so
-          Home and Legacy never disagree. Cash and Investments are now shown
-          on separate rows with clear labels so users understand that cash
-          does not compound at 7% — only investments do. */}
+      {/* Legacy Snapshot — mirrors the Legacy tab exactly. BUILD row = 1/2/3/5
+          year, GROW row = 10/20/30 year. Labels match so Home ↔ Legacy stay
+          in sync and users never see conflicting "Y10 Cash" numbers. */}
       {showSnapshot && (
         <Pressable style={[s.assumptionsCard, t.cardBg, { marginTop: 12 }]} onPress={() => navigate('legacy')} testID="home-legacy-snapshot">
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
@@ -1369,15 +1384,16 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
             <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#aaa39a'} />
           </View>
           <Text style={[{ fontSize: 9, marginBottom: 6 }, t.textMuted]}>
-            Cash grows from your monthly surplus only. Investments compound at {rate}%.
+            BUILD projects near-term wealth (cash + invested). GROW compounds your investments at {rate}%.
           </Text>
-          {/* Cash row — no growth applied, just surplus × time */}
-          <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8, marginTop: 4 }}>CASH · GROWS FROM SURPLUS</Text>
+          {/* BUILD row — near-term (1/2/3/5 yr). Same math as Legacy BUILD. */}
+          <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8, marginTop: 4 }}>BUILD · CASH + INVEST + SURPLUS</Text>
           <View style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
             {[
-              { label: 'Y1', v: cashY1 },
-              { label: 'Y5', v: cashY5 },
-              { label: 'Y10', v: cashY10 },
+              { label: '1YR', v: build1 },
+              { label: '2YR', v: build2 },
+              { label: '3YR', v: build3 },
+              { label: '5YR', v: build5 },
             ].map((row) => (
               <View key={row.label} style={{ flex: 1, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: t.dark ? '#3a342b' : '#f0e7d1', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
                 <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8 }}>{row.label}</Text>
@@ -1385,13 +1401,13 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
               </View>
             ))}
           </View>
-          {/* Investments row — compounds at chosen rate */}
-          <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8, marginTop: 10 }}>INVESTMENTS · COMPOUND @ {rate}%</Text>
+          {/* GROW row — long-term investment compounding. 10YR labeled clearly. */}
+          <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8, marginTop: 10 }}>GROW · INVESTMENTS COMPOUND @ {rate}%</Text>
           <View style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
             {[
-              { label: 'Y10', v: invest10 },
-              { label: 'Y20', v: invest20 },
-              { label: 'Y30', v: invest30 },
+              { label: '10YR GROW', v: grow10 },
+              { label: '20YR GROW', v: grow20 },
+              { label: '30YR GROW', v: grow30 },
             ].map((row) => (
               <View key={row.label} style={{ flex: 1, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: t.dark ? '#3a342b' : '#f0e7d1', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
                 <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8 }}>{row.label}</Text>
@@ -4014,7 +4030,13 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
   const hypoValue = Math.max(0, Number((hypothetical || '').replace(/[^0-9.]/g, '')) || 0);
   const hypoFreq: 'onetime' | 'monthly' | 'annual' = hypoFrequency || 'onetime';
   const hypoDur: number | null = typeof hypoDuration === 'number' ? hypoDuration : null;
-  const monthlySurplus = Number(monthlyNet) || 0; // may be negative
+  // Spec: "Only use surplus if positive." A negative budget surplus means
+  // the user is spending more than they earn — projecting further deficits
+  // would compound their concern. In BUILD we clamp to 0. The real deficit
+  // is still surfaced explicitly in the "What we're projecting from" card so
+  // users can see it and act on it.
+  const rawMonthlySurplus = Number(monthlyNet) || 0;
+  const monthlySurplus = Math.max(0, rawMonthlySurplus);
 
   // ---- Projection math -----------------------------------------------------
   // BUILD (1-5yr): current cash + investments compounded at RATE + surplus over the period.
@@ -4261,7 +4283,7 @@ const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, timeframe, setTi
                 <Row label="TOTAL PROJECTION" value={MONEY(projection)} muted={t.textMuted} ink={t.textInk} valueColor="#9a6d32" />
               </View>
               <Text style={[{ fontSize: 9, marginTop: 8, lineHeight: 13 }, t.textMuted]}>
-                Cash does not grow at {Math.round(RATE * 100)}% — only what you add to it (your monthly surplus). The {Math.round(RATE * 100)}% return applies only to the invested portion.
+                Cash does not grow at {Math.round(RATE * 100)}% — only what you add to it (your monthly surplus). The {Math.round(RATE * 100)}% return applies only to the invested portion.{rawMonthlySurplus < 0 ? ` Your current surplus is negative (${MONEY(rawMonthlySurplus)}/mo) — we clamp it to $0 here so the projection doesn't shrink your cash further; fix your Budget to turn this positive.` : ''}
               </Text>
             </>
           ) : (

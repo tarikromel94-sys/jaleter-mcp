@@ -215,13 +215,14 @@ export function ReportsScreen({ transactions, categories, incomeSources = [], ba
       start = new Date(today.getFullYear(), today.getMonth() - w.months + 1, 1);
     }
     return (transactions || []).filter((t) => {
-      const d = parseDate(t.date);
+      const d = parseDate((t as any).date);
       if (d < start) return false;
       if (end && d > end) return false;
       // Phase-3: transfers, credit-card payments, and loan payments are
       // system moves — never treat them as income or expense in Reports.
       const sc = ((t as any).system_category || '').toString().toLowerCase();
       if (sc === 'transfer' || sc === 'credit_card_payment' || sc === 'loan_payment') return false;
+      if ((t as any).type === 'transfer') return false;
       return true;
     });
   }, [transactions, windowIdx, customStart, customEnd, today]);
@@ -235,77 +236,107 @@ export function ReportsScreen({ transactions, categories, incomeSources = [], ba
   const totals = useMemo(() => {
     let income = 0, expense = 0;
     filtered.forEach((t) => {
-      const amt = Number(t.amount) || 0;
-      if (amt >= 0) income += amt;
-      else expense += -amt;
+      const amt = Math.abs(Number((t as any).amount) || 0);
+      // Use the saved type field — Jaleter stores all amounts as positive
+      // magnitudes with a type flag. Never classify by sign.
+      // Transfers are already excluded by the pre-filter above.
+      if ((t as any).type === 'income') income += amt;
+      else if ((t as any).type === 'expense') expense += amt;
     });
     return { income, expense, net: income - expense };
   }, [filtered]);
 
+  // Helper: iterate a transaction's splits (or fall back to the top-level
+  // groupId/detailId when no splits are present) and produce (groupId,
+  // detailId, amount) allocations. Reports use these to correctly attribute
+  // split transactions.
+  const allocations = React.useCallback((t: any): { groupId: string; detailId?: string; amount: number }[] => {
+    if (Array.isArray(t?.splits) && t.splits.length > 0) {
+      return t.splits.map((sp: any) => ({
+        groupId: sp.groupId || '',
+        detailId: sp.detailId,
+        amount: Math.abs(Number(sp.amount) || 0),
+      }));
+    }
+    return [{
+      groupId: t?.groupId || '',
+      detailId: t?.detailId,
+      amount: Math.abs(Number(t?.amount) || 0),
+    }];
+  }, []);
+
   const categoryPie = useMemo(() => {
     const catMap = new Map<string, number>();
     const catNames = new Map<string, string>();
-    (categories || []).forEach((c) => {
-      c.subcategories.forEach((s) => catNames.set(s.id, c.name));
+    const subToCat = new Map<string, string>();
+    (categories || []).forEach((c: any) => {
+      catNames.set(c.id, c.name);
+      c.subcategories?.forEach((s: any) => subToCat.set(s.id, c.name));
     });
     filtered.forEach((t) => {
-      const amt = Number(t.amount) || 0;
-      if (amt >= 0) return; // expenses only
-      const catKey = t.category || catNames.get(t.subcategory || '') || 'Uncategorized';
-      catMap.set(catKey, (catMap.get(catKey) || 0) + -amt);
+      if ((t as any).type !== 'expense') return; // expenses only, by type
+      const allocs = allocations(t);
+      for (const a of allocs) {
+        // Prefer the parent category name via subcategory lookup, else group name, else 'Uncategorized'.
+        const catKey = subToCat.get(a.detailId || '') || catNames.get(a.groupId) || 'Uncategorized';
+        catMap.set(catKey, (catMap.get(catKey) || 0) + a.amount);
+      }
     });
     return Array.from(catMap.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
       .map(([label, value], i) => ({ label, value, color: PIE_COLORS[i % PIE_COLORS.length] }));
-  }, [filtered, categories]);
+  }, [filtered, categories, allocations]);
 
-  // Income sources — mirrors the category pie for expenses, but on the income
-  // side. Uses `incomeSources` to resolve source ids → readable names when
-  // transactions carry a `subcategory` that matches an income source id;
-  // otherwise falls back to merchant/name/origin so unclassified income is
-  // still attributed.
+  // Income sources — attributes each income transaction to its income source
+  // (groupId) via `incomeSources`. Falls back to merchant/name/origin so
+  // unclassified income is still visible.
   const incomePie = useMemo(() => {
     const srcNames = new Map<string, string>();
-    (incomeSources || []).forEach((src) => srcNames.set(src.id, src.name));
+    (incomeSources || []).forEach((src: any) => srcNames.set(src.id, src.name));
     const map = new Map<string, number>();
     filtered.forEach((t) => {
-      const amt = Number(t.amount) || 0;
-      if (amt <= 0) return; // income only
-      const key =
-        srcNames.get(t.subcategory || '') ||
-        (t.merchant || t.name || t.origin || 'Other income').trim() ||
-        'Other income';
-      map.set(key, (map.get(key) || 0) + amt);
+      if ((t as any).type !== 'income') return; // income only, by type
+      const allocs = allocations(t);
+      for (const a of allocs) {
+        const key =
+          srcNames.get(a.groupId) ||
+          ((t as any).merchant || (t as any).name || (t as any).origin || 'Other income').toString().trim() ||
+          'Other income';
+        map.set(key, (map.get(key) || 0) + a.amount);
+      }
     });
     return Array.from(map.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
       .map(([label, value], i) => ({ label, value, color: PIE_COLORS[i % PIE_COLORS.length] }));
-  }, [filtered, incomeSources]);
+  }, [filtered, incomeSources, allocations]);
 
   const subcategoryBars = useMemo(() => {
     const subMap = new Map<string, number>();
     const subNames = new Map<string, string>();
-    (categories || []).forEach((c) => c.subcategories.forEach((s) => subNames.set(s.id, s.name)));
+    (categories || []).forEach((c: any) => c.subcategories?.forEach((s: any) => subNames.set(s.id, s.name)));
     filtered.forEach((t) => {
-      const amt = Number(t.amount) || 0;
-      if (amt >= 0) return;
-      const key = t.subcategory ? (subNames.get(t.subcategory) || t.subcategory) : (t.name || 'Uncategorized');
-      subMap.set(key, (subMap.get(key) || 0) + -amt);
+      if ((t as any).type !== 'expense') return; // expenses only
+      const allocs = allocations(t);
+      for (const a of allocs) {
+        const key = a.detailId ? (subNames.get(a.detailId) || a.detailId) : ((t as any).name || 'Uncategorized');
+        subMap.set(key, (subMap.get(key) || 0) + a.amount);
+      }
     });
     return Array.from(subMap.entries())
       .sort((a, b) => b[1] - a[1])
       .map(([label, value]) => ({ label, value }));
-  }, [filtered, categories]);
+  }, [filtered, categories, allocations]);
 
   const monthly = useMemo(() => {
     const map = new Map<string, { income: number; expense: number }>();
     filtered.forEach((t) => {
-      const key = monthKey(parseDate(t.date));
+      const key = monthKey(parseDate((t as any).date));
       const bucket = map.get(key) || { income: 0, expense: 0 };
-      const amt = Number(t.amount) || 0;
-      if (amt >= 0) bucket.income += amt; else bucket.expense += -amt;
+      const amt = Math.abs(Number((t as any).amount) || 0);
+      if ((t as any).type === 'income') bucket.income += amt;
+      else if ((t as any).type === 'expense') bucket.expense += amt;
       map.set(key, bucket);
     });
     return Array.from(map.entries())
@@ -317,11 +348,11 @@ export function ReportsScreen({ transactions, categories, incomeSources = [], ba
   const merchants = useMemo(() => {
     const map = new Map<string, { count: number; total: number }>();
     filtered.forEach((t) => {
-      const amt = Number(t.amount) || 0;
-      if (amt >= 0) return;
-      const key = (t.merchant || t.name || t.origin || 'Unknown').trim() || 'Unknown';
+      if ((t as any).type !== 'expense') return; // Spending by merchant — expenses only
+      const amt = Math.abs(Number((t as any).amount) || 0);
+      const key = ((t as any).merchant || (t as any).name || (t as any).origin || 'Unknown').toString().trim() || 'Unknown';
       const b = map.get(key) || { count: 0, total: 0 };
-      b.count += 1; b.total += -amt;
+      b.count += 1; b.total += amt;
       map.set(key, b);
     });
     return Array.from(map.entries())
@@ -395,8 +426,8 @@ export function ReportsScreen({ transactions, categories, incomeSources = [], ba
         </View>
       </Section>
 
-      {/* income sources — where the money came from (by source / merchant) */}
-      <Section title="Where the money came from (by source)">
+      {/* Income sources — where the money came from (by source / merchant) */}
+      <Section title="Income by Source">
         {incomePie.length === 0 ? <Text style={styles.empty}>No income in this range.</Text> : (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <Pie data={incomePie} />
@@ -406,7 +437,7 @@ export function ReportsScreen({ transactions, categories, incomeSources = [], ba
       </Section>
 
       {/* category pie */}
-      <Section title="Where the money went (by category)">
+      <Section title="Spending by Category">
         {categoryPie.length === 0 ? <Text style={styles.empty}>No expenses in this range.</Text> : (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <Pie data={categoryPie} />
@@ -439,7 +470,7 @@ export function ReportsScreen({ transactions, categories, incomeSources = [], ba
       </Section>
 
       {/* merchants */}
-      <Section title="Top merchants / sources">
+      <Section title="Top Merchants (spending)">
         {merchants.length === 0 ? <Text style={styles.empty}>No expenses to analyze.</Text> : (
           <View style={{ gap: 6 }}>
             {merchants.slice(0, merchantsShown).map((m, i) => (
