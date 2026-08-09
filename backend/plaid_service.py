@@ -102,23 +102,33 @@ async def _post(path: str, body: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---- Public API used by server.py ------------------------------------------
-async def create_link_token(user_id: str, webhook_url: Optional[str] = None, android_package_name: Optional[str] = None) -> dict[str, Any]:
+async def create_link_token(user_id: str, webhook_url: Optional[str] = None, android_package_name: Optional[str] = None, access_token: Optional[str] = None) -> dict[str, Any]:
     body: dict[str, Any] = {
         'client_name': 'Jaleter',
         'language': 'en',
         'country_codes': PLAID_COUNTRY_CODES,
         'user': {'client_user_id': user_id},
-        'products': PLAID_PRODUCTS or ['transactions'],
+    }
+    if access_token:
+        # Update-mode link token — passed when a Plaid item enters
+        # ITEM_LOGIN_REQUIRED (typical after a user changes their bank
+        # password). Products / optional_products / transactions MUST be
+        # omitted in update mode — Plaid rejects the request otherwise.
+        body['access_token'] = access_token
+    else:
+        body['products'] = PLAID_PRODUCTS or ['transactions']
         # `optional_products` lets us request extra data (like credit-card
         # APR/minimum payment via `liabilities`, and holdings for investment
         # accounts) WITHOUT forcing the institution to support them. Chase
         # credit-card connections were failing before because when a bank
         # doesn't fully support a required product, the entire link errors
         # out — moving these to optional fixes that gracefully.
-        'optional_products': ['liabilities', 'investments'],
-    }
-    if 'transactions' in (PLAID_PRODUCTS or ['transactions']):
-        body['transactions'] = {'days_requested': 90}
+        body['optional_products'] = ['liabilities', 'investments']
+        if 'transactions' in (PLAID_PRODUCTS or ['transactions']):
+            # Request the full 24-month backfill Plaid supports. This fixes the
+            # "Chase transactions missing" bug where anything older than 90 days
+            # was previously being silently dropped from the initial sync.
+            body['transactions'] = {'days_requested': 730}
     if webhook_url:
         body['webhook'] = webhook_url
     if android_package_name:

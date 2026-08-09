@@ -1472,10 +1472,27 @@ async def plaid_status():
 
 @api_router.post('/plaid/link-token')
 @limiter.limit('20/minute')
-async def plaid_link_token(request: Request, current_user: dict = Depends(get_current_user)):
+async def plaid_link_token(request: Request, current_user: dict = Depends(get_current_user), item_id: Optional[str] = None):
     webhook = _plaid_webhook_url(request)
+    access_token: Optional[str] = None
+    if item_id:
+        # Update-mode: caller passed the item_id of an existing Plaid item
+        # that needs to be re-authenticated (e.g. ITEM_LOGIN_REQUIRED after
+        # the user changed their bank password). We look up the encrypted
+        # access token and pass it back so Plaid Link runs in Update Mode.
+        doc = await db.plaid_items.find_one({'user_id': current_user['user_id'], 'item_id': item_id})
+        if not doc:
+            raise HTTPException(status_code=404, detail='Plaid item not found')
+        try:
+            access_token = plaid_service.decrypt(doc['access_token_encrypted'])
+        except PlaidError as e:
+            raise HTTPException(status_code=502, detail=str(e))
     try:
-        data = await plaid_service.create_link_token(current_user['user_id'], webhook_url=webhook)
+        data = await plaid_service.create_link_token(
+            current_user['user_id'],
+            webhook_url=webhook,
+            access_token=access_token,
+        )
     except PlaidError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return data

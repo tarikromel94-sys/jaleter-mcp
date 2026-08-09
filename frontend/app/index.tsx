@@ -352,6 +352,110 @@ const isSystemTransaction = (t: any): boolean => {
 };
 const initialTx: Tx[] = [];
 
+// ---- Splits-aware budget accounting -----------------------------------------
+// A single transaction can be split across multiple budget categories. When
+// splits exist, we ignore the top-level groupId/detailId and iterate splits
+// instead. When splits are absent, the transaction contributes its full
+// amount to the top-level assignment.
+type Alloc = { groupId: string; detailId?: string; amount: number; parentType: Tx['type']; parentPeriod: string; parentYear: number; parentTx: Tx };
+const txAllocations = (tx: Tx): Alloc[] => {
+  const isoMatch = typeof tx.date === 'string' ? tx.date.match(/^(\d{4})-(\d{2})/) : null;
+  const parentYear = isoMatch ? Number(isoMatch[1]) : (tx.date ? new Date(tx.date).getFullYear() : new Date().getFullYear());
+  const parentPeriod = tx.period || 'Jan';
+  if (Array.isArray(tx.splits) && tx.splits.length > 0) {
+    return tx.splits.map((sp) => ({
+      groupId: sp.groupId,
+      detailId: sp.detailId,
+      amount: Number(sp.amount) || 0,
+      parentType: tx.type,
+      parentPeriod,
+      parentYear,
+      parentTx: tx,
+    }));
+  }
+  return [{
+    groupId: tx.groupId,
+    detailId: tx.detailId,
+    amount: tx.amount,
+    parentType: tx.type,
+    parentPeriod,
+    parentYear,
+    parentTx: tx,
+  }];
+};
+// Sum splits-aware actual for a subcategory in a given month (of a specific year).
+const spentForSubInMonth = (transactions: Tx[], subId: string, monthIndex: number, year?: number): number => {
+  let sum = 0;
+  const targetMonth = MONTHS[monthIndex];
+  for (const tx of transactions) {
+    if (isSystemTransaction(tx)) continue;
+    if (tx.type !== 'expense') continue;
+    const allocs = txAllocations(tx);
+    for (const a of allocs) {
+      if (a.detailId !== subId) continue;
+      if (a.parentPeriod !== targetMonth) continue;
+      if (year !== undefined && a.parentYear !== year) continue;
+      sum += a.amount;
+    }
+  }
+  return sum;
+};
+// Same for income (uses groupId — no subcategory).
+const receivedForIncomeInMonth = (transactions: Tx[], srcId: string, monthIndex: number, year?: number): number => {
+  let sum = 0;
+  const targetMonth = MONTHS[monthIndex];
+  for (const tx of transactions) {
+    if (isSystemTransaction(tx)) continue;
+    if (tx.type !== 'income') continue;
+    const allocs = txAllocations(tx);
+    for (const a of allocs) {
+      if (a.groupId !== srcId) continue;
+      if (a.parentPeriod !== targetMonth) continue;
+      if (year !== undefined && a.parentYear !== year) continue;
+      sum += a.amount;
+    }
+  }
+  return sum;
+};
+// Find every transaction that contributes to a subcategory in a given month.
+// Used by the "tap the Actual number" drill-down.
+const transactionsForSubInMonth = (transactions: Tx[], subId: string, monthIndex: number, year?: number): { tx: Tx; contribution: number }[] => {
+  const out: { tx: Tx; contribution: number }[] = [];
+  const targetMonth = MONTHS[monthIndex];
+  for (const tx of transactions) {
+    if (isSystemTransaction(tx)) continue;
+    if (tx.type !== 'expense') continue;
+    const allocs = txAllocations(tx);
+    let contribution = 0;
+    for (const a of allocs) {
+      if (a.detailId !== subId) continue;
+      if (a.parentPeriod !== targetMonth) continue;
+      if (year !== undefined && a.parentYear !== year) continue;
+      contribution += a.amount;
+    }
+    if (contribution > 0) out.push({ tx, contribution });
+  }
+  return out;
+};
+const transactionsForIncomeInMonth = (transactions: Tx[], srcId: string, monthIndex: number, year?: number): { tx: Tx; contribution: number }[] => {
+  const out: { tx: Tx; contribution: number }[] = [];
+  const targetMonth = MONTHS[monthIndex];
+  for (const tx of transactions) {
+    if (isSystemTransaction(tx)) continue;
+    if (tx.type !== 'income') continue;
+    const allocs = txAllocations(tx);
+    let contribution = 0;
+    for (const a of allocs) {
+      if (a.groupId !== srcId) continue;
+      if (a.parentPeriod !== targetMonth) continue;
+      if (year !== undefined && a.parentYear !== year) continue;
+      contribution += a.amount;
+    }
+    if (contribution > 0) out.push({ tx, contribution });
+  }
+  return out;
+};
+
 type Asset = { id: string; name: string; value: number; source: string; icon: string; };
 const initialAssets: Asset[] = [
   { id: 'cash', name: 'Cash', value: 0, source: 'Manual', icon: 'wallet-outline' },
@@ -1575,9 +1679,26 @@ const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSourc
   const mIdx = annual ? -1 : monthIndex(period);
   useEffect(() => { if (focusCategory) { setExpanded(x => x.includes(focusCategory) ? x : [...x, focusCategory]); clearFocus(); } }, [focusCategory]);
 
-  const relevant = transactions.filter((t: Tx) => (annual || t.period === period) && !isSystemTransaction(t));
-  const actualIncome = relevant.filter((t: Tx) => t.type === 'income').reduce((sum: number, t: Tx) => sum + t.amount, 0);
-  const actualExpenses = relevant.filter((t: Tx) => t.type === 'expense').reduce((sum: number, t: Tx) => sum + t.amount, 0);
+  // Splits-aware, year-aware budget accounting. For a given month, we count
+  // each transaction's contribution to a subcategory/income source — split
+  // transactions are attributed to each of their splits proportionally.
+  const yr = Number(budgetYear) || new Date().getFullYear();
+  const spentInSub = React.useCallback((subId: string) => {
+    if (annual) return MONTHS.reduce((s, _m, i) => s + spentForSubInMonth(transactions, subId, i, yr), 0);
+    return spentForSubInMonth(transactions, subId, mIdx, yr);
+  }, [transactions, annual, mIdx, yr]);
+  const receivedInIncome = React.useCallback((srcId: string) => {
+    if (annual) return MONTHS.reduce((s, _m, i) => s + receivedForIncomeInMonth(transactions, srcId, i, yr), 0);
+    return receivedForIncomeInMonth(transactions, srcId, mIdx, yr);
+  }, [transactions, annual, mIdx, yr]);
+  const actualIncome = incomeSources.reduce((sum: number, x: any) => sum + receivedInIncome(x.id), 0);
+  const actualExpenses = categories.reduce((sum: number, c: Category) => sum + c.subcategories.reduce((cs: number, sub: Subcategory) => cs + spentInSub(sub.id), 0), 0);
+  const spentInGroup = (gId: string) => {
+    const c = categories.find((cc: Category) => cc.id === gId);
+    if (!c) return 0;
+    return c.subcategories.reduce((s: number, sc: Subcategory) => s + spentInSub(sc.id), 0);
+  };
+  // (`relevant` was removed — all callers now use the splits-aware helpers.)
   const plannedIncome = incomeSources.reduce((sum: number, x: any) => sum + x.budgeted, 0) * (annual ? 12 : 1);
   // Total planned expenses across every category / subcategory for the
   // currently-selected month (or the whole year when in Year view). This is
@@ -1587,10 +1708,31 @@ const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSourc
   }, 0);
   const budgetedRemaining = plannedIncome - plannedExpenses;
   const actualRemaining = actualIncome - actualExpenses;
-  const spentInSub = (subId: string) => relevant.filter((tx: Tx) => tx.type === 'expense' && tx.detailId === subId).reduce((s: number, tx: Tx) => s + tx.amount, 0);
-  const spentInGroup = (gId: string) => relevant.filter((tx: Tx) => tx.type === 'expense' && (tx.groupId === gId)).reduce((s: number, tx: Tx) => s + tx.amount, 0);
   const budgetFor = (sub: Subcategory) => annual ? annualAmount(sub) : monthlyAmount(sub, mIdx);
   const groupTotal = (c: Category) => c.subcategories.reduce((s: number, x: Subcategory) => s + budgetFor(x), 0);
+
+  // Drill-down: tapping any Actual number opens a sheet listing the
+  // transactions that make up that total, so users can edit / reclassify /
+  // delete them (spec: "Make each Actual amount clickable").
+  const [drillDown, setDrillDown] = useState<{ kind: 'expense'; subId: string; subName: string; groupName: string } | { kind: 'income'; srcId: string; srcName: string } | null>(null);
+  const drillTransactions = React.useMemo(() => {
+    if (!drillDown) return [];
+    if (drillDown.kind === 'expense') {
+      if (annual) {
+        const acc: { tx: Tx; contribution: number }[] = [];
+        for (let i = 0; i < MONTHS.length; i++) acc.push(...transactionsForSubInMonth(transactions, drillDown.subId, i, yr));
+        return acc;
+      }
+      return transactionsForSubInMonth(transactions, drillDown.subId, mIdx, yr);
+    }
+    if (annual) {
+      const acc: { tx: Tx; contribution: number }[] = [];
+      for (let i = 0; i < MONTHS.length; i++) acc.push(...transactionsForIncomeInMonth(transactions, drillDown.srcId, i, yr));
+      return acc;
+    }
+    return transactionsForIncomeInMonth(transactions, drillDown.srcId, mIdx, yr);
+  }, [drillDown, transactions, annual, mIdx, yr]);
+  const [drillEditTx, setDrillEditTx] = useState<Tx | null>(null);
 
   const startEdit = (groupId: string, sub: Subcategory) => { setEditing({ groupId, sub }); setDraft(String(budgetFor(sub) || '')); };
   const commitEdit = () => {
@@ -1887,26 +2029,51 @@ const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSourc
             </Pressable>
             {earnExpanded && (
               <View style={s.subcategoryList}>
+                {/* Column headers — matching expense subcategory rows */}
+                <View style={s.subHeaderRow}>
+                  <Text style={s.subHeaderName}>Earn source</Text>
+                  <Text style={s.subHeaderCol}>Actual</Text>
+                  <Text style={s.subHeaderCol}>Budget</Text>
+                  <Text style={s.subHeaderCol}>Left</Text>
+                  <View style={{ width: 24 }} />
+                </View>
                 {incomeSources.map((src: any) => {
-                  const rec = relevant.filter((tx: Tx) => tx.type === 'income' && tx.groupId === src.id).reduce((sum: number, tx: Tx) => sum + tx.amount, 0);
+                  const rec = receivedInIncome(src.id);
                   const target = src.budgeted * (annual ? 12 : 1);
+                  const left = target - rec;
+                  const leftColor = target > 0 ? (left < 0 ? '#5a7f60' : left > 0 ? C.amber : '#5a7f60') : '#c1b9ac';
+                  const clickable = rec > 0;
                   return (
-                    <Pressable
-                      key={src.id}
-                      onPress={() => { setEditingEarn(src); setDraft(src.budgeted ? String(src.budgeted) : ''); }}
-                      style={s.subcategoryRow}
-                      testID={`budget-earn-${src.id}`}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{src.name}</Text>
-                        <Text style={{ fontSize: 8, color: C.muted2 }}>received / expected</Text>
-                      </View>
-                      <View style={{ alignItems: 'flex-end' }}>
-                        <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>{MONEY(rec)} <Text style={{ color: '#c1b9ac', fontWeight: '400' }}>/ {MONEY(target)}</Text></Text>
-                        <Text style={{ fontSize: 8, color: src.budgeted > 0 ? C.muted2 : '#c9a56c' }}>{src.budgeted > 0 ? '' : 'tap to set'}</Text>
-                      </View>
-                      <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#c1b9ac'} />
-                    </Pressable>
+                    <View key={src.id} style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Pressable
+                        onPress={() => { setEditingEarn(src); setDraft(src.budgeted ? String(src.budgeted) : ''); }}
+                        style={[s.subcategoryRow, { flex: 1 }]}
+                        testID={`budget-earn-${src.id}`}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]} numberOfLines={1}>{src.name}</Text>
+                          {src.budgeted <= 0 && <Text style={{ fontSize: 8, color: '#c9a56c' }}>tap to set</Text>}
+                        </View>
+                        <Pressable
+                          onPress={clickable ? () => setDrillDown({ kind: 'income', srcId: src.id, srcName: src.name }) : undefined}
+                          style={[s.subCol, clickable && { backgroundColor: '#c4945010', borderRadius: 4 }]}
+                          hitSlop={4}
+                          testID={`budget-earn-actual-${src.id}`}
+                        >
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: clickable ? '#9a6d32' : (t.dark ? D.text : C.ink) }} numberOfLines={1}>{MONEY(rec)}</Text>
+                          {clickable && <Text style={{ fontSize: 7, color: '#c1a06a', letterSpacing: 0.4 }}>view</Text>}
+                        </Pressable>
+                        <View style={s.subCol}>
+                          <Text style={{ fontSize: 11, color: t.dark ? D.text : C.ink }} numberOfLines={1}>{MONEY(target)}</Text>
+                        </View>
+                        <View style={s.subCol}>
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: leftColor }} numberOfLines={1}>
+                            {target > 0 ? (left >= 0 ? MONEY(left) : `+${MONEY(-left)}`) : '—'}
+                          </Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#c1b9ac'} />
+                      </Pressable>
+                    </View>
                   );
                 })}
                 <Pressable onPress={() => { setNewEarnName(''); setDraft(''); setAddingEarn(true); }} style={[s.subcategoryRow, { justifyContent: 'center' }]} testID="budget-earn-add">
@@ -1988,7 +2155,15 @@ const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSourc
                                   </View>
                                 )}
                               </View>
-                              <Text style={[s.subCol, t.textInk]}>{MONEY(a)}</Text>
+                              <Pressable
+                                onPress={a > 0 ? () => setDrillDown({ kind: 'expense', subId: sub.id, subName: sub.name, groupName: c.name }) : () => startEdit(c.id, sub)}
+                                hitSlop={4}
+                                style={[s.subCol, a > 0 && { backgroundColor: '#c4945010', borderRadius: 4 }]}
+                                testID={`budget-actual-${sub.id}`}
+                              >
+                                <Text style={{ fontSize: 11, color: a > 0 ? '#9a6d32' : (t.dark ? D.text : C.ink), fontWeight: a > 0 ? '700' : '400' }} numberOfLines={1}>{MONEY(a)}</Text>
+                                {a > 0 && <Text style={{ fontSize: 7, color: '#c1a06a', letterSpacing: 0.4 }}>view</Text>}
+                              </Pressable>
                               <Text style={[s.subCol, { color: b > 0 ? (t.dark ? D.textInk : C.ink) : '#c9a56c' }]}>{b > 0 ? MONEY(b) : '—'}</Text>
                               <Text style={[s.subCol, { color: leftColor, fontWeight: '800' }]}>{b > 0 ? MONEY(remaining) : '—'}</Text>
                             </Pressable>
@@ -2126,6 +2301,65 @@ const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSourc
             <GoldButton label="Add" onPress={() => addingSubTo && addSubcategory(addingSubTo)} testID="sub-add-save" />
           </View>
         </View>
+      </Sheet>
+
+      {/* Drill-down: transactions that make up an Actual number. Tap any
+          row to open the standard TxForm sheet — edit / reclassify / delete
+          all works from here. Budget totals refresh instantly on save. */}
+      <Sheet
+        visible={!!drillDown}
+        close={() => { setDrillDown(null); setDrillEditTx(null); }}
+        title={drillDown ? (drillDown.kind === 'expense' ? drillDown.subName : drillDown.srcName) : ''}
+        subtitle={drillDown ? `${drillTransactions.length} transaction${drillTransactions.length === 1 ? '' : 's'} · ${period === 'Year' ? String(budgetYear) : `${period} ${budgetYear}`}` : ''}
+      >
+        {drillDown && (
+          <View>
+            {drillTransactions.length === 0 ? (
+              <Text style={{ fontSize: 11, color: C.muted2 }}>No transactions yet for this period.</Text>
+            ) : drillTransactions.map(({ tx, contribution }) => (
+              <Pressable
+                key={tx.id}
+                onPress={() => setDrillEditTx(tx)}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: t.dark ? '#3a342b' : '#f1ede6' }}
+                testID={`budget-drill-${tx.id}`}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]} numberOfLines={1}>{tx.name}</Text>
+                  <Text style={[{ fontSize: 9 }, t.textMuted]} numberOfLines={1}>
+                    {(tx.date || '').slice(0, 10)} · {tx.origin}{tx.merchant && tx.merchant !== tx.name ? ` · ${tx.merchant}` : ''}{tx.splits && tx.splits.length > 0 ? ` · Split contribution` : ''}
+                  </Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={[{ fontSize: 12, fontWeight: '800' }, t.textInk]}>{MONEY(contribution)}</Text>
+                  {tx.splits && tx.splits.length > 0 && Math.abs(tx.amount - contribution) > 0.01 && (
+                    <Text style={[{ fontSize: 8 }, t.textMuted]}>of {MONEY(tx.amount)}</Text>
+                  )}
+                </View>
+                <Ionicons name="chevron-forward" size={13} color={t.dark ? D.textMuted : '#c1b9ac'} style={{ marginLeft: 4 }} />
+              </Pressable>
+            ))}
+          </View>
+        )}
+      </Sheet>
+      <Sheet visible={!!drillEditTx} close={() => setDrillEditTx(null)} title={drillEditTx?.id ? 'Edit Transaction' : 'Add Transaction'} subtitle="Update the amount, category, or delete the transaction. Budget totals refresh instantly.">
+        {drillEditTx && (
+          <TxForm
+            item={drillEditTx}
+            categories={categories}
+            incomeSources={incomeSources}
+            save={(next: any) => {
+              // Preserve the tx id from the original — TxForm may include a
+              // spread that could omit it. Then update transactions state.
+              const merged = { ...drillEditTx, ...next };
+              setTransactions((prev: Tx[]) => prev.map((x: Tx) => x.id === merged.id ? merged : x));
+              setDrillEditTx(null);
+            }}
+            remove={(id: string) => {
+              setTransactions((prev: Tx[]) => prev.filter((x: Tx) => x.id !== id));
+              setDrillEditTx(null);
+            }}
+          />
+        )}
       </Sheet>
 
       {/* Reassign-before-delete sheet — required whenever the target
@@ -2351,6 +2585,8 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
   const t = useThemed();
   const { token } = useAuth();
   const [filter, setFilter] = useState('All');
+  const [accountFilter, setAccountFilter] = useState<string>('All');
+  const [dateRange, setDateRange] = useState<string>('All');
   const [editing, setEditing] = useState<any>(null);
   const [toast, setToast] = useState('');
   const [importing, setImporting] = useState(false);
@@ -2391,14 +2627,39 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
     finally { setSyncing(false); }
   };
   const shown = transactions.filter((tx: Tx) => {
-    if (filter === 'All') return true;
+    // Type filter
     const isTransfer = tx.type === 'transfer' || isSystemTransaction(tx);
-    if (filter === 'Transfers') return isTransfer;
-    if (isTransfer) return false; // Income/Expense filters exclude transfers
-    if (filter === 'Income') return tx.type === 'income';
-    if (filter === 'Expenses') return tx.type === 'expense';
+    if (filter === 'Transfers' && !isTransfer) return false;
+    if (filter === 'Income' && (tx.type !== 'income' || isTransfer)) return false;
+    if (filter === 'Expenses' && (tx.type !== 'expense' || isTransfer)) return false;
+    // Account/bank filter — matches `origin` (e.g. "Chase", "Bank of America", "Manual")
+    if (accountFilter !== 'All' && tx.origin !== accountFilter) return false;
+    // Date-range filter
+    if (dateRange !== 'All') {
+      const isoMatch = typeof tx.date === 'string' ? tx.date.match(/^(\d{4})-(\d{2})-(\d{2})/) : null;
+      if (!isoMatch) return false;
+      const txDate = new Date(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3]));
+      const now = new Date();
+      if (dateRange === '30d') {
+        const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        if (txDate < cutoff) return false;
+      } else if (dateRange === 'This Month') {
+        if (txDate.getFullYear() !== now.getFullYear() || txDate.getMonth() !== now.getMonth()) return false;
+      } else if (dateRange === 'Last Month') {
+        const lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        if (txDate.getFullYear() !== lm.getFullYear() || txDate.getMonth() !== lm.getMonth()) return false;
+      } else if (dateRange === 'YTD') {
+        if (txDate.getFullYear() !== now.getFullYear()) return false;
+      }
+    }
     return true;
   });
+  // Unique origins (banks) for the account filter — computed once per render.
+  const originOptions = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const tx of transactions) if (tx.origin) set.add(tx.origin);
+    return ['All', ...Array.from(set).sort()];
+  }, [transactions]);
   const save = (t: any) => {
     setTransactions((xs: Tx[]) => xs.some(x => x.id === t.id) ? xs.map(x => x.id === t.id ? t : x) : [{ ...t, id: `manual-${Date.now()}`, origin: 'Manual', period: currentMonth() }, ...xs]);
     setEditing(null); setToast('Transaction saved and totals refreshed.');
@@ -2476,6 +2737,34 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
         <Ionicons name={banner.kind === 'empty' ? 'chevron-forward' : (syncing ? 'sync-outline' : 'refresh-outline')} size={16} color={banner.iconColor} />
       </Pressable>
       <PeriodPills values={['All','Income','Expenses','Transfers']} value={filter} onChange={setFilter} testID="tx-filter" />
+      {/* Compact secondary filter rows — Date range + Account/bank source.
+          Both scroll horizontally so any number of banks/dates fit on phones. */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }} contentContainerStyle={{ gap: 6, paddingRight: 8 }}>
+        {(['All', '30d', 'This Month', 'Last Month', 'YTD'] as const).map((r) => (
+          <Pressable
+            key={r}
+            onPress={() => setDateRange(r)}
+            style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14, borderWidth: 1, borderColor: dateRange === r ? '#c49450' : (t.dark ? D.border : '#e6dcc5'), backgroundColor: dateRange === r ? '#c4945018' : 'transparent' }}
+            testID={`tx-range-${r.replace(/\W/g, '')}`}
+          >
+            <Text style={{ fontSize: 10, fontWeight: '700', color: dateRange === r ? '#9a6d32' : (t.dark ? D.textMuted : C.muted2) }}>{r === '30d' ? 'Last 30d' : r}</Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+      {originOptions.length > 2 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }} contentContainerStyle={{ gap: 6, paddingRight: 8 }}>
+          {originOptions.map((o) => (
+            <Pressable
+              key={o}
+              onPress={() => setAccountFilter(o)}
+              style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14, borderWidth: 1, borderColor: accountFilter === o ? '#c49450' : (t.dark ? D.border : '#e6dcc5'), backgroundColor: accountFilter === o ? '#c4945018' : 'transparent' }}
+              testID={`tx-account-${o.replace(/\W/g, '')}`}
+            >
+              <Text style={{ fontSize: 10, fontWeight: '700', color: accountFilter === o ? '#9a6d32' : (t.dark ? D.textMuted : C.muted2) }}>{o}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      )}
       <View style={[s.transactionList, t.cardBg]}>
         {shown.length === 0 && (
           <View style={{ padding: 30, alignItems: 'center' }}>
@@ -5078,13 +5367,14 @@ function MainApp() {
         const raw = Array.isArray(data?.transactions) ? data.transactions : [];
         const reshaped: Tx[] = raw.map((r: any) => {
           const amt = Number(r.amount) || 0;
+          // Parse date safely — avoid timezone-shifting July 1 to June 30.
+          // Plaid returns YYYY-MM-DD strings; we extract month directly from
+          // the string to keep July transactions in the July budget bucket.
           const dateStr = typeof r.date === 'string' ? r.date : new Date(r.date).toISOString();
-          const period = MONTHS[new Date(dateStr).getMonth()] || currentMonth();
+          const isoMatch = typeof dateStr === 'string' ? dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/) : null;
+          const monthIndex = isoMatch ? Number(isoMatch[2]) - 1 : new Date(dateStr).getMonth();
+          const period = MONTHS[monthIndex] || currentMonth();
           const sys = r.system_category || null;
-          // Any transfer / credit-card-payment / loan-payment auto-detected by
-          // the backend classifier becomes a first-class Transfer in the UI —
-          // so it's never counted as income or expense (spec: transfers must
-          // not affect Net Worth or Budget totals).
           const isSystemTransfer = sys === 'transfer' || sys === 'credit_card_payment' || sys === 'loan_payment' || !!r.is_transfer;
           const derivedType: Tx['type'] = isSystemTransfer ? 'transfer' : (amt >= 0 ? 'income' : 'expense');
           return {

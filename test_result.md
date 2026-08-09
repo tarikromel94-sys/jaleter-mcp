@@ -1057,3 +1057,47 @@ Add Apple Sign-In to Login + Signup screens.
         * Category total == sum of expanded accounts.
 
       NO backend changes required. Report to next iteration file.
+
+  - agent: "main"
+    message: |
+      PHASE 2 OF 3 — Budget + Activity + Chase Plaid — implementation complete.
+
+      CHANGES:
+      1. Budget Earn row now shows Actual / Budget / Left columns (matching expense rows).
+         Includes column headers and clickable Actual for drill-down.
+      2. Splits-aware & year-aware Budget accounting:
+         - New helpers spentForSubInMonth / receivedForIncomeInMonth / transactionsForSubInMonth (~L353).
+         - Handles split transactions by iterating splits and attributing amounts.
+         - BudgetScreen actualIncome/actualExpenses/spentInSub/spentInGroup all refactored (~L1697).
+      3. July → July fix: Plaid transactions now parse YYYY-MM directly from the date string
+         (was using `new Date().getMonth()` which could TZ-shift Jul 1 → Jun 30).
+      4. Tap any Actual amount → drill-down sheet shows contributing transactions.
+         Tap a transaction → opens TxForm to edit/reclassify/delete.
+         Works for both expense subcategories and Earn sources.
+      5. Activity screen: added two secondary filter rows —
+         - Date range: All / Last 30d / This Month / Last Month / YTD.
+         - Account/bank: dynamically populated from unique `origin` values.
+      6. Chase Plaid fixes:
+         - Increased Plaid transactions.days_requested from 90 → 730 (full 24-month backfill).
+         - New Update-Mode Plaid link-token endpoint: POST /api/plaid/link-token?item_id=<id>
+           returns a link_token for re-authentication of existing Plaid items in
+           ITEM_LOGIN_REQUIRED state.
+
+      TESTING FOCUS (Phase 2):
+      - Budget: Earn row now displays as a 4-column row with Actual/Budget/Left headers.
+      - Add a manual Income $1000 with Earn source "W-2 Salary". Confirm actual shows.
+      - Tap "Actual" amount on any subcategory or earn source → sheet opens listing the
+        transaction(s). Tap the transaction → TxForm opens with pre-filled fields.
+      - Manual Expense $180 with splits ($100 Groceries, $80 Household). Confirm:
+        * $100 counts toward Groceries actual and $80 toward Household.
+        * Budget totals reflect both correctly.
+        * Drill-down for Groceries shows the tx with "of $180" annotation.
+      - Activity: Date range pills All/30d/This Month/Last Month/YTD render and filter.
+      - Activity: Account pills only shown when >2 unique origins exist; filter works.
+      - Backend: POST /api/plaid/link-token?item_id=xxx should return a link_token when a
+        Plaid item exists (update-mode) or 404 if item_id not found. Regular POST with no
+        item_id returns a fresh link_token.
+      - Test with alex+test1@jaleter.app (no linked Plaid items so update mode returns 404).
+
+      NO breaking changes. Existing manual transactions still render/filter correctly.
+      Report to next available iteration file.
