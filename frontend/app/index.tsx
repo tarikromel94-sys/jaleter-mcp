@@ -3610,10 +3610,14 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[{ fontSize: 11, fontWeight: '800' }, t.textInk]}>
-            {syncingAll ? 'Syncing…' : !linkedLoaded ? 'Updating your accounts…' : linkedSyncing ? 'Refreshing…' : 'Accounts synced'}
+            {syncingAll ? 'Syncing…' : !linkedLoaded ? 'Updating your accounts…' : linkedSyncing ? 'Refreshing…' : validLinks.length === 0 ? 'No accounts linked' : 'Accounts synced'}
           </Text>
           <Text style={[{ fontSize: 9, marginTop: 1 }, t.textMuted]}>
-            {(syncingAll || linkedSyncing || !linkedLoaded) ? 'Balances refresh once your bank data returns.' : `${lastSyncLabel} · Tap to refresh`}
+            {(syncingAll || linkedSyncing || !linkedLoaded)
+              ? 'Balances refresh once your bank data returns.'
+              : validLinks.length === 0
+                ? 'Link a bank in Settings to pull balances automatically.'
+                : `${lastSyncLabel} · Tap to refresh`}
           </Text>
         </View>
       </Pressable>
@@ -3992,77 +3996,8 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
     </ScrollView>
   );
 };
-const WorthCard = ({ title, total, rows, hidden, onRowPress, onAdd }: any) => {
-  const t = useThemed();
-  // A row is "empty" when it has no value AND no linked source. The seeded
-  // Cash + Investments rows always exist, so an "empty" WorthCard for
-  // Assets means both seeded rows are still at $0 and there are no manual
-  // additions. Liabilities has no seeded rows, so any zero-length rows
-  // array is truly empty.
-  const nonZeroRows = rows.filter((r: any) => (r.value || 0) > 0 || r.linked);
-  const isLiabilities = title !== 'Assets';
-  const showEmptyState = isLiabilities
-    ? rows.length === 0
-    : nonZeroRows.length === 0;
-  const emptyCopy = isLiabilities
-    ? 'Connect a liability account or add one manually.'
-    : 'Connect an account or add an asset to see your net worth.';
-  return (
-    <View style={[s.worthCard, t.cardBg]}>
-      <View style={[s.worthCardHeading, t.dividerBorder]}>
-        <Text style={[{ fontSize: 13, fontWeight: '700', color: C.ink }, t.textInk]}>{title}</Text>
-        <Text style={[{ fontSize: 13, fontWeight: '700', color: C.ink }, t.textInk]}>{hidden ? '••••••' : MONEY(total)}</Text>
-      </View>
-      {showEmptyState ? (
-        <View style={{ paddingVertical: 22, paddingHorizontal: 14, alignItems: 'center' }}>
-          <Ionicons name={isLiabilities ? 'card-outline' : 'wallet-outline'} size={26} color={t.dark ? D.textMuted : '#c1b9ac'} />
-          <Text style={[{ fontSize: 11, marginTop: 6, textAlign: 'center', maxWidth: 260, lineHeight: 15 }, t.textMuted]}>
-            {emptyCopy}
-          </Text>
-          {onAdd && (
-            <Pressable
-              onPress={onAdd}
-              style={{ marginTop: 10, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#c49450' }}
-              testID={`nw-empty-add-${title.toLowerCase()}`}
-            >
-              <Text style={{ color: '#9a6d32', fontSize: 11, fontWeight: '700' }}>Add {isLiabilities ? 'liability' : 'asset'}</Text>
-            </Pressable>
-          )}
-        </View>
-      ) : (
-        rows.map((r: Asset & { linked?: boolean }) => (
-          <Pressable key={r.id} onPress={() => onRowPress?.(r)} style={[s.worthRow, t.dividerBorder]} testID={`nw-row-${r.id}`}>
-            <View style={[s.worthIcon, t.dark && { backgroundColor: D.surfaceAlt }]}><Ionicons name={r.icon as any} size={17} color={t.dark ? D.textMuted : '#817969'} /></View>
-            <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]} numberOfLines={1}>{r.name}</Text>
-                <View style={{
-                  paddingHorizontal: 5, paddingVertical: 1,
-                  borderRadius: 4, borderWidth: 1,
-                  borderColor: r.linked ? '#c49450' : (t.dark ? D.border : '#dcd4c6'),
-                  backgroundColor: r.linked ? '#c4945020' : 'transparent',
-                }}>
-                  <Text style={{ fontSize: 7, fontWeight: '800', letterSpacing: 0.6, color: r.linked ? '#c49450' : (t.dark ? D.textMuted : '#a29b90') }}>
-                    {r.linked ? 'SYNCED' : 'MANUAL'}
-                  </Text>
-                </View>
-              </View>
-              <Text style={[{ fontSize: 8, color: '#9b958c', marginTop: 1 }, t.textMuted]} numberOfLines={1}>{r.source}</Text>
-            </View>
-            <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>{hidden ? '••••' : MONEY(r.value)}</Text>
-            <Ionicons name="chevron-forward" size={12} color={t.dark ? D.textMuted : '#c1b9ac'} style={{ marginLeft: 4 }} />
-          </Pressable>
-        ))
-      )}
-      {onAdd && !showEmptyState && (
-        <Pressable onPress={onAdd} style={[s.worthRow, t.dividerBorder, { justifyContent: 'center' }]} testID={`nw-add-${title.toLowerCase()}`}>
-          <Ionicons name="add-circle-outline" size={15} color="#9a6d32" />
-          <Text style={{ color: '#9a6d32', fontSize: 10, fontWeight: '700', marginLeft: 6 }}>Add {title === 'Assets' ? 'asset' : 'liability'}</Text>
-        </Pressable>
-      )}
-    </View>
-  );
-};
+const WorthCard = (_: any) => null; // Deprecated: replaced by the collapsible "ASSETS & LIABILITIES" tree in NetWorthScreen. Kept as a no-op export to avoid touching import chains.
+
 
 /* ---------------- Legacy / Coaching / Membership / Settings / More ---------------- */
 const LegacyScreen = ({ investmentTotal, totalCash, monthlyNet, monthlyBudgetIncome, monthlyBudgetExpense, monthlyBudgetPeriod, timeframe, setTimeframe, contribution, setContribution, hypothetical, setHypothetical, hypoFrequency, setHypoFrequency, hypoDuration, setHypoDuration, returnRate, setReturnRate, cumulative, setCumulative, currentAge, setCurrentAge, retirementAge, setRetirementAge }: any) => {
