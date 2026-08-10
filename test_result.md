@@ -1324,3 +1324,46 @@ Add Apple Sign-In to Login + Signup screens.
          state until the new data lands.
 
       NO backend changes. Report to next iteration file.
+
+  - agent: "main"
+    message: |
+      REAL-DATA CHARTS PASS — Legacy projection card + Home retirement teaser + Wealth hero fake dots removed.
+
+      NEW COMPONENT: /app/frontend/src/components/ProjectionLineChart.tsx
+        - SVG-based line chart. Takes {label, value} points computed from the
+          same source-of-truth math as the surrounding headline number.
+        - Renders a smooth cubic-bezier line + gradient area fill + endpoint
+          circles + axis labels (first/last currency-formatted).
+        - Skeleton mode when `ready=false`. Empty-state text when < 2 points.
+
+      SWAPS (all decorative gradients / dots removed):
+      1. Legacy projection card growth bars → real ProjectionLineChart driven by:
+         - BUILD (1-5yr): yearly checkpoints via buildProjectionAt(y)
+         - GROW/Retirement: 6 evenly-spaced checkpoints via growProjectionAt(y)
+         Final plotted point exactly equals MONEY(projection) shown above.
+      2. Home Retirement teaser bars → real ProjectionLineChart of the 33-year
+         compounding curve using longTermInvestment() at the user's rate.
+      3. Wealth Net Worth hero fake dots → honest empty-state text:
+         "Not enough history yet. Your Net Worth trend will build as Jaleter
+         tracks your balances over time."
+      4. Wealth Month/Quarter/Year pills removed — they toggled the decorative
+         chart that no longer exists. Will return when net-worth snapshots
+         land server-side.
+
+      FILES CHANGED:
+      - /app/frontend/src/components/ProjectionLineChart.tsx (NEW)
+      - /app/frontend/app/index.tsx (Legacy card, Home teaser, Wealth hero, Wealth pills)
+
+      TESTING FOCUS:
+      1. Legacy tab: projection card shows an SVG line chart with plotted checkpoints
+         labeled Now / 1YR / 2YR / … or Now / <steps> / retirement. Endpoint
+         value in the label = MONEY(projection) headline. Line curves upward in
+         GROW (compounding visible), roughly linear in BUILD (no compounding).
+      2. Home tab: Retirement teaser card no longer shows 6 gradient bars. It
+         shows a small line chart that curves upward at 7% (or user's rate).
+      3. Wealth tab: below the Total Net Worth value, the small "history dots"
+         are gone. Instead an honest empty-state message: "Not enough history
+         yet…". The Month/Quarter/Year pills below the value are also gone.
+      4. Legacy: masked skeleton appears when financialsReady is false.
+
+      NO backend changes. Report to next iteration file.

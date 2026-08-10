@@ -23,6 +23,7 @@ import { openJaleter } from '@/src/jaleterLinks';
 import { PoweredByJaleter } from '@/src/PoweredByJaleter';
 import { EmailVerificationBanner } from '@/src/components/EmailVerificationBanner';
 import { ReclassifySheet } from '@/src/components/ReclassifySheet';
+import ProjectionLineChart from '@/src/components/ProjectionLineChart';
 import { CoachAIScreen } from '@/src/screens/CoachAIScreen';
 
 const STORAGE_KEY = 'jaleter-state-v2';
@@ -1355,10 +1356,25 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
             <Text style={{ color: '#aaa297', fontSize: 10, lineHeight: 15, marginBottom: 14 }}>
               33-year compounding of your current investments at {rate}%.
             </Text>
-            <View style={s.teaserBarsFlow}>
-              {[28, 36, 44, 57, 70, 88].map((h, i) => (
-                <LinearGradient key={i} colors={['#e5c38b', '#7d5b31']} style={[s.teaserBarFlow, { height: h }]} />
-              ))}
+            <View style={{ marginTop: 8 }}>
+              <ProjectionLineChart
+                ready={true}
+                height={80}
+                showLabels={false}
+                strokeColor="#e5c38b"
+                gradientTop="rgba(229,195,139,0.35)"
+                gradientBottom="rgba(229,195,139,0)"
+                points={(() => {
+                  // Real 33-year compounding curve of current investments at
+                  // the user's rate. Same math as the headline number.
+                  const pts: any[] = [];
+                  for (let y = 0; y <= 33; y += 3) {
+                    const h33 = hypoAt(y);
+                    pts.push({ label: `${y}YR`, value: (investmentTotal || 0) > 0 ? longTermInvestment(investmentTotal, h33.addToPrincipal, (legacyContribution || 0) + h33.addToMonthlyContrib, y, rate) : 0 });
+                  }
+                  return pts;
+                })()}
+              />
             </View>
           </>
         ) : (
@@ -3685,14 +3701,22 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
           <Text style={{ color: '#7fac8d', fontSize: 10 }}>{!readyForNumbers ? 'Fetching your latest balances…' : validLinks.length > 0 ? `Live from ${validLinks.length} linked account${validLinks.length > 1 ? 's' : ''}` : 'Updates with your linked accounts'}</Text>
         </View>
         {nw > 0 && readyForNumbers && (
-          <View style={s.nwChart}>
-            {[62, 55, 48, 42, 33, 24, 15, 9].map((top, i, arr) => (
-              <View key={i} style={[s.nwChartDot, { left: `${(i / (arr.length - 1)) * 100}%`, top }]} />
-            ))}
+          // Net Worth history is not yet stored server-side. Instead of
+          // fabricating a decorative trend from constants, we surface an
+          // honest empty state (spec: "do not reconstruct or fabricate
+          // historical balances"). The line chart will populate once
+          // Jaleter starts persisting daily / weekly net-worth snapshots.
+          <View style={{ marginTop: 10, paddingHorizontal: 6 }}>
+            <Text style={{ fontSize: 9, color: '#aaa39a', textAlign: 'center', lineHeight: 12 }}>
+              Not enough history yet. Your Net Worth trend will build as Jaleter tracks your balances over time.
+            </Text>
           </View>
         )}
       </View>
-      <PeriodPills values={['Month','Quarter','Year']} value={period} onChange={setPeriod} testID="nw-period" />
+      {/* NOTE: The Month/Quarter/Year period pills were removed here — they
+          previously toggled a decorative chart that no longer exists. Once
+          net-worth history snapshots are persisted server-side, we'll bring
+          them back to drive a real trend chart. */}
       {readyForNumbers ? (
         <View style={[s.cashProtection, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
           <View style={{ flex: 1 }}><Text style={[s.cpSmall, t.textMuted]}>TOTAL CASH</Text><Text style={[s.cpStrong, t.textInk]}>{MONEY(cash)}</Text></View>
@@ -4279,11 +4303,36 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
         <Text style={{ color: '#b4ada3', fontSize: 12, textAlign: 'center', maxWidth: 300, alignSelf: 'center' }}>
           {projectionSubtitle}
         </Text>
-        <View style={s.growthChart}>
-          {(isBuild ? [.30,.42,.56,.72,.86,1] : [.16,.24,.34,.48,.66,.84,1]).map((f, i) => (
-            <LinearGradient key={i} colors={['#e8c98f','#8b6437']} style={[s.growthBar, { height: `${Math.max(18, f * 100)}%` }]} />
-          ))}
-        </View>
+        {/* Real-data line chart — every point is a computed projection value
+            from the SAME math as the headline number. The final plotted point
+            must exactly equal MONEY(projection) (spec reconciliation). */}
+        <ProjectionLineChart
+          ready={!!financialsReady && years > 0}
+          height={110}
+          strokeColor="#8b6437"
+          gradientTop="rgba(232,201,143,0.35)"
+          gradientBottom="rgba(232,201,143,0)"
+          emptyLabel={years > 0 ? 'Updating…' : 'Select a timeframe to see the projection.'}
+          points={(() => {
+            // Compute meaningful checkpoints depending on horizon length.
+            // BUILD 1-5yr: yearly checkpoints (0, 1, 2, ...N).
+            // GROW / Retirement: sample 6 evenly-spaced checkpoints so the
+            // compounding curve is visible (0 → N/5 → 2N/5 → ... → N).
+            if (years <= 0) return [];
+            if (isBuild) {
+              const pts: any[] = [];
+              for (let y = 0; y <= Math.min(years, 5); y++) pts.push({ label: y === 0 ? 'Now' : `${y}YR`, value: buildProjectionAt(y) });
+              return pts;
+            }
+            const stops = 6;
+            const pts: any[] = [];
+            for (let i = 0; i <= stops; i++) {
+              const y = Math.round((years * i) / stops);
+              pts.push({ label: y === 0 ? 'Now' : `${y}YR`, value: growProjectionAt(y) });
+            }
+            return pts;
+          })()}
+        />
       </View>
 
       {/* Assumption chips — tap any to edit. These are the exact inputs used
