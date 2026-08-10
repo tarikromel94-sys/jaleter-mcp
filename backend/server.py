@@ -66,6 +66,7 @@ import plaid_service
 from plaid_service import PlaidError
 import wealth_service
 import networth_service
+import retention_service
 import support_service
 from support_service import (
     TicketCreate,
@@ -281,10 +282,38 @@ async def _startup():
         )
     except Exception as e:  # noqa: BLE001
         logger.warning('Support admin seed skipped: %s', e)
+    # ---- Retention scheduler --------------------------------------------
+    # APScheduler in-process daily job at 03:00 UTC. Job report is
+    # written to the `retention_runs` audit collection so admins can
+    # verify cadence via `GET /api/admin/retention/status`.
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from apscheduler.triggers.cron import CronTrigger
+
+        async def _retention_job():
+            report = await retention_service.run_retention(db)
+            try:
+                await db.retention_runs.insert_one(report)
+            except Exception as e:  # noqa: BLE001
+                logger.warning('retention_runs audit write failed: %s', e)
+
+        scheduler = AsyncIOScheduler(timezone='UTC')
+        scheduler.add_job(_retention_job, CronTrigger(hour=3, minute=0), id='retention_daily', replace_existing=True)
+        scheduler.start()
+        app.state.scheduler = scheduler
+        logger.info('Retention scheduler started (daily 03:00 UTC)')
+    except Exception as e:  # noqa: BLE001
+        logger.warning('Retention scheduler skipped: %s', e)
 
 
 @app.on_event('shutdown')
 async def _shutdown():
+    try:
+        sched = getattr(app.state, 'scheduler', None)
+        if sched is not None:
+            sched.shutdown(wait=False)
+    except Exception:  # noqa: BLE001
+        pass
     client.close()
 
 
@@ -1820,6 +1849,28 @@ async def support_admin_reply(ticket_id: str, payload: ReplyCreate, current_user
 async def support_admin_note(ticket_id: str, payload: AdminNoteCreate, current_user: dict = Depends(get_current_user)):
     reply_payload = ReplyCreate(message=payload.note)
     return await support_service.admin_add_reply(db, current_user, ticket_id, reply_payload, private=True)
+
+
+# ---- Data retention (admin-only manual trigger) ---------------------------
+@api_router.post('/admin/retention/run')
+async def admin_retention_run(current_user: dict = Depends(get_current_user)):
+    """Admin-only manual trigger for the retention purge. The same job
+    runs automatically every night at 03:00 UTC via APScheduler. Returns
+    the full purge report so admins can audit what was cleaned.
+    """
+    if not current_user.get('is_admin'):
+        raise HTTPException(status_code=403, detail='Admin access required')
+    return await retention_service.run_retention(db)
+
+
+@api_router.get('/admin/retention/status')
+async def admin_retention_status(current_user: dict = Depends(get_current_user)):
+    """Admin-only: last N retention runs (from the `retention_runs`
+    audit collection) so admins can confirm the CRON is healthy."""
+    if not current_user.get('is_admin'):
+        raise HTTPException(status_code=403, detail='Admin access required')
+    cursor = db.retention_runs.find({}, {'_id': 0}).sort('started_at', -1).limit(10)
+    return {'runs': await cursor.to_list(length=10)}
 
 
 # ------------------------------------------------------------------
