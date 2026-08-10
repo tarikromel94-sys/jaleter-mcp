@@ -3732,6 +3732,9 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
               const hist = Array.isArray(nwHistory) ? nwHistory : [];
               const todayKey = new Date().toISOString().slice(0, 10);
               const points: { label: string; value: number; ts: number }[] = [];
+              // Count how many *historical* points we have (excluding today's
+              // auto-backfill) — used to pick the correct empty-state copy.
+              let historicalCount = 0;
               for (const p of hist) {
                 const ts = p?.taken_at ? new Date(p.taken_at).getTime() : 0;
                 if (!ts || Number.isNaN(ts)) continue;
@@ -3739,6 +3742,7 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
                 // Skip today's persisted snapshot — we'll overlay the live
                 // canonical Net Worth as the trailing point.
                 if (dk === todayKey) continue;
+                historicalCount += 1;
                 points.push({
                   label: new Date(ts).toLocaleDateString('en-US', period === 'Year' ? { month: 'short' } : { month: 'short', day: 'numeric' }),
                   value: Number(p?.net_worth || 0),
@@ -3767,7 +3771,7 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
                   emptyColor="#aaa39a"
                   skeletonBg="#2a251f"
                   currency={MONEY as any}
-                  emptyLabel={hist.length === 0
+                  emptyLabel={historicalCount === 0
                     ? 'Not enough history yet. Your Net Worth trend will build over the coming days.'
                     : 'Building your trend line…'}
                 />

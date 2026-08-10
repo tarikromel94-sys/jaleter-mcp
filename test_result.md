@@ -1367,3 +1367,37 @@ Add Apple Sign-In to Login + Signup screens.
       4. Legacy: masked skeleton appears when financialsReady is false.
 
       NO backend changes. Report to next iteration file.
+
+---
+
+## Iteration 52 (Net Worth History Chart)
+
+### backend:
+  - task: "Net Worth History snapshots + GET /api/networth/history"
+    implemented: true
+    working: true
+    file: "/app/backend/networth_service.py, /app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "13/14 pytest passed, 1 skipped as designed (manual_edit path — no Plaid links). Auto-backfill, dedupe, range mapping, math (assets-liabs=net), auth guard all verified. Regressions: none."
+
+### frontend:
+  - task: "Wealth screen: Net Worth history line chart with Month/Quarter/Year pills"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/index.tsx, /app/frontend/src/components/ProjectionLineChart.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "All 6 frontend scenarios pass. Pills fire correct /api/networth/history?range=X calls, trailing point equals headline Net Worth, chart masked when financialsReady=false, empty state renders when insufficient history. Minor copy nit fixed by main after."
+
+### agent_communication:
+  - agent: main
+    message: "Task 1 (Net Worth History Chart) complete. Backend snapshots persisted daily (upsert-by-day), history endpoint auto-backfills today, snapshot writes hooked into /plaid/sync, webhook, and account override endpoints. Frontend restored Month/Quarter/Year pills as real controls driving ProjectionLineChart. Empty-state copy tightened to use historicalCount instead of hist.length."
