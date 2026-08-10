@@ -1,0 +1,32 @@
+{
+  "summary": "Regression test after L1 modularization pass (index.tsx 6255->5029 lines; extracted appShared.tsx + NetWorthScreen.tsx). All 8 numbered scenarios PASS on Playwright web preview (viewport 390x844). Behavior unchanged: welcome + iframe bridge renders, login via testIDs succeeds, Home shows Net Worth snapshot + Budget card, Wealth tab renders PageHeader/eye toggle/sync banner (No accounts linked)/dark hero card with TOTAL NET WORTH + chart-placeholder copy ('Not enough history yet.')/wealth-period pills/Cash-SetAside-Available row/SET ASIDE CASH section. Period pills fire GET /api/networth/history?range=month|quarter|year (3 calls captured, all 200). All 5 bottom-nav tabs (home, budget, transactions, legacy, networth) tap without white-screen. Logout via home-bell -> settings-logout returns to Welcome iframe. Zero 'is not defined' / 'Cannot read propert' console errors during the whole flow. Only pre-existing warnings observed: React Native Web shadow* deprecation (whitelisted) + iframe sandbox warning.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter54/01_welcome.jpeg",
+    "/app/test_reports/screenshots/iter54/02b_after_login.jpeg",
+    "/app/test_reports/screenshots/iter54/03_home.jpeg",
+    "/app/test_reports/screenshots/iter54/04_networth.jpeg",
+    "/app/test_reports/screenshots/iter54/06_after_nav_loop.jpeg",
+    "/app/test_reports/screenshots/iter54/07_settings_open.jpeg",
+    "/app/test_reports/screenshots/iter54/07_after_logout.jpeg"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "index.tsx is still 5029 lines - well above the 700-line guideline. Continue extracting screens (HomeScreen, SettingsScreen, TransactionsScreen, BudgetScreen, LegacyScreen) in subsequent modularization passes.",
+    "Welcome screen embeds an <iframe srcDoc=...> with sandbox 'allow-scripts allow-same-origin'; browsers emit a sandbox warning (not a bug, but flagged so it stays known). Cannot be selected by regular Playwright selectors -- tests must postMessage('navigate:login' | 'navigate:onboarding') to bridge into the RN screens.",
+    "NetWorthScreen prop signature is large (13+ props) -- consider a context or a memoized 'wealthProps' object to keep the render call in index.tsx line 4985 concise."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (not tested per scope)", "frontend": "100% (8/8 scenarios)"},
+  "seed_data_creation": "None -- reused existing alex+test1@jaleter.app / password123 credentials.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Welcome screen is an iframe (postMessage bridge). Use `await page.evaluate(\"window.postMessage('navigate:login','*')\")` then fill data-testid=login-email / login-password and click login-submit. Settings is opened from Home via testID 'home-bell' (bell icon top-right); logout button is testID 'settings-logout'. Bottom nav testIDs: nav-home, nav-budget, nav-transactions, nav-legacy, nav-networth. Wealth period pills container testID: 'wealth-period' (contains Month/Quarter/Year text children). Tapping each pill fires GET /api/networth/history?range=<month|quarter|year>.",
+  "rca_of_issue": "N/A - refactor validated with no regressions found."
+}

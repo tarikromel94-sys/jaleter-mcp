@@ -1401,3 +1401,37 @@ Add Apple Sign-In to Login + Signup screens.
 ### agent_communication:
   - agent: main
     message: "Task 1 (Net Worth History Chart) complete. Backend snapshots persisted daily (upsert-by-day), history endpoint auto-backfills today, snapshot writes hooked into /plaid/sync, webhook, and account override endpoints. Frontend restored Month/Quarter/Year pills as real controls driving ProjectionLineChart. Empty-state copy tightened to use historicalCount instead of hist.length."
+
+---
+
+## Iteration 53-54 (Retention CRON + NetWorthScreen extraction)
+
+### backend:
+  - task: "Data retention 30-day purge + APScheduler daily job"
+    implemented: true
+    working: true
+    file: "/app/backend/retention_service.py, /app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "13/13 backend checks pass. Auth guards (401/403), admin trigger, seeded row purges (password_resets, payment_transactions status filter, coach_messages, net_worth_snapshots preservation, orphan sweep) all verified. APScheduler started on backend boot (03:00 UTC daily)."
+
+### frontend:
+  - task: "Modularization pass L1 — NetWorthScreen + appShared extracted"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/utils/appShared.tsx (new), /app/frontend/src/screens/NetWorthScreen.tsx (new), /app/frontend/app/index.tsx (6255 → 5040 lines)"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Pure refactor. All 8 Wealth/nav regression scenarios pass. No JS errors, no behaviour change. Period pills fire the correct history API calls."
+
+### agent_communication:
+  - agent: main
+    message: "Retention CRON complete + validated. Modularization Phase 1 done — created /src/utils/appShared.tsx (s stylesheet + shared atoms + theme + wealth helpers) and extracted NetWorthScreen to /src/screens/. index.tsx now 1215 lines lighter. BudgetScreen + LegacyScreen extractions remain as follow-up L2/L3 passes."
