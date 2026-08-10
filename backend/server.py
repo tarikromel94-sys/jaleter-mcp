@@ -64,6 +64,8 @@ from simplefin_service import (
 )
 import plaid_service
 from plaid_service import PlaidError
+import wealth_service
+import networth_service
 import support_service
 from support_service import (
     TicketCreate,
@@ -260,6 +262,9 @@ async def _startup():
     await db.plaid_items.create_index([('user_id', 1)])
     # Wealth account overrides (Jaleter category + custom name per Plaid account)
     await db.account_overrides.create_index([('user_id', 1), ('account_id', 1)], unique=True)
+    # Net Worth history — one snapshot per user per UTC day
+    await db.net_worth_snapshots.create_index([('user_id', 1), ('date_key', 1)], unique=True)
+    await db.net_worth_snapshots.create_index([('user_id', 1), ('taken_at', -1)])
     # Support tickets
     await db.support_tickets.create_index('ticket_id', unique=True)
     await db.support_tickets.create_index([('user_id', 1), ('created_at', -1)])
@@ -1216,6 +1221,7 @@ async def update_account_override(
     # Re-fetch the (now-updated) account row so the client can render immediately.
     live = await _plaid_list_accounts_for_user(current_user['user_id'])
     updated = next((r for r in live if r.get('account_id') == account_id), None)
+    await _persist_networth_snapshot(current_user['user_id'], live, source='manual_edit')
     return {'ok': True, 'account': updated}
 
 
@@ -1228,7 +1234,18 @@ async def clear_account_override(account_id: str, current_user: dict = Depends(g
     })
     live = await _plaid_list_accounts_for_user(current_user['user_id'])
     updated = next((r for r in live if r.get('account_id') == account_id), None)
+    await _persist_networth_snapshot(current_user['user_id'], live, source='manual_edit')
     return {'ok': True, 'account': updated}
+
+
+async def _persist_networth_snapshot(user_id: str, plaid_rows: list[dict], source: str) -> None:
+    """Best-effort: compute + save today's Net Worth snapshot for a user.
+    Same-day writes overwrite so the chart shows one point per day."""
+    try:
+        totals = await networth_service.compute_totals(db, user_id, plaid_rows=plaid_rows)
+        await networth_service.save_snapshot(db, user_id, totals, source=source)
+    except Exception as e:  # noqa: BLE001
+        logger.warning('networth snapshot skipped for %s: %s', user_id, e)
 
 
 # ------- Unsupported-institution requests -------
@@ -1615,7 +1632,43 @@ async def plaid_sync(current_user: dict = Depends(get_current_user), item_id: Op
     for item in items:
         results.append(await _plaid_sync_item(current_user['user_id'], item))
     total_added = sum(r.get('synced', 0) for r in results)
+    # Persist a Net Worth snapshot for the day so the history chart has
+    # a fresh data point after every successful sync.
+    try:
+        live_rows = await _plaid_list_accounts_for_user(current_user['user_id'])
+        await _persist_networth_snapshot(current_user['user_id'], live_rows, source='plaid_sync')
+    except Exception as e:  # noqa: BLE001
+        logger.warning('post-sync snapshot skipped: %s', e)
     return {'synced': total_added, 'items': results}
+
+
+# ------------------------------------------------------------------
+# Net Worth history — daily snapshots powering the Wealth line chart
+# ------------------------------------------------------------------
+@api_router.get('/networth/history')
+async def networth_history(
+    range: str = 'month',
+    current_user: dict = Depends(get_current_user),
+):
+    """Return the user's Net Worth history over a range window.
+
+    `range` ∈ {"month" (30d), "quarter" (90d), "year" (365d)}.
+    Auto-backfills today's snapshot if none exists so a fresh user
+    always sees an initial anchor point on the chart.
+    """
+    key = (range or 'month').strip().lower()
+    if key not in ('month', 'quarter', 'year'):
+        key = 'month'
+    live_totals: Optional[dict] = None
+    try:
+        live_rows = await _plaid_list_accounts_for_user(current_user['user_id'])
+        live_totals = await networth_service.compute_totals(db, current_user['user_id'], plaid_rows=live_rows)
+    except Exception as e:  # noqa: BLE001
+        logger.warning('networth live totals skipped: %s', e)
+    data = await networth_service.get_history(db, current_user['user_id'], key, live_totals=live_totals)
+    if live_totals is not None:
+        data['live'] = live_totals
+    return data
 
 
 @api_router.delete('/plaid/item/{item_id}')
@@ -1706,6 +1759,12 @@ async def plaid_webhook(request: Request):
         if item:
             try:
                 await _plaid_sync_item(item['user_id'], item)
+                # Refresh the daily Net Worth snapshot post-webhook sync.
+                try:
+                    live_rows = await _plaid_list_accounts_for_user(item['user_id'])
+                    await _persist_networth_snapshot(item['user_id'], live_rows, source='plaid_webhook')
+                except Exception as e:  # noqa: BLE001
+                    logger.warning('post-webhook snapshot skipped: %s', e)
             except Exception as e:  # noqa: BLE001
                 logger.warning('plaid webhook sync failed: %s', e)
     return {'ok': True}
@@ -1767,7 +1826,6 @@ async def support_admin_note(ticket_id: str, payload: AdminNoteCreate, current_u
 # Coach AI — GPT 5.6 Terra via Emergent LLM Key
 # ------------------------------------------------------------------
 import coach_ai_service
-import wealth_service
 
 
 class CoachChatRequest(BaseModel):

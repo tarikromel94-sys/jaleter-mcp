@@ -19,22 +19,26 @@ type Props = {
   showLabels?: boolean;
   ready?: boolean; // when false, render a skeleton instead of the chart
   emptyLabel?: string;
+  labelColor?: string;      // "TODAY" / "3Y" pill text
+  labelValueColor?: string; // small dollar values under the pills
+  emptyColor?: string;      // empty-state text color
+  skeletonBg?: string;
 };
 
 const DEFAULT_MONEY = (n: number) => `$${Math.round(n).toLocaleString('en-US')}`;
 
-export default function ProjectionLineChart({ points, height = 130, strokeColor = '#8b6437', gradientTop = 'rgba(232,201,143,0.35)', gradientBottom = 'rgba(232,201,143,0)', currency = DEFAULT_MONEY, showLabels = true, ready = true, emptyLabel = 'Not enough data yet.' }: Props) {
+export default function ProjectionLineChart({ points, height = 130, strokeColor = '#8b6437', gradientTop = 'rgba(232,201,143,0.35)', gradientBottom = 'rgba(232,201,143,0)', currency = DEFAULT_MONEY, showLabels = true, ready = true, emptyLabel = 'Not enough data yet.', labelColor = '#a97c39', labelValueColor = '#8d806e', emptyColor = '#9a6d32', skeletonBg = '#efe6d0' }: Props) {
   if (!ready) {
     return (
-      <View style={{ height, backgroundColor: '#efe6d0', borderRadius: 10, opacity: 0.5, marginTop: 8, alignItems: 'center', justifyContent: 'center' }}>
-        <Text style={{ fontSize: 10, color: '#9a6d32' }}>Updating…</Text>
+      <View style={{ height, backgroundColor: skeletonBg, borderRadius: 10, opacity: 0.5, marginTop: 8, alignItems: 'center', justifyContent: 'center' }}>
+        <Text style={{ fontSize: 10, color: emptyColor }}>Updating…</Text>
       </View>
     );
   }
   if (!points || points.length < 2) {
     return (
       <View style={{ height, borderRadius: 10, marginTop: 8, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 }}>
-        <Text style={{ fontSize: 10, color: '#9a6d32', textAlign: 'center', lineHeight: 14 }}>{emptyLabel}</Text>
+        <Text style={{ fontSize: 10, color: emptyColor, textAlign: 'center', lineHeight: 14 }}>{emptyLabel}</Text>
       </View>
     );
   }
@@ -89,8 +93,8 @@ export default function ProjectionLineChart({ points, height = 130, strokeColor 
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 4, marginTop: 4 }}>
           {points.map((p, i) => (
             <View key={i} style={{ alignItems: 'center', flex: 1 }}>
-              <Text style={{ fontSize: 8, fontWeight: '700', color: '#a97c39', letterSpacing: 0.4 }}>{p.label}</Text>
-              <Text style={{ fontSize: 8, color: '#8d806e', marginTop: 1 }} numberOfLines={1}>
+              <Text style={{ fontSize: 8, fontWeight: '700', color: labelColor, letterSpacing: 0.4 }}>{p.label}</Text>
+              <Text style={{ fontSize: 8, color: labelValueColor, marginTop: 1 }} numberOfLines={1}>
                 {i === 0 || i === points.length - 1 ? currency(p.value) : ''}
               </Text>
             </View>

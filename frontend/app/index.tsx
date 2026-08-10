@@ -3373,8 +3373,29 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
     refreshLinked();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
-  const [period, setPeriod] = useState('Quarter');
+  const [period, setPeriod] = useState<'Month' | 'Quarter' | 'Year'>('Quarter');
   const [visible, setVisible] = useState(true);
+  // Net Worth history — pulled from the server. Refreshes whenever the
+  // selected range changes or the underlying account totals mutate.
+  const [nwHistory, setNwHistory] = useState<any[]>([]);
+  const [nwHistoryLoading, setNwHistoryLoading] = useState(false);
+  const rangeKey = period === 'Month' ? 'month' : period === 'Year' ? 'year' : 'quarter';
+  useEffect(() => {
+    if (!token) { setNwHistory([]); return; }
+    let alive = true;
+    setNwHistoryLoading(true);
+    apiCall(`/api/networth/history?range=${rangeKey}`, { method: 'GET' }, token)
+      .then((data: any) => {
+        if (!alive) return;
+        if (Array.isArray(data?.points)) setNwHistory(data.points);
+        else setNwHistory([]);
+      })
+      .catch(() => { if (alive) setNwHistory([]); })
+      .finally(() => { if (alive) setNwHistoryLoading(false); });
+    return () => { alive = false; };
+    // canonicalNetWorth changes → new snapshot may have been persisted, so refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, rangeKey, canonicalNetWorth]);
 
   // ---- Aggregate live-linked balances by Jaleter category ----
   // De-dupe by unique (link_id, account_id) to prevent double-counting when
@@ -3700,23 +3721,73 @@ const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transa
           <Ionicons name="trending-up" size={13} color="#7fac8d" />
           <Text style={{ color: '#7fac8d', fontSize: 10 }}>{!readyForNumbers ? 'Fetching your latest balances…' : validLinks.length > 0 ? `Live from ${validLinks.length} linked account${validLinks.length > 1 ? 's' : ''}` : 'Updates with your linked accounts'}</Text>
         </View>
-        {nw > 0 && readyForNumbers && (
-          // Net Worth history is not yet stored server-side. Instead of
-          // fabricating a decorative trend from constants, we surface an
-          // honest empty state (spec: "do not reconstruct or fabricate
-          // historical balances"). The line chart will populate once
-          // Jaleter starts persisting daily / weekly net-worth snapshots.
+        {readyForNumbers && (
+          // Real Net Worth history chart, driven by daily snapshots.
+          // We always append a live "today" marker so the last point on
+          // the trend line matches the headline Net Worth number (single
+          // source of truth). The line only renders when there are 2+
+          // data points; otherwise we show a clean empty state.
           <View style={{ marginTop: 10, paddingHorizontal: 6 }}>
-            <Text style={{ fontSize: 9, color: '#aaa39a', textAlign: 'center', lineHeight: 12 }}>
-              Not enough history yet. Your Net Worth trend will build as Jaleter tracks your balances over time.
-            </Text>
+            {(() => {
+              const hist = Array.isArray(nwHistory) ? nwHistory : [];
+              const todayKey = new Date().toISOString().slice(0, 10);
+              const points: { label: string; value: number; ts: number }[] = [];
+              for (const p of hist) {
+                const ts = p?.taken_at ? new Date(p.taken_at).getTime() : 0;
+                if (!ts || Number.isNaN(ts)) continue;
+                const dk = p?.date_key;
+                // Skip today's persisted snapshot — we'll overlay the live
+                // canonical Net Worth as the trailing point.
+                if (dk === todayKey) continue;
+                points.push({
+                  label: new Date(ts).toLocaleDateString('en-US', period === 'Year' ? { month: 'short' } : { month: 'short', day: 'numeric' }),
+                  value: Number(p?.net_worth || 0),
+                  ts,
+                });
+              }
+              // Always show "today" as the trailing anchor equal to the
+              // headline number (canonical Net Worth). This makes the chart
+              // reconcile visually with the number above it.
+              points.push({ label: 'Today', value: Number(nw || 0), ts: Date.now() });
+              // Cap displayed points so labels don't overlap.
+              const MAX = period === 'Year' ? 12 : period === 'Quarter' ? 12 : 8;
+              const displayPoints = points.length > MAX
+                ? points.filter((_, i, arr) => i === arr.length - 1 || i % Math.ceil(arr.length / MAX) === 0)
+                : points;
+              return (
+                <ProjectionLineChart
+                  points={displayPoints.map(p => ({ label: p.label, value: p.value }))}
+                  ready={!nwHistoryLoading}
+                  height={130}
+                  strokeColor="#e8c98f"
+                  gradientTop="rgba(232,201,143,0.35)"
+                  gradientBottom="rgba(232,201,143,0)"
+                  labelColor="#e8c98f"
+                  labelValueColor="#c3bbb0"
+                  emptyColor="#aaa39a"
+                  skeletonBg="#2a251f"
+                  currency={MONEY as any}
+                  emptyLabel={hist.length === 0
+                    ? 'Not enough history yet. Your Net Worth trend will build over the coming days.'
+                    : 'Building your trend line…'}
+                />
+              );
+            })()}
           </View>
         )}
       </View>
-      {/* NOTE: The Month/Quarter/Year period pills were removed here — they
-          previously toggled a decorative chart that no longer exists. Once
-          net-worth history snapshots are persisted server-side, we'll bring
-          them back to drive a real trend chart. */}
+      {/* Month / Quarter / Year period pills — real controls that drive
+          the history chart above. */}
+      {readyForNumbers && (
+        <View style={{ paddingHorizontal: 16, marginBottom: 4 }}>
+          <PeriodPills
+            values={['Month', 'Quarter', 'Year']}
+            value={period}
+            onChange={(v: string) => setPeriod(v as any)}
+            testID="wealth-period"
+          />
+        </View>
+      )}
       {readyForNumbers ? (
         <View style={[s.cashProtection, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
           <View style={{ flex: 1 }}><Text style={[s.cpSmall, t.textMuted]}>TOTAL CASH</Text><Text style={[s.cpStrong, t.textInk]}>{MONEY(cash)}</Text></View>
