@@ -1,0 +1,36 @@
+{
+  "summary": "Phase 2 Jaleter Legacy BUILD math verification (specs #3, #4, #5) — ALL CHECKS PASS for changed code. Legacy card & drill sheet fully renamed from 'Monthly Budget Surplus' → 'Monthly Budget Net' (testID legacy-surplus-drill still opens the sheet as spec'd). BUILD math toggle now shows per-month composition line ('1 budgeted · 11 estimated (carry-forward).' for 1yr; '1 budgeted · 59 estimated (carry-forward).' for 5yr) and narrative reads 'held flat (no assumed return)'. No 'clamp to $0' or 'clamped to $0' copy anywhere in Budget/Activity/Wealth/Legacy DOM sweep, including the expanded math view. Home teaser code contains the exact required copy at L1322 ('BUILD uses cash + monthly Budget Net (investments held flat). GROW compounds your investments at 7%.') and eyebrow at L1326 ('BUILD · CASH + MONTHLY NET · INVESTMENTS FLAT'), but for the alex+test1 user the LEGACY SNAPSHOT card is gated behind showSnapshot=((totalCash||0)>0 || (investmentTotal||0)>0 || (monthlyNet||0)>0) at L1187; the test user has all-zeros so the fallback 'RETIREMENT PROJECTION / Start your legacy' card is rendered instead. Negative-net UI simulation not feasible in-place (Budget/Activity screens show 'No accounts linked / No transactions yet') — but with all zeros, 5yr BUILD correctly shows $0 (starting cash 0 + investments 0 held flat + 0 net × 60mo = $0) and did not crash. Activity tx-filter unchanged: 'All|Income|Expenses' (no Transfers). Budget Aug pill auto-scrolled to x=119 (in-view). No JS console errors; only pre-existing shadow* deprecation warnings.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter57_legacy_build1yr.jpeg",
+    "/app/test_reports/screenshots/iter57_drill_sheet.jpeg",
+    "/app/test_reports/screenshots/iter57_math_toggle.jpeg",
+    "/app/test_reports/screenshots/iter57_legacy_5yr.jpeg",
+    "/app/test_reports/screenshots/iter57_home_scrolled2.jpeg",
+    "/app/test_reports/screenshots/iter57_activity_final.jpeg"
+  ],
+  "action_items": [
+    "None required — Phase 2 Legacy BUILD math changes (specs #3/#4/#5) verified in-code and in-UI for the parts that render on an all-zero test account.",
+    "Optional: to fully exercise the Home Legacy Snapshot teaser & negative-BUILD path, seed alex+test1 with a non-zero Budget (e.g. income $100, expense $200 → monthlyNet -$100). Then Home would render the snapshot card with the new BUILD copy, and Legacy 5yr BUILD would visibly go DOWN over years. Current all-zero state only proves the copy exists in code + no clamp is applied — visual regression on a decreasing curve was not exercised.",
+    "Note for future testing agents: bottom-nav Activity uses testID `nav-transactions` (id='transactions', label='Activity'), NOT `nav-activity`. Wealth uses `nav-networth`. This differs from the review request wording."
+  ],
+  "critical_code_review_comments": [
+    "LegacyScreen buildProjectionAt (L3290–3330 area): investmentTotal now held flat correctly (no compounding), addToPrincipal added once — matches spec #3.",
+    "legacyPerMonthNet (L4995+): correctly classifies actual/budgeted/estimated with negatives preserved (no Math.max(0, ...) clamp on the monthly net).",
+    "HomeScreen.buildAt (L1170–1177): uses signedMonthlyNet (Number(monthlyNet||0)) allowing negative — matches spec #3.",
+    "app/index.tsx is 5217 lines — still well above the 700-line guideline. Split screens into modules (noted in prior iterations)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100% for changed code paths; 1 assertion (Home teaser copy visibility) not exercised because showSnapshot gate hides card for all-zero user"},
+  "seed_data_creation": "None. Used existing alex+test1@jaleter.app / password123.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Activity nav testID is `nav-transactions` (not `nav-activity`). Wealth is `nav-networth`. Legacy BUILD chip testIDs: `legacy-build-period-{1yr|2yr|3yr|5yr}`; GROW chips: `legacy-grow-period-{10yr|20yr|30yr|Retirement}`. The Monthly Budget Net drill sheet has no explicit close testID — pressing Escape may or may not close depending on Sheet impl. Home LEGACY SNAPSHOT card renders only when (totalCash>0 || investmentTotal>0 || monthlyNet>0); for empty-state accounts the fallback 'RETIREMENT PROJECTION / Start your legacy' card is shown instead (this is intentional, not a regression). RN Web ScrollView on Home: scrollHeight=916, clientHeight=725 (fits Motivation + Coach + Right Now + Your Legacy explore card + partial snapshot area).",
+  "rca_of_issue": "N/A — no regressions found. Only clarification: the Home teaser copy check reads False on the test user because the entire LEGACY SNAPSHOT Pressable is conditionally rendered behind showSnapshot. The exact copy strings required by the spec DO exist in the source at index.tsx L1322 ('BUILD uses cash + monthly Budget Net (investments held flat). GROW compounds your investments at 7%.') and L1326 ('BUILD · CASH + MONTHLY NET · INVESTMENTS FLAT'). Verified via grep."
+}

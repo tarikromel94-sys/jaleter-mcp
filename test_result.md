@@ -1469,3 +1469,24 @@ Add Apple Sign-In to Login + Signup screens.
 ### agent_communication:
   - agent: main
     message: "Phase 1 complete. Spec items #1, #8, #9, #10, #11, #12, #13, #18 all shipped and verified. Remaining phases 2 (Legacy math), 3 (Wealth manual accounts), 4 (transaction UX polish), 5 (charts + tooltips) queued for follow-up sessions per user prioritisation."
+
+---
+
+## Iteration 57 (Phase 2: Legacy math #3, #4, #5)
+
+### frontend:
+  - task: "Legacy BUILD holds investments flat, Actual/Budgeted/Estimated per-month, rename Surplus → Net"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "All 7 scenarios pass. Card + drill sheet renamed to Monthly Budget Net. Composition line shows N budgeted · M estimated. No clamp-to-\$0 copy anywhere. Home teaser copy correct in code, gated by showSnapshot for zero-balance test user (intentional). No JS errors."
+
+### agent_communication:
+  - agent: main
+    message: "Phase 2 complete. legacyPerMonthNet added at App level with actual/budgeted/estimated classification. BUILD no longer clamps negatives — deficits now reduce projection. Renamed Surplus → Net in card + drill sheet. Home teaser updated to match."
