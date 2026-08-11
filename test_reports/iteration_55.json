@@ -1,0 +1,46 @@
+{
+  "summary": "Phase 1 regression for spec fixes #1, #8, #9, #10, #11, #12, #13, #18. Backend: 2 pass, 2 skip (no linked accounts on test user; tz_aware=True verified directly against Motor → datetimes come back UTC-aware, isoformat includes '+00:00'). Frontend: #1, #10, #11, #13 PASS. #18 FAIL — auto-scroll does NOT bring the current-month pill (Aug) into view on mount; pill is fixed at x=473 (offscreen for 390px viewport) after 4s of settle time. RCA: useEffect that calls scrollRef.scrollTo runs BEFORE onLayout populates pillOffsets ref, so it early-returns and never re-runs. #8 partial: test user has no linked accounts so no 'Last synced …' string was rendered on Wealth (banner shows 'No accounts linked yet'); backend tz-aware Mongo probe confirms the ISO output ends in '+00:00'. No hard console errors ('is not defined' / 'Cannot read propert'); only pre-existing shadow* deprecation + iframe sandbox warnings.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/accounts/all", "issue": "Test user alex+test1 has 0 linked accounts, so runtime confirmation of last_sync_at containing '+00:00' from a real Plaid/SimpleFIN row was not possible. Verified indirectly: (1) code path at server.py:776/1495 calls `last_sync.isoformat()` on Mongo-returned datetime; (2) direct Motor probe with AsyncIOMotorClient(MONGO_URL, tz_aware=True) round-trips a UTC datetime and returns tzinfo=FixedOffset(0) → isoformat='2026-08-11T22:43:56.879000+00:00'. So #8 code path is correct; recommend re-verifying after a user links an account."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "PeriodPills auto-scroll (spec #18)", "issue": "Budget period strip does NOT auto-scroll the current-month pill into view on mount. Pill 'budget-period-Aug' bounding_box.x = 473 (viewport width 390), so 'Aug' is fully offscreen to the right. Polled at 500ms/1s/2s/4s after Budget nav — position never changes. Same issue affects tx-month strip and any long scrollable PeriodPills group. Reference: /app/frontend/src/utils/appShared.tsx:158-166.", "testID": "budget-period-Aug", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration55_phase1.py",
+    "/app/test_reports/pytest/iteration55_phase1.xml",
+    "/app/test_reports/screenshots/iter55/02_home.jpeg",
+    "/app/test_reports/screenshots/iter55/03_budget.jpeg",
+    "/app/test_reports/screenshots/iter55/04_transactions.jpeg",
+    "/app/test_reports/screenshots/iter55/06_networth.jpeg",
+    "/app/test_reports/screenshots/iter55/07_budget_strip.jpeg",
+    "/app/test_reports/screenshots/iter55/09_txform_open.jpeg"
+  ],
+  "action_items": [
+    "FIX #18 auto-scroll: PeriodPills useEffect at appShared.tsx:158-166 fires on mount BEFORE the pill's onLayout populates pillOffsets/pillWidths refs, so the guard `typeof offset === 'number'` short-circuits and scrollTo never runs. Suggested fix: trigger the scroll from inside the pill's onLayout callback when v === value (i.e., detect that this is the layout event for the currently-selected pill and call scrollRef.current.scrollTo immediately with the freshly-measured x/width). Alternatively promote pillOffsets to state so the useEffect re-runs after onLayout, or call requestAnimationFrame in the effect. The current implementation only works when `value` CHANGES (post-mount navigation), not on initial mount which is the primary user-facing case.",
+    "Retest #8 end-to-end after a Plaid/SimpleFIN account is linked to the test user. Backend code path was verified via a direct Motor round-trip (isoformat includes '+00:00'); no real bank last_sync_at could be observed because alex+test1 has 0 linked accounts."
+  ],
+  "critical_code_review_comments": [
+    "appShared.tsx PeriodPills auto-scroll effect assumes onLayout has already fired by the time useEffect runs — this is a well-known React Native race. The effect should either (a) trigger from onLayout when the selected pill is measured, or (b) store offsets in state so the effect re-runs. As written, spec #18 only satisfies the 'on change' half of the requirement, not the 'on mount' half.",
+    "index.tsx is still 5135 lines (unchanged since iter54 refactor). Continue extracting BudgetScreen / TxForm into modules — TxForm alone is ~500+ lines.",
+    "server.py comment at line 95 correctly documents the tz_aware root-cause. Consider adding a matching unit test to backend/tests/ that inserts a UTC datetime, reads it back, and asserts tzinfo is not None — otherwise a future refactor could silently regress the fix.",
+    "Frontend #9 (Chase/Ally origin reconciliation) could not be UI-verified because the test user has no linked-transaction feed. The code path at index.tsx:4790 (client-side backfill inside linkedTransactions fetch effect) needs a manual QA pass or an isolated unit test."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration55_phase1.py (new)"
+  ],
+  "success_rate": {"backend": "100% of executable tests (2/2 pass, 2/2 skipped due to no linked accounts)", "frontend": "5/6 scenarios pass — #1 pass, #8 code-path pass (no runtime data), #10 pass, #11 pass, #13 pass, #18 FAIL"},
+  "seed_data_creation": "None — reused alex+test1@jaleter.app / password123. Note: this account has 0 linked bank accounts, which limits end-to-end verification of #8 and #9.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "MONTHS constant uses 3-letter abbreviations ('Jan','Feb','Aug', …) — child testID for the budget period pill is `budget-period-Aug`, NOT `budget-period-August`. The `tx-add` button in Transactions is exposed via visible text 'Add transaction' (there's no explicit testID on the button in the empty state). Add-transaction opens a bottom-sheet modal with testIDs: tx-type (Income|Expense only), tx-group-give / tx-group-steward / tx-group-grow / tx-group-enjoy / tx-group-transfer, tx-month, tx-save. The Welcome iframe → login bridge is still via `window.postMessage('navigate:login','*')`.",
+  "rca_of_issue": "#18 auto-scroll bug — /app/frontend/src/utils/appShared.tsx:158-166. On first mount, React renders → useEffect([value, scrollable]) fires with pillOffsets.current empty → early return. onLayout callbacks on each Pressable then populate pillOffsets/pillWidths refs, but React does NOT re-run the effect because refs mutating does not trigger renders. Net result: the scroll only fires on subsequent value changes, never on mount. Reproduction: log in → tap nav-budget → observe `budget-period-Aug` at x=473 in a 390px viewport (offscreen right, requires manual scroll). Mitigation: capture the layout event for the selected pill inside onLayout and call scrollRef.current.scrollTo directly when v === value, OR promote offsets/widths to state (memoized) so the effect re-runs, OR wrap scrollTo in requestAnimationFrame or setTimeout(0) inside the effect (last resort — still racey)."
+}

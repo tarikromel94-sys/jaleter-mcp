@@ -149,6 +149,22 @@ export const PeriodPills = ({ values, value, onChange, testID }: any) => {
   // Jan-Dec+Year) horizontally scroll with content-hugging widths so long
   // labels like "Retirement" and "September" aren't clipped.
   const scrollable = values.length > 5;
+  const scrollRef = React.useRef<ScrollView | null>(null);
+  const pillWidths = React.useRef<Record<string, number>>({});
+  const pillOffsets = React.useRef<Record<string, number>>({});
+  const [, setLayoutTick] = React.useState(0);
+  const scrollToSelected = React.useCallback(() => {
+    if (!scrollable || !scrollRef.current) return;
+    const offset = pillOffsets.current[value];
+    const width = pillWidths.current[value];
+    if (typeof offset === 'number' && typeof width === 'number') {
+      // Aim to center the active pill in the ~260px visible strip.
+      const target = Math.max(0, offset - 130 + width / 2);
+      scrollRef.current.scrollTo({ x: target, animated: true });
+    }
+  }, [scrollable, value]);
+  // Auto-scroll on `value` change so switching months keeps the pill in view.
+  React.useEffect(() => { scrollToSelected(); }, [value, scrollToSelected]);
   if (!scrollable) {
     return (
       <View style={[s.segmented, t.pillBg]} testID={testID}>
@@ -162,6 +178,7 @@ export const PeriodPills = ({ values, value, onChange, testID }: any) => {
   }
   return (
     <ScrollView
+      ref={scrollRef}
       horizontal
       showsHorizontalScrollIndicator={false}
       contentContainerStyle={{ paddingRight: 4 }}
@@ -172,6 +189,18 @@ export const PeriodPills = ({ values, value, onChange, testID }: any) => {
           <Pressable
             key={v}
             testID={`${testID}-${v}`}
+            onLayout={(e) => {
+              pillWidths.current[v] = e.nativeEvent.layout.width;
+              pillOffsets.current[v] = e.nativeEvent.layout.x;
+              // Trigger the auto-scroll (spec #18) from the layout pass so
+              // it runs on the very first mount, once the selected pill's
+              // geometry is known. Debounced via a tick because RN may call
+              // onLayout multiple times during initial render.
+              if (v === value) {
+                setLayoutTick((n) => n + 1);
+                requestAnimationFrame(() => scrollToSelected());
+              }
+            }}
             onPress={() => onChange(v)}
             style={[s.pill, { flex: 0, paddingHorizontal: 14, minWidth: 64 }, value === v && s.pillSelected, value === v && t.pillSelectedBg]}
           >

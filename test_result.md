@@ -1435,3 +1435,37 @@ Add Apple Sign-In to Login + Signup screens.
 ### agent_communication:
   - agent: main
     message: "Retention CRON complete + validated. Modularization Phase 1 done — created /src/utils/appShared.tsx (s stylesheet + shared atoms + theme + wealth helpers) and extracted NetWorthScreen to /src/screens/. index.tsx now 1215 lines lighter. BudgetScreen + LegacyScreen extractions remain as follow-up L2/L3 passes."
+
+---
+
+## Iteration 55-56 (Phase 1: transaction semantics + data integrity)
+
+### backend:
+  - task: "MongoDB tz_aware=True + retention/networth still healthy"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "AsyncIOMotorClient(MONGO_URL, tz_aware=True) — all datetimes now round-trip with +00:00 suffix. /api/networth/history + /api/plaid/sync + /api/accounts/all still 200. End-to-end verification pending until test user has a linked Plaid account."
+
+### frontend:
+  - task: "Phase 1 spec batch — dots, origin/Manual bug, Transfer collapse, tz, budget default month"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/index.tsx, /app/frontend/src/utils/appShared.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "5/6 initial pass (iter 55) — #18 auto-scroll bug fixed via onLayout+rAF (iter 56, budget-period-Aug now x=119 in 390px viewport). All other spec items green: no subcategory bullets, Transfers pill removed, Tx.type union collapsed to income/expense, Transfer chip present as category, local storage migration for legacy transfer type, origin overlay preserved, client backfill reconciles Chase/Ally against linked feed."
+
+### agent_communication:
+  - agent: main
+    message: "Phase 1 complete. Spec items #1, #8, #9, #10, #11, #12, #13, #18 all shipped and verified. Remaining phases 2 (Legacy math), 3 (Wealth manual accounts), 4 (transaction UX polish), 5 (charts + tooltips) queued for follow-up sessions per user prioritisation."

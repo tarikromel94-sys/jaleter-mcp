@@ -92,7 +92,14 @@ JWT_ALG = 'HS256'
 JWT_EXPIRE_MIN = int(os.environ.get('ACCESS_TOKEN_EXPIRE_MINUTES', '10080'))
 EMERGENT_SESSION_URL = 'https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data'
 
-client = AsyncIOMotorClient(MONGO_URL)
+# `tz_aware=True` ensures every datetime returned by Motor carries UTC
+# tzinfo. Without this, ISO strings serialized to the frontend lack the
+# "+00:00" / "Z" suffix and `new Date(iso)` on the client interprets
+# them as LOCAL time — the root cause of the "Last Sync shows wrong
+# time" bug (spec #8). We already store every sync/webhook timestamp
+# via `datetime.now(timezone.utc)`, so making reads tz-aware just
+# preserves that intent all the way to the browser.
+client = AsyncIOMotorClient(MONGO_URL, tz_aware=True)
 db = client[DB_NAME]
 
 pwd_ctx = CryptContext(schemes=['bcrypt'], deprecated='auto')

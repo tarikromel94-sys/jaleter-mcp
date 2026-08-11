@@ -1,0 +1,25 @@
+{
+  "summary": "Re-test of spec #18 auto-scroll fix for Jaleter Budget period pills PASSED. In a 390x844 viewport with current local month = Aug, the `budget-period-Aug` pill mounts at x=119 (previously x=473 in iteration 55), well inside the visible viewport and near-centered. The onLayout+requestAnimationFrame fix in /app/frontend/src/utils/appShared.tsx PeriodPills fires reliably on initial mount. Tapping Jan scrolls it from x=-329 to x=25 (visible); tapping Aug returns it to x=119. Bottom-nav regression: Home/Budget/Reports (implicit)/Activity/Wealth/Legacy all switch without JS console errors (note: Wealth's testID is `nav-networth`, not `nav-wealth`). Activity tx-filter pills confirmed as [All, Income, Expenses] - no Transfers pill. No React Native red screens; only pre-existing shadow* deprecation warnings.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/test_reports/screenshots/iter56_budget_initial.jpeg", "/app/test_reports/screenshots/iter56_after_jan.jpeg", "/app/test_reports/screenshots/iter56_back_to_current.jpeg"],
+  "action_items": [
+    "None required for spec #18. Fix verified. Optional: note for future testing agents that the Wealth tab testID is `nav-networth` (not `nav-wealth`)."
+  ],
+  "critical_code_review_comments": [
+    "PeriodPills scrollToSelected wrapped in requestAnimationFrame inside onLayout works as intended; also preserves the useEffect on value change for post-mount switches.",
+    "app/index.tsx is 5135 lines - well above the 700-line guideline. Consider splitting screens into modules (unchanged from prior iterations)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100%"},
+  "seed_data_creation": "None. Used existing alex+test1@jaleter.app / password123 account.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Bottom-nav Wealth uses testID `nav-networth` (id='networth' in navItems). budget-period-{MonthAbbr} uses standard 3-letter month abbrevs (Jan..Dec) plus a `budget-period-Year` pill. On web preview the Welcome screen is rendered inside an iframe (about:srcdoc) - login button must be clicked via frame handle (`#btnLogin`), then the RN login form appears with testID `login-email`, `login-password`, `login-submit`.",
+  "rca_of_issue": "Iteration 55 finding: initial-mount auto-scroll didn't run because the ScrollView measured pill offsets after PeriodPills' first useEffect fired. Fix (verified): schedule scrollToSelected from the selected pill's onLayout, wrapped in requestAnimationFrame so ScrollView layout is committed before scrollTo is called. Reproduction (before fix): open Budget in month with abbreviation late in year OR when strip is wider than viewport -> current-month pill would be at x>390. Post-fix observed x=119 (viewport width 390, pill width 64) for August, giving ~163px of centered spacing."
+}

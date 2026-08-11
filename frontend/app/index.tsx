@@ -305,10 +305,13 @@ type Tx = {
   name: string;
   amount: number;
   // Type of transaction. `transfer` is a first-class type: an internal
-  // movement between the user's own accounts. Transfers never affect income
-  // or expense totals or net worth. Credit-card payments are automatically
-  // classified as transfers by the Plaid mapper.
-  type: 'income' | 'expense' | 'transfer';
+  // Every transaction is either income (positive-money-in for user) or
+  // expense (positive-money-out). "Transfer" is no longer a third type
+  // (spec #10); a movement between the user's own accounts still uses
+  // income/expense by sign, but `system_category='transfer'` (or the
+  // legacy `is_transfer` flag) keeps it excluded from Budget actuals,
+  // Reports, and Net Income cash-flow.
+  type: 'income' | 'expense';
   groupId: string;
   detailId?: string;
   origin: string;
@@ -325,21 +328,23 @@ type Tx = {
   // MULTIPLE budget categories. Sum of splits.amount should equal `amount`.
   // If splits is empty/absent, the transaction uses top-level groupId/detailId.
   splits?: Split[];
-  // Optional counterparty account references — only meaningful for `type: 'transfer'`.
+  // Optional counterparty account references — kept for transfer-category
+  // transactions so the reconciliation sheet can match both sides.
   transfer_from_account_id?: string;
   transfer_to_account_id?: string;
 };
 
-// Phase-3 helper — a transaction that represents a self-move (transfer,
-// credit-card payment, or loan-principal payment) should NEVER inflate
-// Budget actuals or Income/Expense totals. `system_category` is set by
-// the backend (Plaid PFC + description matching) and mirrored onto every
-// row surfaced to the app.
+// A transaction is treated as a "system transfer" (excluded from Budget
+// actuals, Reports totals, and Net Income cash-flow) when either:
+//   • the backend Plaid classifier tagged it (`system_category` ∈ transfer /
+//     credit_card_payment / loan_payment), or
+//   • the user manually assigned it to the Transfer category (`is_transfer`
+//     flag / `system_category='transfer'`).
+// Note: as of spec #10, `type: 'transfer'` is NO LONGER a valid value on
+// the frontend — transfers still use income/expense by sign and the
+// exclusion flag is what drives filtering.
 const isSystemTransaction = (t: any): boolean => {
-  // Also treat top-level `type: 'transfer'` as system-excluded so manual
-  // transfers created by the user (no Plaid system_category) are still
-  // excluded from Budget actuals, Reports totals, and AI cash-flow.
-  if (t?.type === 'transfer') return true;
+  if (t?.is_transfer) return true;
   const sc = (t?.system_category || '').toString().toLowerCase();
   return sc === 'transfer' || sc === 'credit_card_payment' || sc === 'loan_payment';
 };
@@ -2070,7 +2075,6 @@ const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSourc
                         const b = budgetFor(sub);
                         const a = spentInSub(sub.id);
                         const remaining = b - a;
-                        const overridden = !annual && sub.months && sub.months[mIdx] !== undefined;
                         const spct = b > 0 ? a / b * 100 : 0;
                         const conf = (alerts?.perCategory && alerts.perCategory[sub.id]) || { p50: false, p80: true, exceeded: true };
                         let alertLevel: 'p50' | 'p80' | 'exceeded' | null = null;
@@ -2091,7 +2095,7 @@ const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSourc
                             >
                               <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 }}>
                                 <View style={{ flex: 1, minWidth: 0 }}>
-                                  <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]} numberOfLines={1}>{sub.name}{overridden ? ' •' : ''}</Text>
+                                  <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]} numberOfLines={1}>{sub.name}</Text>
                                 </View>
                                 {alertColor && (
                                   <View style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6, backgroundColor: alertColor + '22', borderWidth: 1, borderColor: alertColor }}>
@@ -2574,9 +2578,10 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
     finally { setSyncing(false); }
   };
   const shown = transactions.filter((tx: Tx) => {
-    // Type filter
-    const isTransfer = tx.type === 'transfer' || isSystemTransaction(tx);
-    if (filter === 'Transfers' && !isTransfer) return false;
+    // Type filter — Activity is now only All / Income / Expenses (spec #10).
+    // Transfer-flagged rows still surface here so users can see them; they
+    // just don't count in Budget/Reports.
+    const isTransfer = isSystemTransaction(tx);
     if (filter === 'Income' && (tx.type !== 'income' || isTransfer)) return false;
     if (filter === 'Expenses' && (tx.type !== 'expense' || isTransfer)) return false;
     // Account/bank filter — matches `origin` (e.g. "Chase", "Bank of America", "Manual")
@@ -2617,7 +2622,24 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
     return ['All', ...Array.from(set).sort()];
   }, [transactions]);
   const save = (t: any) => {
-    setTransactions((xs: Tx[]) => xs.some(x => x.id === t.id) ? xs.map(x => x.id === t.id ? t : x) : [{ ...t, id: `manual-${Date.now()}`, origin: 'Manual', period: currentMonth() }, ...xs]);
+    // Overlay vs manual: when editing a linked (Plaid) transaction we MUST
+    // preserve the original `origin` (e.g. "Chase", "Ally Bank") instead of
+    // stamping "Manual" — that was the root cause of #9 (Chase txns showing
+    // as Manual). Real Manual entries — no external_id — still default to
+    // "Manual" as before.
+    setTransactions((xs: Tx[]) => {
+      if (xs.some(x => x.id === t.id)) {
+        return xs.map(x => x.id === t.id ? t : x);
+      }
+      const isOverlay = !!(t as any).external_id;
+      const newEntry: any = {
+        ...t,
+        id: isOverlay ? t.id : `manual-${Date.now()}`,
+        origin: isOverlay ? (t.origin || 'Linked') : (t.origin || 'Manual'),
+        period: t.period || currentMonth(),
+      };
+      return [newEntry, ...xs];
+    });
     setEditing(null); setToast('Transaction saved and totals refreshed.');
     // Single-expense alert (spec #16) — fires only for eligible expense
     // transactions. Transfers, refunds, credit-card payments and income
@@ -2694,7 +2716,7 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
       </Pressable>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <View style={{ flex: 1 }}>
-          <PeriodPills values={['All','Income','Expenses','Transfers']} value={filter} onChange={setFilter} testID="tx-filter" />
+          <PeriodPills values={['All','Income','Expenses']} value={filter} onChange={setFilter} testID="tx-filter" />
         </View>
         {/* Filter button — opens a bottom sheet with Date range + Account
             source pills. Consolidated so the Activity header stays clean. */}
@@ -2816,7 +2838,7 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
           </View>
         )}
         {shown.map((tx: Tx) => {
-          const isTransferRow = tx.type === 'transfer' || isSystemTransaction(tx);
+          const isTransferRow = isSystemTransaction(tx);
           const isIncomeRow = tx.type === 'income' && !isTransferRow;
           const iconBg = isIncomeRow ? '#e7f0e8' : isTransferRow ? (t.dark ? '#2e2b3a' : '#e9e6f2') : undefined;
           const iconName = isIncomeRow ? 'trending-up' : isTransferRow ? 'swap-horizontal-outline' : 'receipt-outline';
@@ -2860,7 +2882,7 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showSplits, setShowSplits] = useState(Array.isArray(item.splits) && item.splits.length > 0);
   const isIncome = tx.type === 'income';
-  const isTransfer = tx.type === 'transfer';
+  const isTransfer = isSystemTransaction(tx);
   const currentGroup = isIncome ? incomeSources.find((s: any) => s.id === tx.groupId) : categories.find((c: any) => c.id === tx.groupId);
   const currentSubs = !isIncome && currentGroup ? currentGroup.subcategories : [];
   const parsedAmount = Math.abs(Number((tx.amount || '').toString().replace(/[^0-9.]/g, '')) || 0);
@@ -2909,22 +2931,26 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
 
   return (
     <View>
-      {/* Type selector — Income / Expense / Transfer. Transfers never affect
-          income or expense totals or Net Worth. */}
+      {/* Type selector — Income / Expense only (spec #10). Transfer is a
+          CATEGORY option that lives under the group picker below, not a
+          third type. Assigning Transfer preserves the transaction's sign
+          but excludes it from Budget / Reports / Net Income totals. */}
       <PeriodPills
-        values={['Income', 'Expense', 'Transfer']}
-        value={tx.type === 'income' ? 'Income' : tx.type === 'transfer' ? 'Transfer' : 'Expense'}
+        values={['Income', 'Expense']}
+        value={tx.type === 'income' ? 'Income' : 'Expense'}
         onChange={(label: string) => {
-          const v = label.toLowerCase();
+          const v = label.toLowerCase() as 'income' | 'expense';
           setT({
             ...tx,
             type: v,
-            // For Transfer, no group/sub is required — clear them.
-            groupId: v === 'transfer' ? '' : v === 'income' ? (incomeSources[0]?.id || 'w2') : (categories[0]?.id || 'steward'),
-            detailId: v === 'transfer' ? undefined : v === 'income' ? undefined : (categories[0]?.subcategories?.[0]?.id),
-            splits: v === 'transfer' ? [] : tx.splits,
+            // Clear the previous transfer flag when the user switches types
+            // — reclassification is a full reset (spec #13).
+            is_transfer: false,
+            system_category: null,
+            groupId: v === 'income' ? (incomeSources[0]?.id || 'w2') : (categories[0]?.id || 'steward'),
+            detailId: v === 'income' ? undefined : (categories[0]?.subcategories?.[0]?.id),
+            splits: tx.splits,
           });
-          if (v === 'transfer') setShowSplits(false);
         }}
         testID="tx-type"
       />
@@ -3006,30 +3032,42 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
       <Text style={s.label}>Month</Text>
       <PeriodPills values={[...MONTHS]} value={tx.period || currentMonth()} onChange={(v: string) => setT({ ...tx, period: v })} testID="tx-month" />
 
-      {/* Transfer-specific: informational only. Transfers never affect
-          income/expense totals or Net Worth. */}
+      {/* Transfer callout — shown when the transaction is currently flagged
+          as a Transfer (either auto-detected by the Plaid classifier or
+          manually assigned via the Transfer chip). Purely informational —
+          the actual assignment happens via the "Transfer" chip below. */}
       {isTransfer && (
         <View style={{ padding: 10, marginTop: 12, borderRadius: 10, backgroundColor: t.dark ? '#3a2f22' : '#fbf1de', borderLeftWidth: 3, borderLeftColor: '#c49450' }}>
           <Text style={{ fontSize: 11, fontWeight: '800', color: '#9a6d32' }}>Transfer</Text>
           <Text style={{ fontSize: 10, color: '#8d806e', marginTop: 3, lineHeight: 14 }}>
             This transaction is an internal movement between your own accounts (or a credit-card payment).
-            It won&apos;t affect income, expense, or Net Worth totals.
+            It won&apos;t affect Budget, Reports, Net Income, or Net Worth totals.
           </Text>
         </View>
       )}
 
-      {/* Category / subcategory picker — hidden for Transfer. Also hidden
-          when the user has opted into a Split (categories are picked per-row). */}
-      {!isTransfer && !showSplits && (
+      {/* Category / subcategory picker. Includes a "Transfer" chip (spec
+          #10 / #11): assigning it flags the transaction as a Transfer
+          without changing its type — the row still shows up in Activity
+          under Income/Expense (by sign), but Budget and Reports totals
+          exclude it. Hidden when the user has opted into a Split. */}
+      {!showSplits && (
         <>
           <Text style={s.label}>{isIncome ? 'Earn source' : 'Category'}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
             {(isIncome ? incomeSources : categories).map((g: any) => {
-              const on = tx.groupId === g.id;
+              const on = tx.groupId === g.id && !isTransfer;
               return (
                 <Pressable
                   key={g.id}
-                  onPress={() => setT({ ...tx, groupId: g.id, detailId: isIncome ? undefined : g.subcategories?.[0]?.id })}
+                  onPress={() => setT({
+                    ...tx,
+                    groupId: g.id,
+                    detailId: isIncome ? undefined : g.subcategories?.[0]?.id,
+                    // Reclassifying to a real category clears the Transfer flags (spec #13).
+                    is_transfer: false,
+                    system_category: null,
+                  })}
                   style={[s.pickerChip, on && s.pickerChipOn]}
                   testID={`tx-group-${g.id}`}
                 >
@@ -3037,8 +3075,24 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
                 </Pressable>
               );
             })}
+            {/* Transfer chip — always available regardless of type. Selecting
+                it flags the row without changing income/expense side. */}
+            <Pressable
+              onPress={() => setT({
+                ...tx,
+                is_transfer: true,
+                system_category: 'transfer',
+                groupId: '',
+                detailId: undefined,
+                splits: undefined,
+              })}
+              style={[s.pickerChip, isTransfer && s.pickerChipOn]}
+              testID="tx-group-transfer"
+            >
+              <Text style={[s.pickerChipText, isTransfer && { color: '#fff' }]}>Transfer</Text>
+            </Pressable>
           </View>
-          {!isIncome && currentSubs.length > 0 && (
+          {!isIncome && !isTransfer && currentSubs.length > 0 && (
             <>
               <Text style={s.label}>Subcategory</Text>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
@@ -4553,7 +4607,25 @@ function MainApp() {
           const data = JSON.parse(raw);
           if (data.experience) setExperience(data.experience);
           if (data.appearance) setAppearance(data.appearance);
-          if (data.transactions) setTransactions(data.transactions);
+          if (data.transactions) {
+            // Migration (spec #10/#12): older local caches may contain
+            // `type: 'transfer'` entries. That value is no longer part of
+            // the Tx union — remap to income/expense by amount sign and
+            // keep the transfer intent via `is_transfer` + `system_category`
+            // so Budget/Reports still exclude these correctly.
+            const migrated = (data.transactions as any[]).map((raw: any) => {
+              if (!raw) return raw;
+              if (raw.type !== 'transfer') return raw;
+              const amt = Number(raw.amount || 0);
+              return {
+                ...raw,
+                type: amt >= 0 ? 'income' : 'expense',
+                is_transfer: true,
+                system_category: raw.system_category || 'transfer',
+              };
+            });
+            setTransactions(migrated);
+          }
           if (data.linkedAccounts) setLinkedAccounts(data.linkedAccounts);
           if (data.alerts) setAlerts(data.alerts);
           if (Array.isArray(data.categories) && data.categories.length > 0) setCategories(data.categories);
@@ -4713,7 +4785,12 @@ function MainApp() {
             /\b(transfer\b|internal transfer|online transfer|account transfer|xfer\b)\b/.test(desc)
             || /transfer to (savings|checking)|transfer from (savings|checking)/.test(desc);
           const isSystemTransfer = sys === 'transfer' || sys === 'credit_card_payment' || sys === 'loan_payment' || !!r.is_transfer || looksLikeTransfer;
-          const derivedType: Tx['type'] = isSystemTransfer ? 'transfer' : (amt >= 0 ? 'income' : 'expense');
+          // #10/#11: `type` is derived STRICTLY from amount sign — Transfer
+          // is no longer a third type. `isSystemTransfer` still gets
+          // preserved on the row (via `system_category` + `is_transfer`)
+          // so Budget/Reports can exclude these from income/expense totals
+          // and Activity can render a "Transfer" badge next to the org name.
+          const derivedType: Tx['type'] = amt >= 0 ? 'income' : 'expense';
           return {
             id: `bank-${r.external_id}`,
             external_id: r.external_id,
@@ -4731,6 +4808,34 @@ function MainApp() {
           } as Tx;
         });
         setLinkedTransactions(reshaped);
+        // Backfill (spec #9): any locally-cached overlay row that carries
+        // an external_id but has origin === 'Manual' is a leftover from a
+        // pre-fix save. Reconcile it with the org name coming from the
+        // linked feed so Activity shows "Chase" / "Ally Bank" and NOT
+        // "Manual". Never touches manual-only rows (no external_id).
+        try {
+          const byExtId = new Map<string, string>();
+          for (const t of reshaped) {
+            if (t.external_id) byExtId.set(String(t.external_id), t.origin || 'Linked');
+          }
+          setTransactions((prev: Tx[]) => {
+            let dirty = false;
+            const next = prev.map((row: any) => {
+              const extId = row?.external_id;
+              if (!extId) return row;
+              const canonical = byExtId.get(String(extId));
+              if (!canonical) return row;
+              if (row.origin === 'Manual' || !row.origin || row.origin === 'Linked') {
+                if (row.origin !== canonical) {
+                  dirty = true;
+                  return { ...row, origin: canonical };
+                }
+              }
+              return row;
+            });
+            return dirty ? next : prev;
+          });
+        } catch {}
       })
       .catch(() => { if (alive) setLinkedTransactions([]); })
       .finally(() => { if (alive) setTransactionsLoaded(true); });
