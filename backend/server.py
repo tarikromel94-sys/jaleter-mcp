@@ -67,6 +67,7 @@ from plaid_service import PlaidError
 import wealth_service
 import networth_service
 import retention_service
+import manual_accounts_service
 import support_service
 from support_service import (
     TicketCreate,
@@ -270,6 +271,9 @@ async def _startup():
     await db.plaid_items.create_index([('user_id', 1)])
     # Wealth account overrides (Jaleter category + custom name per Plaid account)
     await db.account_overrides.create_index([('user_id', 1), ('account_id', 1)], unique=True)
+    # Manual wealth accounts — user-created rows inside standard categories.
+    await db.manual_accounts.create_index([('user_id', 1), ('id', 1)], unique=True)
+    await db.manual_accounts.create_index([('user_id', 1), ('category', 1)])
     # Net Worth history — one snapshot per user per UTC day
     await db.net_worth_snapshots.create_index([('user_id', 1), ('date_key', 1)], unique=True)
     await db.net_worth_snapshots.create_index([('user_id', 1), ('taken_at', -1)])
@@ -1148,7 +1152,83 @@ async def list_all_accounts(current_user: dict = Depends(get_current_user)):
             combined.append({**row, 'provider': 'plaid', 'kind': 'bank'})
     except Exception as e:  # noqa: BLE001
         combined.append({'provider': 'plaid', 'error': str(e)})
+    # Manual accounts — user-created rows inside standard Wealth categories.
+    # They flow into the same combined list so the frontend can render them
+    # alongside Plaid inside each category's expand tree.
+    try:
+        manuals = await manual_accounts_service.list_all(db, current_user['user_id'])
+        for row in manuals:
+            combined.append({**row, 'kind': 'manual'})
+    except Exception as e:  # noqa: BLE001
+        logger.warning('manual_accounts list failed: %s', e)
     return {'accounts': combined}
+
+
+# ------------------------------------------------------------------
+# Manual wealth accounts — CRUD (spec #2)
+# ------------------------------------------------------------------
+class ManualAccountPayload(BaseModel):
+    category: str
+    name: str = Field(min_length=1, max_length=120)
+    balance: float = 0
+    institution: Optional[str] = Field(default=None, max_length=120)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ManualAccountPatchPayload(BaseModel):
+    category: Optional[str] = None
+    name: Optional[str] = Field(default=None, max_length=120)
+    balance: Optional[float] = None
+    institution: Optional[str] = Field(default=None, max_length=120)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+
+
+@api_router.post('/accounts/manual')
+async def manual_accounts_create(payload: ManualAccountPayload, current_user: dict = Depends(get_current_user)):
+    try:
+        row = await manual_accounts_service.create(db, current_user['user_id'], payload.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    # Persist a fresh Net Worth snapshot so the trendline picks up the new
+    # asset/liability immediately (spec: "immediately update Net Worth").
+    try:
+        live = await _plaid_list_accounts_for_user(current_user['user_id'])
+        manuals = await manual_accounts_service.list_all(db, current_user['user_id'])
+        await _persist_networth_snapshot(current_user['user_id'], live + manuals, source='manual_account')
+    except Exception:  # noqa: BLE001
+        pass
+    return {'ok': True, 'account': row}
+
+
+@api_router.patch('/accounts/manual/{account_id}')
+async def manual_accounts_update(account_id: str, payload: ManualAccountPatchPayload, current_user: dict = Depends(get_current_user)):
+    try:
+        row = await manual_accounts_service.update(db, current_user['user_id'], account_id, payload.model_dump(exclude_unset=True))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if row is None:
+        raise HTTPException(status_code=404, detail='Manual account not found')
+    try:
+        live = await _plaid_list_accounts_for_user(current_user['user_id'])
+        manuals = await manual_accounts_service.list_all(db, current_user['user_id'])
+        await _persist_networth_snapshot(current_user['user_id'], live + manuals, source='manual_account')
+    except Exception:  # noqa: BLE001
+        pass
+    return {'ok': True, 'account': row}
+
+
+@api_router.delete('/accounts/manual/{account_id}')
+async def manual_accounts_delete(account_id: str, current_user: dict = Depends(get_current_user)):
+    ok = await manual_accounts_service.delete(db, current_user['user_id'], account_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail='Manual account not found')
+    try:
+        live = await _plaid_list_accounts_for_user(current_user['user_id'])
+        manuals = await manual_accounts_service.list_all(db, current_user['user_id'])
+        await _persist_networth_snapshot(current_user['user_id'], live + manuals, source='manual_account')
+    except Exception:  # noqa: BLE001
+        pass
+    return {'ok': True}
 
 
 # ------------------------------------------------------------------

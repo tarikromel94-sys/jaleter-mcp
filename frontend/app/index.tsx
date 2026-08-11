@@ -3216,7 +3216,12 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
               amount: parsedAmount,
               merchant: merchantClean || undefined,
               splits: splitsClean,
-              origin: tx.origin || 'Manual',
+              // Preserve the true origin: a linked transaction (has external_id)
+              // should NEVER be stamped "Manual" on edit — that was the root
+              // cause of spec #9 (Chase/Ally showing as Manual). Fall back to
+              // "Linked" only if the row is a Plaid overlay whose org name
+              // isn't yet known, and to "Manual" only for genuinely new rows.
+              origin: tx.origin || (tx.external_id ? 'Linked' : 'Manual'),
               period: tx.period || currentMonth(),
             });
           }}
@@ -4852,9 +4857,26 @@ function MainApp() {
   // win), then linked. Duplicates by external_id are avoided since manual
   // txns don't set that field.
   const mergedTransactions = React.useMemo(() => {
+    // Build lookup: external_id → canonical linked row so we can reconcile
+    // origin on the fly. This complements the fetch-time backfill and
+    // guarantees Activity NEVER surfaces "Manual" for a linked Plaid/SnapTrade
+    // transaction — even for legacy overlays saved before the Phase-1 fix.
+    const linkedByExtId = new Map<string, any>();
+    for (const l of linkedTransactions) {
+      if (l.external_id) linkedByExtId.set(String(l.external_id), l);
+    }
     const seen = new Set<string>(transactions.filter(t => (t as any).external_id).map(t => (t as any).external_id));
     const linkedOnly = linkedTransactions.filter(t => !seen.has(t.external_id as string));
-    return [...transactions, ...linkedOnly].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const reconciled = transactions.map((t: any) => {
+      if (t?.external_id) {
+        const linked = linkedByExtId.get(String(t.external_id));
+        if (linked && linked.origin && (t.origin === 'Manual' || !t.origin || t.origin === 'Linked')) {
+          return { ...t, origin: linked.origin };
+        }
+      }
+      return t;
+    });
+    return [...reconciled, ...linkedOnly].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   }, [transactions, linkedTransactions]);
   // Group linked accounts by their Jaleter category so every downstream
   // calculation is grounded in the same classification (see #1 / #2 / #27).
@@ -4994,8 +5016,22 @@ function MainApp() {
     return active.reduce((sum: number, b: any) => sum + (Number(b.amount) || 0), 0);
   }, [restrictedBuckets]);
   const availableCash = totalCash - totalRestricted;
-  const monthlyBudgetIncome = incomeSources.reduce((sum, x) => sum + x.budgeted, 0);
-  const monthlyBudgetExpense = categories.flatMap(c => c.subcategories).reduce((sum, x) => sum + x.budgeted, 0);
+  // Effective budgeted income/expense for the CURRENT local month — spec:
+  // "BUILD should pull directly from the selected month's Budget". We use
+  // per-month overrides (`sub.months[currentMonthIdx]`) when the user has
+  // customized that specific month; otherwise fall back to the annual
+  // default (`sub.budgeted`). This makes the Legacy "Monthly Budget Net"
+  // reconcile EXACTLY with the Budget module for the same month/year.
+  const currentMonthIdx = new Date().getMonth();
+  const effBudget = (x: any): number => {
+    if (!x) return 0;
+    if (x.months && x.months[currentMonthIdx] !== undefined && x.months[currentMonthIdx] !== null) {
+      return Number(x.months[currentMonthIdx]) || 0;
+    }
+    return Number(x.budgeted) || 0;
+  };
+  const monthlyBudgetIncome = incomeSources.reduce((sum, x: any) => sum + effBudget(x), 0);
+  const monthlyBudgetExpense = categories.flatMap(c => c.subcategories).reduce((sum, x: any) => sum + effBudget(x), 0);
   const monthlyNet = monthlyBudgetIncome - monthlyBudgetExpense;
   const monthlyBudget = monthlyBudgetExpense;
 

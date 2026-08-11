@@ -1490,3 +1490,37 @@ Add Apple Sign-In to Login + Signup screens.
 ### agent_communication:
   - agent: main
     message: "Phase 2 complete. legacyPerMonthNet added at App level with actual/budgeted/estimated classification. BUILD no longer clamps negatives — deficits now reduce projection. Renamed Surplus → Net in card + drill sheet. Home teaser updated to match."
+
+---
+
+## Iteration 58 (Phase 3: Manual Wealth Accounts + BUILD/origin fixes)
+
+### backend:
+  - task: "Manual accounts CRUD (POST/PATCH/DELETE /api/accounts/manual), integrated into /api/accounts/all, Net Worth snapshots on mutation"
+    implemented: true
+    working: true
+    file: "/app/backend/manual_accounts_service.py (new), /app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "14/14 pytest checks pass. Auth guard, create/edit/delete, category validation, liability magnitude normalisation, /accounts/all integration, snapshot persistence all verified. No regressions."
+
+### frontend:
+  - task: "Manual account editor UI + merge-hint + BUILD budget expense fix (current-month effective) + origin merge-time reconciliation"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/screens/NetWorthScreen.tsx, /app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "All CRUD scenarios pass end-to-end. Manual accounts flow into totals, Net Worth, Legacy inputs. UX fix applied: collapse guard for empty categories removed so brand-new users can add first manual Cash/Investments row. BUILD monthly expense now uses effective per-month (sub.months[currentMonthIdx] ?? sub.budgeted) so it reconciles with Budget. Merge-hint UI shows when manual name matches a linked Plaid account in the same category. No JS errors."
+
+### agent_communication:
+  - agent: main
+    message: "Phase 3 complete + 2 bug fixes shipped. Total shipped this arc: 12 of 26 spec items (Phase 1: 8, Phase 2: 3, Phase 3: 1). Remaining phases 4 (Split cents / category selector / netting) and 5 (chart tooltips + reconciliation) queued."

@@ -36,6 +36,19 @@ import {
 // `Asset` without needing to touch every declaration site.
 // Note: the canonical `Asset` type lives in `@/src/utils/appShared`.
 
+// Loose name-match used by the manual-account merge-hint (spec #2). Case-
+// insensitive, punctuation-stripped substring test — good enough to catch
+// "Chase Checking" vs "Chase Checking · 1234" without needing a full
+// Levenshtein implementation. Never matches empty strings.
+function _nameMatch(a?: string, b?: string): boolean {
+  const norm = (s?: string) => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const A = norm(a);
+  const B = norm(b);
+  if (!A || !B) return false;
+  if (A === B) return true;
+  return A.includes(B) || B.includes(A);
+}
+
 export const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities, transactions, restrictedBuckets, setRestrictedBuckets, linkedRowsByCategory, linkedByCategory, onRefreshAccounts, canonicalTotalAssets, canonicalTotalLiabilities, canonicalNetWorth, financialsReady }: any) => {
   const t = useThemed();
   const { token } = useAuth();
@@ -73,6 +86,73 @@ export const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities,
   // Reclassify sheet — opened when the user taps a linked (Synced) account
   // in either the Assets or Liabilities card. Manual rows still use editRow.
   const [reclassifyAccount, setReclassifyAccount] = useState<any | null>(null);
+  // Manual-account editor (spec #2). One editor for add + edit; the sheet
+  // is opened by tapping "+ Add Manual Account" inside any category (add
+  // mode) or an existing manual row (edit mode). Category is pre-filled
+  // from context so the user never has to pick it manually.
+  const [manualEditor, setManualEditor] = useState<null | {
+    mode: 'add' | 'edit';
+    category: string;
+    row?: any;
+  }>(null);
+  const [manDraftName, setManDraftName] = useState('');
+  const [manDraftBal, setManDraftBal] = useState('');
+  const [manDraftInst, setManDraftInst] = useState('');
+  const [manSaving, setManSaving] = useState(false);
+  const openManualAdd = (slug: string) => {
+    setManualEditor({ mode: 'add', category: slug });
+    setManDraftName('');
+    setManDraftBal('');
+    setManDraftInst('');
+  };
+  const openManualEdit = (slug: string, row: any) => {
+    setManualEditor({ mode: 'edit', category: slug, row });
+    setManDraftName(row.name || '');
+    setManDraftBal(row.balance != null ? String(row.balance) : '');
+    setManDraftInst(row.org_name && row.org_name !== 'Manual' ? row.org_name : '');
+  };
+  const closeManualEditor = () => setManualEditor(null);
+  const saveManual = async () => {
+    if (!manualEditor || !token || manSaving) return;
+    const name = manDraftName.trim() || 'Manual account';
+    const balanceNum = Number((manDraftBal || '').replace(/[^0-9.\-]/g, '')) || 0;
+    const institution = manDraftInst.trim() || undefined;
+    setManSaving(true);
+    try {
+      if (manualEditor.mode === 'add') {
+        await apiCall('/api/accounts/manual', {
+          method: 'POST',
+          body: JSON.stringify({ category: manualEditor.category, name, balance: balanceNum, institution }),
+        }, token);
+      } else if (manualEditor.mode === 'edit' && manualEditor.row?.id) {
+        await apiCall(`/api/accounts/manual/${manualEditor.row.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ name, balance: balanceNum, institution }),
+        }, token);
+      }
+      refreshLinked();
+      if (typeof onRefreshAccounts === 'function') onRefreshAccounts();
+      closeManualEditor();
+    } catch (e) {
+      // Keep the sheet open on error so the user can retry.
+      // eslint-disable-next-line no-console
+      console.warn('manual account save failed', e);
+    } finally {
+      setManSaving(false);
+    }
+  };
+  const deleteManual = async () => {
+    if (!manualEditor || manualEditor.mode !== 'edit' || !manualEditor.row?.id || !token) return;
+    setManSaving(true);
+    try {
+      await apiCall(`/api/accounts/manual/${manualEditor.row.id}`, { method: 'DELETE' }, token);
+      refreshLinked();
+      if (typeof onRefreshAccounts === 'function') onRefreshAccounts();
+      closeManualEditor();
+    } finally {
+      setManSaving(false);
+    }
+  };
   const refreshLinked = () => {
     if (!token) return;
     setLinkedSyncing(true);
@@ -796,7 +876,9 @@ export const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities,
               {groups.map((g) => {
                 const isOpen = !!expandedCats[g.slug];
                 const rowCount = g.linkedRows.length + g.manualExtras.length + (g.manualSeedValue > 0 ? 1 : 0);
-                if (g.total === 0 && rowCount === 0) return null;
+                // Always render the 10 standard categories — even at $0 with
+                // zero rows — so first-time users can tap "+ Add Manual
+                // Account" inside any category (spec #2).
                 return (
                   <View key={g.slug}>
                     <Pressable onPress={() => toggleCat(g.slug)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: t.dark ? '#3a342b' : '#f5f0e6' }} testID={`wealth-cat-${g.slug}`}>
@@ -819,24 +901,88 @@ export const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities,
                             <Text style={[{ fontSize: 11 }, t.textInk]}>{visible ? MONEY(g.manualSeedValue) : '••••'}</Text>
                           </View>
                         )}
-                        {g.linkedRows.map((r: any) => (
-                          <Pressable key={`${r.link_id}-${r.account_id}`} onPress={() => setReclassifyAccount(r)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }} testID={`wealth-cat-acc-${r.account_id}`}>
-                            <View style={{ flex: 1 }}>
-                              <Text style={[{ fontSize: 11, fontWeight: '600' }, t.textInk]} numberOfLines={1}>{r.name}</Text>
-                              <Text style={[{ fontSize: 8 }, t.textMuted]}>{r.org_name || 'Linked'} · Synced{r.last_sync_at ? ' · ' + timeAgo(r.last_sync_at) : ''}</Text>
-                            </View>
-                            <Text style={[{ fontSize: 11 }, t.textInk]}>{visible ? MONEY(Number(r.balance || 0)) : '••••'}</Text>
-                          </Pressable>
-                        ))}
+                        {g.linkedRows.map((r: any) => {
+                          const isManualBacked = r.provider === 'manual';
+                          // Spec #2: merge-hint — surface a lightweight prompt
+                          // when a manual account looks like a linked Plaid
+                          // row already present in the same category. Fuzzy:
+                          // case-insensitive substring match on the trimmed
+                          // display name. Users decide whether to merge
+                          // (delete the manual) or keep both.
+                          const mergeHint = isManualBacked
+                            ? g.linkedRows.find((other: any) => other.provider === 'plaid' && _nameMatch(other.name, r.name))
+                            : null;
+                          if (isManualBacked) {
+                            return (
+                              <View key={`m-${r.account_id}`}>
+                                <Pressable
+                                  onPress={() => openManualEdit(g.slug, r)}
+                                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}
+                                  testID={`wealth-manual-row-${r.account_id}`}
+                                >
+                                  <View style={{ flex: 1 }}>
+                                    <Text style={[{ fontSize: 11, fontWeight: '600' }, t.textInk]} numberOfLines={1}>{r.name}</Text>
+                                    <Text style={[{ fontSize: 8 }, t.textMuted]}>
+                                      {r.org_name && r.org_name !== 'Manual' ? `${r.org_name} · ` : ''}Manual · tap to edit
+                                    </Text>
+                                  </View>
+                                  <Text style={[{ fontSize: 11 }, t.textInk]}>{visible ? MONEY(Number(r.balance || 0)) : '••••'}</Text>
+                                </Pressable>
+                                {mergeHint && (
+                                  <View style={{ marginTop: 4, marginBottom: 8, padding: 8, borderRadius: 8, backgroundColor: t.dark ? '#3a2f22' : '#fbf1de', borderLeftWidth: 3, borderLeftColor: '#c49450' }}>
+                                    <Text style={{ fontSize: 10, fontWeight: '800', color: '#9a6d32' }}>
+                                      Matches your linked {mergeHint.name}
+                                    </Text>
+                                    <Text style={{ fontSize: 9, color: t.dark ? D.textMuted : '#8d806e', marginTop: 3, lineHeight: 13 }}>
+                                      Both accounts count toward Net Worth. Merge to delete this manual entry (linked one stays).
+                                    </Text>
+                                    <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+                                      <Pressable
+                                        onPress={async () => {
+                                          if (!token) return;
+                                          await apiCall(`/api/accounts/manual/${r.account_id}`, { method: 'DELETE' }, token);
+                                          refreshLinked();
+                                          if (typeof onRefreshAccounts === 'function') onRefreshAccounts();
+                                        }}
+                                        style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, backgroundColor: '#b28a4c' }}
+                                        testID={`wealth-manual-merge-${r.account_id}`}
+                                      >
+                                        <Text style={{ fontSize: 10, fontWeight: '800', color: '#fff' }}>Merge & delete manual</Text>
+                                      </Pressable>
+                                    </View>
+                                  </View>
+                                )}
+                              </View>
+                            );
+                          }
+                          return (
+                            <Pressable key={`${r.link_id}-${r.account_id}`} onPress={() => setReclassifyAccount(r)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }} testID={`wealth-cat-acc-${r.account_id}`}>
+                              <View style={{ flex: 1 }}>
+                                <Text style={[{ fontSize: 11, fontWeight: '600' }, t.textInk]} numberOfLines={1}>{r.name}</Text>
+                                <Text style={[{ fontSize: 8 }, t.textMuted]}>{r.org_name || 'Linked'} · Synced{r.last_sync_at ? ' · ' + timeAgo(r.last_sync_at) : ''}</Text>
+                              </View>
+                              <Text style={[{ fontSize: 11 }, t.textInk]}>{visible ? MONEY(Number(r.balance || 0)) : '••••'}</Text>
+                            </Pressable>
+                          );
+                        })}
                         {g.manualExtras.map((r: Asset) => (
                           <Pressable key={`m-${r.id}`} onPress={() => { setEditRow({ side, row: r }); setRowDraftName(r.name); setRowDraftAmt(r.value ? String(r.value) : ''); }} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
                             <View style={{ flex: 1 }}>
                               <Text style={[{ fontSize: 11, fontWeight: '600' }, t.textInk]}>{r.name}</Text>
-                              <Text style={[{ fontSize: 8 }, t.textMuted]}>Manual</Text>
+                              <Text style={[{ fontSize: 8 }, t.textMuted]}>Manual (legacy)</Text>
                             </View>
                             <Text style={[{ fontSize: 11 }, t.textInk]}>{visible ? MONEY(r.value) : '••••'}</Text>
                           </Pressable>
                         ))}
+                        {/* + Add Manual Account (spec #2) — pre-fills category from context */}
+                        <Pressable
+                          onPress={() => openManualAdd(g.slug)}
+                          style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, marginTop: 4, borderTopWidth: 1, borderTopColor: t.dark ? '#3a342b' : '#f0ebe4' }}
+                          testID={`wealth-add-manual-${g.slug}`}
+                        >
+                          <Ionicons name="add-circle-outline" size={16} color="#9a6d32" style={{ marginRight: 6 }} />
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: '#9a6d32' }}>Add Manual Account</Text>
+                        </Pressable>
                       </View>
                     )}
                   </View>
@@ -861,6 +1007,74 @@ export const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities,
             onDone={(_updated) => { setReclassifyAccount(null); refreshLinked(); }}
             onClose={() => setReclassifyAccount(null)}
           />
+        ) : null}
+      </Sheet>
+      {/* Manual account editor (spec #2) — used for both Add and Edit. Category
+          is derived from the tap context so users never have to pick it. */}
+      <Sheet
+        visible={!!manualEditor}
+        close={closeManualEditor}
+        title={manualEditor?.mode === 'edit' ? 'Edit manual account' : 'Add manual account'}
+        subtitle={manualEditor ? `${CATEGORY_LABELS[manualEditor.category] || manualEditor.category} · counts toward ${['credit_cards', 'mortgage', 'auto_loans', 'student_loans', 'other_liabilities'].includes(manualEditor.category) ? 'Total Liabilities' : 'Total Assets'}` : ''}
+      >
+        {manualEditor ? (
+          <View>
+            <Text style={{ fontSize: 10, fontWeight: '700', color: t.dark ? D.textMuted : '#7a6d55', marginBottom: 6 }}>ACCOUNT NAME</Text>
+            <TextInput
+              value={manDraftName}
+              onChangeText={setManDraftName}
+              placeholder="e.g. Emergency fund, Backyard remodel"
+              style={[{ borderWidth: 1, borderColor: '#eae3d5', borderRadius: 12, padding: 12, fontSize: 14, backgroundColor: '#fff' }, t.inputBg]}
+              placeholderTextColor={t.dark ? '#5a5148' : '#b0a89c'}
+              testID="wealth-manual-name"
+            />
+            <Text style={{ fontSize: 10, fontWeight: '700', color: t.dark ? D.textMuted : '#7a6d55', marginTop: 14, marginBottom: 6 }}>
+              {['credit_cards', 'mortgage', 'auto_loans', 'student_loans', 'other_liabilities'].includes(manualEditor.category) ? 'AMOUNT OWED' : 'CURRENT BALANCE'}
+            </Text>
+            <TextInput
+              value={manDraftBal}
+              onChangeText={setManDraftBal}
+              placeholder="0.00"
+              keyboardType="decimal-pad"
+              style={[{ borderWidth: 1, borderColor: '#eae3d5', borderRadius: 12, padding: 12, fontSize: 14, backgroundColor: '#fff' }, t.inputBg]}
+              placeholderTextColor={t.dark ? '#5a5148' : '#b0a89c'}
+              testID="wealth-manual-balance"
+            />
+            <Text style={{ fontSize: 10, fontWeight: '700', color: t.dark ? D.textMuted : '#7a6d55', marginTop: 14, marginBottom: 6 }}>INSTITUTION (OPTIONAL)</Text>
+            <TextInput
+              value={manDraftInst}
+              onChangeText={setManDraftInst}
+              placeholder="e.g. Local Credit Union, Vanguard, Zillow"
+              style={[{ borderWidth: 1, borderColor: '#eae3d5', borderRadius: 12, padding: 12, fontSize: 14, backgroundColor: '#fff' }, t.inputBg]}
+              placeholderTextColor={t.dark ? '#5a5148' : '#b0a89c'}
+              testID="wealth-manual-institution"
+            />
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 20 }}>
+              <Pressable
+                onPress={saveManual}
+                disabled={manSaving || !manDraftName.trim()}
+                style={{ flex: 1, minHeight: 48, borderRadius: 24, backgroundColor: '#b28a4c', alignItems: 'center', justifyContent: 'center', opacity: manSaving || !manDraftName.trim() ? 0.5 : 1 }}
+                testID="wealth-manual-save"
+              >
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 14 }}>
+                  {manualEditor.mode === 'edit' ? 'Save changes' : 'Add account'}
+                </Text>
+              </Pressable>
+              {manualEditor.mode === 'edit' && (
+                <Pressable
+                  onPress={deleteManual}
+                  disabled={manSaving}
+                  style={{ paddingHorizontal: 18, minHeight: 48, borderRadius: 24, borderWidth: 1, borderColor: '#e3c9c4', alignItems: 'center', justifyContent: 'center' }}
+                  testID="wealth-manual-delete"
+                >
+                  <Ionicons name="trash-outline" size={16} color="#b0453d" />
+                </Pressable>
+              )}
+            </View>
+            <Text style={{ fontSize: 10, color: t.dark ? D.textMuted : '#8d806e', marginTop: 12, textAlign: 'center', lineHeight: 14 }}>
+              Manual accounts flow into Total {['credit_cards', 'mortgage', 'auto_loans', 'student_loans', 'other_liabilities'].includes(manualEditor.category) ? 'Liabilities' : 'Assets'}, Net Worth, and Legacy BUILD/GROW immediately.
+            </Text>
+          </View>
         ) : null}
       </Sheet>
     </ScrollView>

@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration 58 – Phase 3 Manual Wealth Accounts + iteration bug fixes verified. Backend: 14/14 pytest checks PASS (auth guard, create/edit/delete, invalid category rejection, liability magnitude normalisation, /api/accounts/all includes provider:'manual' rows, /api/networth/history reflects new manual balances with source auto_backfill/manual_account, delete 404, regression /api/plaid/sync + /api/auth/me + /api/networth/history + /api/accounts/all all 200). Frontend (Playwright, 390x844): logged in as alex+test1, navigated to Wealth, expanded Real Estate category (see note below re Cash), tapped wealth-add-manual-real_estate, editor Sheet titled 'Add manual account' opened with correct subtitle, filled name/balance/institution, saved → new wealth-manual-row-<uuid> appeared showing '$5,000' with 'Ally Bank · Manual · tap to edit' caption; edited to $5,250 (no reload) and deleted → row disappeared. Legacy tab shows NO 'Monthly Budget Surplus' text anywhere. Activity tx-filter is exactly [All | Income | Expenses] (no Transfers pill); no Plaid txns displayed 'Manual' as origin (user has no Plaid links). Zero JS console errors during the entire CRUD flow. Only pre-existing shadow* deprecation warnings observed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "NetWorthScreen category grouping", "issue": "Empty categories (rowCount===0 && total===0) are hidden by the `if (g.total === 0 && rowCount === 0) return null;` guard at NetWorthScreen.tsx:879. As a result, for a brand-new user with no Plaid links and no legacy manual rows, the Cash and Investments categories don't render — so testIDs `wealth-cat-cash`, `wealth-add-manual-cash`, `wealth-cat-investments`, `wealth-add-manual-investments` are unreachable from the UI. Only categories that already have at least one legacy manual placeholder (Real Estate, Vehicles, Credit Cards, Mortgage, Auto Loans, Student Loans on the test user) show the '+ Add Manual Account' button. The CRUD flow itself is fully functional when exercised via a visible category (verified on Real Estate).", "testID": "wealth-cat-cash / wealth-add-manual-cash", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration58_manual_accounts.py",
+    "/app/test_reports/pytest/iteration58_manual.xml",
+    "/app/test_reports/screenshots/iter58_wealth.jpeg",
+    "/app/test_reports/screenshots/iter58_editor_open.jpeg",
+    "/app/test_reports/screenshots/iter58_after_save.jpeg",
+    "/app/test_reports/screenshots/iter58_legacy.jpeg"
+  ],
+  "action_items": [
+    "Consider relaxing the NetWorthScreen.tsx:879 collapse guard so that Cash and Investments (and ideally all standard categories) always render at least the '+ Add Manual Account' affordance, even when total=$0 and rowCount=0. Otherwise first-time users with no Plaid link cannot add a manual Cash or Investments account (spec #2's most common entry point). Suggested fix: keep the collapse for empty LIABILITY categories but always show the asset base four (cash/investments/real_estate/vehicles), OR always render every category header with the Add button. Backend & Sheet CRUD are correct; this is purely a discoverability regression.",
+    "Optional: seed test user alex+test1 with a Budget entry (income + expense) to exercise the Legacy 'Monthly Budget Net' card copy in the LEGACY SNAPSHOT gate (unchanged since iter57 — card only renders when totalCash>0 || investmentTotal>0 || monthlyNet>0)."
+  ],
+  "critical_code_review_comments": [
+    "manual_accounts_service.py: solid — categories validated against wealth_service.CATEGORY_LABELS, liability balances normalised to positive magnitude via abs(), _row_out shape matches Plaid rows so frontend can render uniformly. UUID id + user_id compound uniqueness index configured in server startup.",
+    "server.py mutation endpoints (POST/PATCH/DELETE /accounts/manual) all persist a Net Worth snapshot with source='manual_account' after the write — trendline picks up changes immediately. Snapshot write wrapped in try/except so a failure never breaks the CRUD.",
+    "index.tsx mergedTransactions restamps local overlays whose external_id matches a linkedTransactions row with the canonical org_name — this is the Phase-1 belt-and-suspenders backfill mentioned in the request. Verified visually: no 'Manual' origin appears on Activity for the test user (no Plaid txns).",
+    "index.tsx L4995 monthlyBudgetIncome/monthlyBudgetExpense now sum sub.months[currentMonthIdx] ?? sub.budgeted rather than sub.budgeted alone — makes 'Monthly Budget Net' equal to Budget's current-local-month total. No 'Surplus' copy remains in Legacy DOM.",
+    "TxForm.save uses `tx.origin || (tx.external_id ? 'Linked' : 'Manual')` — future saves never regress origin.",
+    "app/index.tsx is still ~5200 lines (well above 700-line guideline). NetWorthScreen.tsx is 1081 lines. Consider splitting into per-tab modules."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration58_manual_accounts.py (new)"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100% for the exercised CRUD + regression paths; note that wealth-cat-cash/wealth-add-manual-cash could not be exercised because the Cash category is not rendered for the empty test user — see action_items"},
+  "seed_data_creation": "None persisted. Test created and cleaned up two manual accounts (Emergency fund cash $5000 → 5250 → deleted; Amex Gold credit_cards -1200 → normalised to 1200 → deleted).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "For Phase 3 UI testing: on a user with no Plaid links and no legacy manual assets, only Real Estate / Vehicles / Credit Cards / Mortgage / Auto Loans / Student Loans render on the Wealth screen (they have empty legacy placeholder rows). Cash and Investments are collapsed by the row-count guard at NetWorthScreen.tsx:879. Exercise `wealth-add-manual-real_estate` (or any visible category) instead of `wealth-add-manual-cash` unless the guard is relaxed. bottom-nav testIDs: Wealth = `nav-networth`, Activity = `nav-transactions`, Legacy = `nav-legacy`.",
+  "rca_of_issue": "N/A – all spec'd checks passed except the Cash-category UI discoverability issue documented in ui_bugs. Root cause of that: NetWorthScreen.tsx:879 hides categories whose total=$0 AND whose rowCount=0, which happens naturally for Cash & Investments on a new account with no Plaid links. Fix belongs in the main agent's court (either always render the four asset categories, or gate the collapse guard on `!isAssetCategory`)."
+}
