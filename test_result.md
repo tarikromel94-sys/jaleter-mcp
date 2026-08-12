@@ -1524,3 +1524,24 @@ Add Apple Sign-In to Login + Signup screens.
 ### agent_communication:
   - agent: main
     message: "Phase 3 complete + 2 bug fixes shipped. Total shipped this arc: 12 of 26 spec items (Phase 1: 8, Phase 2: 3, Phase 3: 1). Remaining phases 4 (Split cents / category selector / netting) and 5 (chart tooltips + reconciliation) queued."
+
+---
+
+## Iteration 59-60 (Phase 4: transaction UX polish #14-#17)
+
+### frontend:
+  - task: "Split cents integer-math + decimal-pad, refund netting via sign, per-split side, clean category picker sheet"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "9/9 verified after MONEY_C display fix. Splits precise to cents ($48.80/$48.80 balanced, $0.25 over). addSplit seeds exactly 1 row. Per-split side toggle switches income/expense chip lists. Category sheet with search filters correctly. Zero JS errors."
+
+### agent_communication:
+  - agent: main
+    message: "Phase 4 complete. 16 of 26 spec items shipped. Phase 5 (charts + tooltips) remaining."

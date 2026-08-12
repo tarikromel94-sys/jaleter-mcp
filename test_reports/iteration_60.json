@@ -1,0 +1,33 @@
+{
+  "summary": "Iteration 60 – Re-verification of Jaleter Phase 4 split-cents display fix at 390x844 on Expo web preview as alex+test1@jaleter.app. ALL 9 numbered checks PASS end-to-end. The MONEY_C cent-precision formatter (`n => `$${Number(n).toFixed(2)}``) is correctly wired to the splits status labels — 'Allocated $48.80 / $48.80' and 'Allocated $49.05 / $48.80' now render with full cent precision (no more `$49 / $49` or `$0 over`). Balanced/over states show green 'Balanced' and red '$0.25 over' text respectively. `addSplit()` now correctly seeds exactly ONE empty split row on `tx-split-toggle`, and tapping `tx-split-add` appends a second row (rows count 1 → 2 as expected, not 2 → 3 as in iter 59). Regression clean: home / budget / networth / legacy / transactions all navigate without crash, zero JS console errors, and `tx-filter` still shows exactly `All | Income | Expenses`. Save button became enabled when balanced and the transaction saved successfully (modal closed, returned to Activity list).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter60/s1_toggle.jpeg",
+    "/app/test_reports/screenshots/iter60/s2_balanced.jpeg",
+    "/app/test_reports/screenshots/iter60/s3_over.jpeg",
+    "/app/test_reports/screenshots/iter60/s4_after_save.jpeg"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "index.tsx:3247 — local `MONEY_C = (n) => `$${(Number(n) || 0).toFixed(2)}`` is scoped inside the splits status IIFE. This is the right minimal fix (avoids mutating the shared MONEY() used by KPI cards). Consider promoting to `MONEY_CENTS` in quoteLibrary if any other tight-cent display line needs it.",
+    "index.tsx:3311 — 'Splits must total exactly $${(parsedAmountCents / 100).toFixed(2)}' now renders correctly with cents.",
+    "index.tsx:2953-2969 — `addSplit()` seed/append branch is clean: first tap creates a single row `[{ …empty… }]`; subsequent taps append one. Matches spec copy.",
+    "app/index.tsx remains ~5,437 lines — still well over the 700-line guideline. Deferred split of TxForm into its own module is still worth doing for maintainability, but no functional risk."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_60.json (this report)",
+    "/app/test_reports/screenshots/iter60/*.jpeg (verification screenshots)"
+  ],
+  "success_rate": {"backend": "N/A (out of scope)", "frontend": "9/9 numbered checks pass"},
+  "seed_data_creation": "Created one manual split transaction ($48.80 = $20.25 + $28.55, both Give · Tithe) during the run; stored client-side per Jaleter's manual-tx model.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Login flow on web: Welcome renders as an iframe (WELCOME_HTML). To get past it, evaluate `window.postMessage('navigate:login', '*')` — this reaches the parent listener at index.tsx:646-654 and pushes stage='login'. Then fill `login-email` / `login-password` and click `login-submit`. TxForm split status text now uses cent-precision `MONEY_C` at index.tsx:3247 (scoped to the IIFE) while the shared `MONEY()` in quoteLibrary.ts:73 still rounds to whole dollars for KPI/summary display. `addSplit()` at index.tsx:2953-2969 correctly opens a single row on the first tap of `tx-split-toggle` and appends one per tap of `tx-split-add` — do NOT expect the two-row seed behavior described in prior iterations.",
+  "rca_of_issue": "Prior regression (iter 59) was caused by reusing whole-dollar `MONEY()` in cent-sensitive locations. The fix scoped a local cent-precision formatter `MONEY_C` inside the splits status block, leaving the shared `MONEY()` untouched. Verified: exact strings observed → step 6 'Allocated $48.80 / $48.80' + 'Balanced'; step 7 'Allocated $49.05 / $48.80' + '$0.25 over'; step 8 'Allocated $48.80 / $48.80' + 'Balanced'; step 4 exactly 1 row after toggle; step 5b exactly 2 rows after add; step 9 tx-filter=`All\\nIncome\\nExpenses`, zero console errors across full nav."
+}

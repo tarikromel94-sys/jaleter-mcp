@@ -298,7 +298,7 @@ const initialCategories = [
     { id: 'travel', name: 'Travel', budgeted: 0 }, { id: 'shopping', name: 'Shopping', budgeted: 0 }, { id: 'entertainment', name: 'Entertainment', budgeted: 0 }] },
 ];
 const initialIncome = [{ id: 'w2', name: 'W-2 Income', budgeted: 0 }, { id: 'contract', name: 'Contract Income', budgeted: 0 }, { id: 'business', name: 'Business Income', budgeted: 0 }];
-type Split = { groupId: string; detailId?: string; amount: number };
+type Split = { groupId: string; detailId?: string; amount: number; type?: 'income' | 'expense' };
 type Tx = {
   id: string;
   date: string;
@@ -321,6 +321,12 @@ type Tx = {
   system_category?: string | null;
   is_transfer?: boolean;
   external_id?: string;
+  // Signed direction of the ORIGINAL underlying money flow: +1 for money
+  // into the user's account (positive Plaid amount, refunds), -1 for money
+  // out (negative Plaid amount, spends). Enables spec #16 netting so a
+  // +$48.80 Walmart refund manually assigned to Food & Dining REDUCES that
+  // subcategory's actual instead of inflating it.
+  sign?: 1 | -1;
   // Merchant name — canonical retailer name (e.g. "Costco Wholesale") used
   // for grouping in Reports. Distinct from `name` which is the description.
   merchant?: string;
@@ -355,7 +361,7 @@ const initialTx: Tx[] = [];
 // splits exist, we ignore the top-level groupId/detailId and iterate splits
 // instead. When splits are absent, the transaction contributes its full
 // amount to the top-level assignment.
-type Alloc = { groupId: string; detailId?: string; amount: number; parentType: Tx['type']; parentPeriod: string; parentYear: number; parentTx: Tx };
+type Alloc = { groupId: string; detailId?: string; amount: number; parentType: Tx['type']; allocType: Tx['type']; parentPeriod: string; parentYear: number; parentTx: Tx };
 const txAllocations = (tx: Tx): Alloc[] => {
   const isoMatch = typeof tx.date === 'string' ? tx.date.match(/^(\d{4})-(\d{2})/) : null;
   const parentYear = isoMatch ? Number(isoMatch[1]) : (tx.date ? new Date(tx.date).getFullYear() : new Date().getFullYear());
@@ -366,6 +372,8 @@ const txAllocations = (tx: Tx): Alloc[] => {
       detailId: sp.detailId,
       amount: Number(sp.amount) || 0,
       parentType: tx.type,
+      // Per-split type (spec #17). Defaults to the parent tx type.
+      allocType: (sp.type as Tx['type']) || tx.type,
       parentPeriod,
       parentYear,
       parentTx: tx,
@@ -376,24 +384,33 @@ const txAllocations = (tx: Tx): Alloc[] => {
     detailId: tx.detailId,
     amount: tx.amount,
     parentType: tx.type,
+    allocType: tx.type,
     parentPeriod,
     parentYear,
     parentTx: tx,
   }];
 };
 // Sum splits-aware actual for a subcategory in a given month (of a specific year).
+// Spec #16: a refund/positive txn assigned to Expense OFFSETS spend
+// (reduces the actual) rather than adding to it. We use `tx.sign` (+1 for
+// money-in, -1 for money-out) to detect refunds: a positive-signed txn
+// assigned to Expense contributes NEGATIVELY. Same idea for chargebacks
+// against Income.
 const spentForSubInMonth = (transactions: Tx[], subId: string, monthIndex: number, year?: number): number => {
   let sum = 0;
   const targetMonth = MONTHS[monthIndex];
   for (const tx of transactions) {
     if (isSystemTransaction(tx)) continue;
-    if (tx.type !== 'expense') continue;
     const allocs = txAllocations(tx);
     for (const a of allocs) {
+      if (a.allocType !== 'expense') continue;
       if (a.detailId !== subId) continue;
       if (a.parentPeriod !== targetMonth) continue;
       if (year !== undefined && a.parentYear !== year) continue;
-      sum += a.amount;
+      // Refund detection: +1-signed txn attributed to Expense reduces spend.
+      const sign = (a.parentTx as any).sign;
+      const netMultiplier = sign === 1 ? -1 : 1;
+      sum += a.amount * netMultiplier;
     }
   }
   return sum;
@@ -404,13 +421,16 @@ const receivedForIncomeInMonth = (transactions: Tx[], srcId: string, monthIndex:
   const targetMonth = MONTHS[monthIndex];
   for (const tx of transactions) {
     if (isSystemTransaction(tx)) continue;
-    if (tx.type !== 'income') continue;
     const allocs = txAllocations(tx);
     for (const a of allocs) {
+      if (a.allocType !== 'income') continue;
       if (a.groupId !== srcId) continue;
       if (a.parentPeriod !== targetMonth) continue;
       if (year !== undefined && a.parentYear !== year) continue;
-      sum += a.amount;
+      // Chargeback detection: -1-signed txn attributed to Income reduces the source.
+      const sign = (a.parentTx as any).sign;
+      const netMultiplier = sign === -1 ? -1 : 1;
+      sum += a.amount * netMultiplier;
     }
   }
   return sum;
@@ -2884,15 +2904,36 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
   });
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showSplits, setShowSplits] = useState(Array.isArray(item.splits) && item.splits.length > 0);
+  const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
+  const [categoryQuery, setCategoryQuery] = useState('');
   const isIncome = tx.type === 'income';
   const isTransfer = isSystemTransaction(tx);
   const currentGroup = isIncome ? incomeSources.find((s: any) => s.id === tx.groupId) : categories.find((c: any) => c.id === tx.groupId);
   const currentSubs = !isIncome && currentGroup ? currentGroup.subcategories : [];
   const parsedAmount = Math.abs(Number((tx.amount || '').toString().replace(/[^0-9.]/g, '')) || 0);
-  // Splits accounting — sum of allocations vs total transaction amount.
-  const splitsTotal = (tx.splits || []).reduce((sum: number, sp: any) => sum + (Number(sp.amount) || 0), 0);
-  const splitsRemaining = parsedAmount > 0 ? parsedAmount - splitsTotal : 0;
-  const splitsValid = !showSplits || (tx.splits && tx.splits.length >= 2 && Math.abs(splitsRemaining) < 0.01 && tx.splits.every((sp: any) => (Number(sp.amount) || 0) > 0));
+  // Splits accounting in INTEGER CENTS (spec #14) — floating-point dollars
+  // lose precision at 2 decimals (48.80 + 3.70 becomes 52.500000000000004).
+  // Round each side to cents, then compare/validate/sum on cents so users
+  // can enter values like $20.25 / $28.55 / $48.80 without the app quietly
+  // rounding them into whole dollars.
+  const dollarsToCents = (v: string | number): number => {
+    const s = String(v ?? '').replace(/[^0-9.\-]/g, '');
+    if (!s) return 0;
+    // Parse then round to nearest cent to eliminate FP drift.
+    return Math.round(Number(s) * 100);
+  };
+  const parsedAmountCents = dollarsToCents(tx.amount);
+  const splitsTotalCents = (tx.splits || []).reduce((sum: number, sp: any) => sum + dollarsToCents(sp.amount), 0);
+  const splitsRemainingCents = parsedAmountCents > 0 ? parsedAmountCents - splitsTotalCents : 0;
+  const splitsTotal = splitsTotalCents / 100;
+  const splitsRemaining = splitsRemainingCents / 100;
+  // Save enables when allocated cents EXACTLY equals the transaction cents.
+  const splitsValid = !showSplits || (
+    tx.splits &&
+    tx.splits.length >= 2 &&
+    splitsRemainingCents === 0 &&
+    tx.splits.every((sp: any) => dollarsToCents(sp.amount) > 0)
+  );
 
   // Parse the current date string. Fallback to today.
   const parsedDate = (() => {
@@ -2912,13 +2953,20 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
   const addSplit = () => {
     const firstCat = categories[0];
     const firstSub = firstCat?.subcategories?.[0];
-    const seed = tx.splits && tx.splits.length > 0 ? tx.splits : [
-      { groupId: tx.groupId || firstCat?.id, detailId: tx.detailId || firstSub?.id, amount: '' },
-    ];
-    setT({
-      ...tx,
-      splits: [...seed, { groupId: firstCat?.id, detailId: firstSub?.id, amount: '' }],
-    });
+    // Toggle behavior: first invocation opens the splits UI with EXACTLY
+    // one empty row so users can build up the allocation deliberately.
+    // Subsequent invocations append one row (spec test copy: "Add split").
+    if (!tx.splits || tx.splits.length === 0) {
+      setT({
+        ...tx,
+        splits: [{ groupId: tx.groupId || firstCat?.id, detailId: tx.detailId || firstSub?.id, amount: '' }],
+      });
+    } else {
+      setT({
+        ...tx,
+        splits: [...tx.splits, { groupId: firstCat?.id, detailId: firstSub?.id, amount: '' }],
+      });
+    }
     setShowSplits(true);
   };
   const updateSplit = (idx: number, patch: any) => {
@@ -2974,7 +3022,7 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
       <Text style={s.label}>Amount</Text>
       <View style={s.amountInput}>
         <Text style={s.amountPrefix}>$</Text>
-        <TextInput style={[s.input, { paddingLeft: 26 }]} value={tx.amount} onChangeText={x => setT({ ...tx, amount: x })} keyboardType="numeric" testID="tx-amount" />
+        <TextInput style={[s.input, { paddingLeft: 26 }]} value={tx.amount} onChangeText={x => setT({ ...tx, amount: x.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1').replace(/^(\d*\.\d{0,2}).*/, '$1') })} keyboardType="decimal-pad" testID="tx-amount" />
       </View>
 
       <Text style={s.label}>Date</Text>
@@ -3049,72 +3097,38 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
         </View>
       )}
 
-      {/* Category / subcategory picker. Includes a "Transfer" chip (spec
-          #10 / #11): assigning it flags the transaction as a Transfer
-          without changing its type — the row still shows up in Activity
-          under Income/Expense (by sign), but Budget and Reports totals
-          exclude it. Hidden when the user has opted into a Split. */}
+      {/* Category / subcategory picker (spec #15). A single tappable row
+          opens a searchable bottom sheet with every group + subcategory
+          plus Transfer. This replaces the previous 2-3 walls of chips
+          and keeps the modal clean on small screens. */}
       {!showSplits && (
         <>
           <Text style={s.label}>{isIncome ? 'Earn source' : 'Category'}</Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-            {(isIncome ? incomeSources : categories).map((g: any) => {
-              const on = tx.groupId === g.id && !isTransfer;
-              return (
-                <Pressable
-                  key={g.id}
-                  onPress={() => setT({
-                    ...tx,
-                    groupId: g.id,
-                    detailId: isIncome ? undefined : g.subcategories?.[0]?.id,
-                    // Reclassifying to a real category clears the Transfer flags (spec #13).
-                    is_transfer: false,
-                    system_category: null,
-                  })}
-                  style={[s.pickerChip, on && s.pickerChipOn]}
-                  testID={`tx-group-${g.id}`}
-                >
-                  <Text style={[s.pickerChipText, on && { color: '#fff' }]}>{g.name}</Text>
-                </Pressable>
-              );
-            })}
-            {/* Transfer chip — always available regardless of type. Selecting
-                it flags the row without changing income/expense side. */}
-            <Pressable
-              onPress={() => setT({
-                ...tx,
-                is_transfer: true,
-                system_category: 'transfer',
-                groupId: '',
-                detailId: undefined,
-                splits: undefined,
-              })}
-              style={[s.pickerChip, isTransfer && s.pickerChipOn]}
-              testID="tx-group-transfer"
-            >
-              <Text style={[s.pickerChipText, isTransfer && { color: '#fff' }]}>Transfer</Text>
-            </Pressable>
-          </View>
-          {!isIncome && !isTransfer && currentSubs.length > 0 && (
-            <>
-              <Text style={s.label}>Subcategory</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-                {currentSubs.map((sub: any) => {
-                  const on = tx.detailId === sub.id;
-                  return (
-                    <Pressable
-                      key={sub.id}
-                      onPress={() => setT({ ...tx, detailId: sub.id })}
-                      style={[s.pickerChip, on && s.pickerChipOn]}
-                      testID={`tx-sub-${sub.id}`}
-                    >
-                      <Text style={[s.pickerChipText, on && { color: '#fff' }]}>{sub.name}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </>
-          )}
+          <Pressable
+            onPress={() => setCategoryPickerOpen(true)}
+            style={{
+              flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+              paddingVertical: 12, paddingHorizontal: 14,
+              borderWidth: 1, borderColor: t.dark ? D.border : '#e2dcd2',
+              borderRadius: 13, backgroundColor: t.dark ? D.surfaceAlt : '#fff',
+            }}
+            testID="tx-category-open"
+          >
+            <Text style={[{ fontSize: 13 }, t.textInk]}>
+              {(() => {
+                if (isTransfer) return 'Transfer';
+                if (isIncome) {
+                  const g = incomeSources.find((s: any) => s.id === tx.groupId);
+                  return g ? g.name : 'Tap to select';
+                }
+                const g = categories.find((c: any) => c.id === tx.groupId);
+                const sub = g?.subcategories?.find((sb: any) => sb.id === tx.detailId);
+                if (!g) return 'Tap to select';
+                return sub ? `${g.name} · ${sub.name}` : g.name;
+              })()}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={t.dark ? D.textMuted : C.goldEyebrow} />
+          </Pressable>
         </>
       )}
 
@@ -3138,29 +3152,67 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
           {showSplits && (
             <View style={{ marginTop: 8, padding: 10, borderRadius: 10, borderWidth: 1, borderColor: t.dark ? D.border : '#ece5d5' }}>
               {(tx.splits || []).map((sp: any, idx: number) => {
-                const gOptions = isIncome ? incomeSources : categories;
-                const g = gOptions.find((c: any) => c.id === sp.groupId);
-                const subs = !isIncome && g ? g.subcategories : [];
                 return (
                   <View key={idx} style={{ paddingVertical: 8, borderBottomWidth: idx < (tx.splits.length - 1) ? 1 : 0, borderBottomColor: t.dark ? '#3a342b' : '#f1ede6' }}>
+                    {/* Per-split type toggle (spec #17): each split line
+                        can independently be Income or Expense so a $100
+                        refund can be $60 → Food & Dining expense offset,
+                        $40 → Extra Giving income, etc. Defaults to parent
+                        type when not explicitly set. */}
+                    <View style={{ flexDirection: 'row', gap: 6, marginBottom: 6 }}>
+                      {(['income', 'expense'] as const).map((sType) => {
+                        const effective = (sp.type as 'income' | 'expense') || tx.type;
+                        const on = effective === sType;
+                        return (
+                          <Pressable
+                            key={sType}
+                            onPress={() => {
+                              // Switching side resets group/sub because the
+                              // available lists differ (incomeSources vs categories).
+                              const listing = sType === 'income' ? incomeSources : categories;
+                              const first = listing[0];
+                              updateSplit(idx, {
+                                type: sType,
+                                groupId: first?.id,
+                                detailId: sType === 'income' ? undefined : first?.subcategories?.[0]?.id,
+                              });
+                            }}
+                            style={[s.pickerChip, on && s.pickerChipOn, { paddingHorizontal: 8, paddingVertical: 3 }]}
+                            testID={`tx-split-${idx}-side-${sType}`}
+                          >
+                            <Text style={[s.pickerChipText, on && { color: '#fff' }, { fontSize: 10 }]}>{sType === 'income' ? 'Income' : 'Expense'}</Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
                     <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
                       <View style={{ flex: 1 }}>
-                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
-                          {gOptions.map((c: any) => (
-                            <Pressable key={c.id} onPress={() => updateSplit(idx, { groupId: c.id, detailId: c.subcategories?.[0]?.id })} style={[s.pickerChip, sp.groupId === c.id && s.pickerChipOn, { paddingHorizontal: 8, paddingVertical: 4 }]} testID={`tx-split-${idx}-group-${c.id}`}>
-                              <Text style={[s.pickerChipText, sp.groupId === c.id && { color: '#fff' }, { fontSize: 10 }]}>{c.name}</Text>
-                            </Pressable>
-                          ))}
-                        </View>
-                        {!isIncome && subs.length > 0 && (
-                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
-                            {subs.map((sub: any) => (
-                              <Pressable key={sub.id} onPress={() => updateSplit(idx, { detailId: sub.id })} style={[s.pickerChip, sp.detailId === sub.id && s.pickerChipOn, { paddingHorizontal: 8, paddingVertical: 4 }]} testID={`tx-split-${idx}-sub-${sub.id}`}>
-                                <Text style={[s.pickerChipText, sp.detailId === sub.id && { color: '#fff' }, { fontSize: 10 }]}>{sub.name}</Text>
-                              </Pressable>
-                            ))}
-                          </View>
-                        )}
+                        {(() => {
+                          const spType = (sp.type as 'income' | 'expense') || tx.type;
+                          const spOptions = spType === 'income' ? incomeSources : categories;
+                          const spGroup = spOptions.find((c: any) => c.id === sp.groupId);
+                          const spSubs = spType === 'expense' && spGroup ? spGroup.subcategories : [];
+                          return (
+                            <>
+                              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+                                {spOptions.map((c: any) => (
+                                  <Pressable key={c.id} onPress={() => updateSplit(idx, { groupId: c.id, detailId: c.subcategories?.[0]?.id })} style={[s.pickerChip, sp.groupId === c.id && s.pickerChipOn, { paddingHorizontal: 8, paddingVertical: 4 }]} testID={`tx-split-${idx}-group-${c.id}`}>
+                                    <Text style={[s.pickerChipText, sp.groupId === c.id && { color: '#fff' }, { fontSize: 10 }]}>{c.name}</Text>
+                                  </Pressable>
+                                ))}
+                              </View>
+                              {spType === 'expense' && spSubs.length > 0 && (
+                                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                                  {spSubs.map((sub: any) => (
+                                    <Pressable key={sub.id} onPress={() => updateSplit(idx, { detailId: sub.id })} style={[s.pickerChip, sp.detailId === sub.id && s.pickerChipOn, { paddingHorizontal: 8, paddingVertical: 4 }]} testID={`tx-split-${idx}-sub-${sub.id}`}>
+                                      <Text style={[s.pickerChipText, sp.detailId === sub.id && { color: '#fff' }, { fontSize: 10 }]}>{sub.name}</Text>
+                                    </Pressable>
+                                  ))}
+                                </View>
+                              )}
+                            </>
+                          );
+                        })()}
                       </View>
                       <View style={{ width: 90 }}>
                         <View style={s.amountInput}>
@@ -3168,9 +3220,9 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
                           <TextInput
                             style={[s.input, { paddingLeft: 22, paddingRight: 6, fontSize: 12 }]}
                             value={String(sp.amount || '')}
-                            onChangeText={(x) => updateSplit(idx, { amount: x })}
-                            keyboardType="numeric"
-                            placeholder="0"
+                            onChangeText={(x) => updateSplit(idx, { amount: x.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1').replace(/^(\d*\.\d{0,2}).*/, '$1') })}
+                            keyboardType="decimal-pad"
+                            placeholder="0.00"
                             testID={`tx-split-${idx}-amount`}
                           />
                         </View>
@@ -3187,16 +3239,27 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
                 <Text style={{ color: '#9a6d32', fontWeight: '700', fontSize: 11 }}>Add split</Text>
               </Pressable>
               <View style={{ marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>Allocated {MONEY(splitsTotal)} / {MONEY(parsedAmount)}</Text>
-                <Text style={{ fontSize: 10, fontWeight: '800', color: splitsValid ? '#4c8b56' : '#b06a5b' }}>
-                  {splitsValid
-                    ? 'Balanced'
-                    : splitsRemaining > 0
-                      ? `${MONEY(splitsRemaining)} left`
-                      : splitsRemaining < 0
-                        ? `${MONEY(-splitsRemaining)} over`
-                        : (tx.splits && tx.splits.length < 2 ? 'Add another row' : 'Each row needs an amount')}
-                </Text>
+                {/* Cent-precision formatter — MONEY() rounds to whole
+                    dollars for headline KPI cards, which is wrong for a
+                    split allocation that must reconcile down to the penny.
+                    Use `toFixed(2)` here (and only here). */}
+                {(() => {
+                  const MONEY_C = (n: number) => `$${(Number(n) || 0).toFixed(2)}`;
+                  return (
+                    <>
+                      <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>Allocated {MONEY_C(splitsTotal)} / {MONEY_C(parsedAmountCents / 100)}</Text>
+                      <Text style={{ fontSize: 10, fontWeight: '800', color: splitsValid ? '#4c8b56' : '#b06a5b' }}>
+                        {splitsValid
+                          ? 'Balanced'
+                          : splitsRemaining > 0
+                            ? `${MONEY_C(splitsRemaining)} left`
+                            : splitsRemaining < 0
+                              ? `${MONEY_C(-splitsRemaining)} over`
+                              : (tx.splits && tx.splits.length < 2 ? 'Add another row' : 'Each row needs an amount')}
+                      </Text>
+                    </>
+                  );
+                })()}
               </View>
             </View>
           )}
@@ -3208,14 +3271,29 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
           label="Save transaction"
           onPress={() => {
             const merchantClean = (tx.merchant || '').toString().trim();
+            // Emit splits with integer-cent precision (spec #14): parse
+            // each user-entered string, round to cents, then divide back.
             const splitsClean = showSplits && Array.isArray(tx.splits)
-              ? tx.splits.map((sp: any) => ({ groupId: sp.groupId, detailId: sp.detailId, amount: Number(sp.amount) || 0 }))
+              ? tx.splits.map((sp: any) => ({
+                  groupId: sp.groupId,
+                  detailId: sp.detailId,
+                  amount: dollarsToCents(sp.amount) / 100,
+                  type: (sp.type as 'income' | 'expense') || tx.type,
+                }))
               : undefined;
+            // Preserve or infer the signed direction. For new manual rows
+            // (no external_id, no prior sign), infer from the current type
+            // toggle: expense → -1 (money out), income → +1. Users can then
+            // reassign side without losing their original intent.
+            const preservedSign = tx.sign != null
+              ? tx.sign
+              : (tx.type === 'income' ? 1 : -1);
             save({
               ...tx,
-              amount: parsedAmount,
+              amount: parsedAmountCents / 100,
               merchant: merchantClean || undefined,
               splits: splitsClean,
+              sign: preservedSign,
               // Preserve the true origin: a linked transaction (has external_id)
               // should NEVER be stamped "Manual" on edit — that was the root
               // cause of spec #9 (Chase/Ally showing as Manual). Fall back to
@@ -3230,13 +3308,115 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
         />
         {showSplits && !splitsValid && (
           <Text style={{ fontSize: 10, color: '#b06a5b', marginTop: 6, textAlign: 'center' }}>
-            Splits must total exactly {MONEY(parsedAmount)} and have at least 2 rows.
+            Splits must total exactly ${(parsedAmountCents / 100).toFixed(2)} and have at least 2 rows.
           </Text>
         )}
       </View>
       {remove && <Pressable onPress={() => remove(item.id)} style={{ marginTop: 12, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 }} testID="tx-delete">
         <Ionicons name="trash-outline" size={14} color={C.danger} /><Text style={{ color: C.danger, fontSize: 11 }}>Delete transaction</Text>
       </Pressable>}
+
+      {/* Category picker Sheet (spec #15) — searchable, groups + leaves,
+          Transfer at bottom. Rendered inline so it inherits the same state
+          scope as the transaction editor. */}
+      <Sheet
+        visible={categoryPickerOpen}
+        close={() => { setCategoryPickerOpen(false); setCategoryQuery(''); }}
+        title={isIncome ? 'Select Earn source' : 'Select Category'}
+        subtitle="Tap a category to assign this transaction."
+      >
+        <View>
+          <TextInput
+            value={categoryQuery}
+            onChangeText={setCategoryQuery}
+            placeholder="Search..."
+            style={[{ borderWidth: 1, borderColor: '#eae3d5', borderRadius: 12, padding: 10, fontSize: 13, backgroundColor: '#fff', marginBottom: 10 }, t.inputBg]}
+            placeholderTextColor={t.dark ? '#5a5148' : '#b0a89c'}
+            testID="tx-category-search"
+            autoFocus
+          />
+          {(() => {
+            const q = categoryQuery.trim().toLowerCase();
+            const matches = (name: string) => !q || name.toLowerCase().includes(q);
+            const opts = isIncome ? incomeSources : categories;
+            return (
+              <View>
+                {opts.map((g: any) => {
+                  const groupHit = matches(g.name);
+                  const subHits = isIncome
+                    ? []
+                    : (g.subcategories || []).filter((sub: any) => matches(sub.name) || groupHit);
+                  if (!groupHit && subHits.length === 0) return null;
+                  return (
+                    <View key={g.id} style={{ marginBottom: 12 }}>
+                      <Pressable
+                        onPress={() => {
+                          setT({
+                            ...tx,
+                            groupId: g.id,
+                            detailId: isIncome ? undefined : g.subcategories?.[0]?.id,
+                            is_transfer: false,
+                            system_category: null,
+                          });
+                          setCategoryPickerOpen(false);
+                          setCategoryQuery('');
+                        }}
+                        style={{ padding: 12, borderRadius: 10, backgroundColor: t.dark ? '#2a251f' : '#fbf5e9', borderWidth: 1, borderColor: t.dark ? D.border : '#e5decf' }}
+                        testID={`tx-category-group-${g.id}`}
+                      >
+                        <Text style={[{ fontSize: 13, fontWeight: '800', color: '#9a6d32' }]}>{g.name}</Text>
+                      </Pressable>
+                      {!isIncome && subHits.map((sub: any) => (
+                        <Pressable
+                          key={sub.id}
+                          onPress={() => {
+                            setT({
+                              ...tx,
+                              groupId: g.id,
+                              detailId: sub.id,
+                              is_transfer: false,
+                              system_category: null,
+                            });
+                            setCategoryPickerOpen(false);
+                            setCategoryQuery('');
+                          }}
+                          style={{ paddingHorizontal: 20, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: t.dark ? '#3a342b' : '#f0ebe4' }}
+                          testID={`tx-category-sub-${sub.id}`}
+                        >
+                          <Text style={[{ fontSize: 12 }, t.textInk]}>{sub.name}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  );
+                })}
+                {/* Transfer — always at the bottom, single-tap */}
+                <Pressable
+                  onPress={() => {
+                    setT({
+                      ...tx,
+                      is_transfer: true,
+                      system_category: 'transfer',
+                      groupId: '',
+                      detailId: undefined,
+                      splits: undefined,
+                    });
+                    setCategoryPickerOpen(false);
+                    setCategoryQuery('');
+                  }}
+                  style={{ marginTop: 8, padding: 12, borderRadius: 10, backgroundColor: t.dark ? '#3a2f22' : '#fbf1de', borderWidth: 1, borderColor: '#c49450', flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                  testID="tx-category-transfer"
+                >
+                  <Ionicons name="swap-horizontal-outline" size={16} color="#9a6d32" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: '#9a6d32' }}>Transfer</Text>
+                    <Text style={{ fontSize: 10, color: '#8d806e', marginTop: 2 }}>Excluded from Budget, Reports & Net Income</Text>
+                  </View>
+                </Pressable>
+              </View>
+            );
+          })()}
+        </View>
+      </Sheet>
     </View>
   );
 };
@@ -4810,6 +4990,10 @@ function MainApp() {
             merchant: (r.merchant || '').trim() || undefined,
             amount: Math.abs(amt),
             type: derivedType,
+            // Preserve the original signed direction so refund netting
+            // (spec #16) can reduce Expense actuals if the user manually
+            // reassigns the row to an Expense category.
+            sign: amt >= 0 ? 1 : -1,
             groupId: '',
             detailId: '',
             origin: r.org_name || 'Linked',
