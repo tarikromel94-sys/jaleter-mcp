@@ -1545,3 +1545,24 @@ Add Apple Sign-In to Login + Signup screens.
 ### agent_communication:
   - agent: main
     message: "Phase 4 complete. 16 of 26 spec items shipped. Phase 5 (charts + tooltips) remaining."
+
+---
+
+## Iteration 61 (Phase 5 partial: charts #21 + #26)
+
+### frontend:
+  - task: "Interactive hover/tap tooltips on all charts + meaningful long-horizon checkpoints"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/components/ProjectionLineChart.tsx (rewritten), /app/frontend/app/index.tsx (Legacy checkpoints)"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "9/9 pass. Tooltip renders with label + amount + delta + subtitle. Vertical guide + label bold on active point. 5-year cadence checkpoints for GROW/Retirement with RETIRE terminal label. Polish nits (retire fullLabel, pointerEvents deprecation, activeIdx reset on points change) applied by main agent."
+
+### agent_communication:
+  - agent: main
+    message: "Phase 5 partial: 2 of 7 items done (#21 checkpoints + #26 tooltips). Remaining (#20 audit, #22 BUILD detail, #23 GROW verification, #24 Reports reconcile, #25 loading masking) queued for follow-up session. All heavy lifts (chart component rewrite, real-math checkpoints) done."

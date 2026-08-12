@@ -1,0 +1,45 @@
+{
+  "summary": "Phase 5 partial verification (spec #21 checkpoints + #26 chart tooltips). Tested frontend only via Playwright at 390x844. All 9 numbered checks PASSED. Login → Legacy → BUILD 3yr shows label strip 'Now 1YR 2YR 3YR'. Tap-to-tooltip works reliably on desktop web via PanResponder (mouse click bridged to touch events); left/middle/right taps produce 'TODAY · ACTUAL', 'YEARS FROM NOW · PROJECTED' variants, dollar amount, and subtitle 'BUILD · investments held flat'. 20yr GROW shows 5-year cadence 'Now 5YR 10YR 15YR 20YR' and tooltip renders 'YEAR 10 · PROJECTED' with 'GROW · 7% compound' subtitle. Retirement shows terminal label 'RETIRE'. Wealth NetWorth chart renders with 3 synthetic points and tolerates taps (no crash). Home teaser chart still renders. Regression sweep (Home/Budget/Reports/Activity/Wealth/Legacy) — zero JS console errors, only pre-existing deprecation warnings ('shadow*' props, one new 'props.pointerEvents' from the new tooltip View).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ProjectionLineChart tooltip (Retirement mode)", "issue": "For the terminal RETIRE checkpoint, tooltip label reads 'YEAR {n} · PROJECTED' (e.g. 'YEAR 35 · PROJECTED') because meta.fullLabel is hard-coded to `Year ${y}` in index.tsx:3716. Spec #26 asked for 'RETIRE · PROJECTED'. Label strip below chart correctly reads 'RETIRE', so the mismatch is only inside the floating tooltip.", "testID": "n/a", "priority": "LOW"},
+      {"component": "ProjectionLineChart tooltip View", "issue": "New tooltip container uses `pointerEvents=\"none\"` as a prop (ProjectionLineChart.tsx:174). React Native has deprecated this in favor of style.pointerEvents. Emits warning: 'props.pointerEvents is deprecated. Use style.pointerEvents'. No functional impact.", "testID": "n/a", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Legacy → Retirement chart", "issues": ["Tooltip fullLabel does not honor the special RETIRE terminal label — cosmetic; underlying label strip already says RETIRE."]}
+    ],
+    "react_native_issues": [
+      {"component": "ProjectionLineChart.tsx", "issue": "`pointerEvents` used as a prop instead of style.pointerEvents (deprecated in RN 0.74+). Move to style. Reference: /app/frontend/src/components/ProjectionLineChart.tsx:174"}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/screenshots/iter61/"],
+  "action_items": [
+    "Tooltip label for the terminal RETIRE point: set `meta.fullLabel = 'Retire'` (or `'At retirement (year ${y})'`) when `isRetirement && i === checkpoints.length - 1` inside the points builder at index.tsx:3711-3719 so the floating tooltip reads 'RETIRE · PROJECTED' instead of 'YEAR 35 · PROJECTED'.",
+    "Migrate `pointerEvents=\"none\"` on the tooltip View to `style={{ pointerEvents: 'none' }}` in ProjectionLineChart.tsx (line 174) to silence deprecation warning."
+  ],
+  "critical_code_review_comments": [
+    "PanResponder correctly translates locationX → nearest point using rendered width from onLayout — good defense against non-square viewports. Verified interactively works on web via mouse-click bridge.",
+    "activeIdx is not cleared when the parent switches timeframe (e.g. 20yr → Retirement). Old index can remain highlighted until the user taps again. Consider resetting activeIdx on `points` reference change (useEffect on points).",
+    "Tooltip is `pointerEvents=none` and top-positioned (top:-6). Verified this doesn't block re-taps on Legacy 3yr/20yr/Retirement charts."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (not tested per request)", "frontend": "100% of P0 checks; 2 minor cosmetic/deprecation issues"},
+  "seed_data_creation": "None — used existing alex+test1@jaleter.app account. New user has empty finances so all projection values are $0; chart shape/interaction still testable.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Legacy PeriodPills for BUILD use exact strings '1yr','2yr','3yr','5yr' and for GROW '10yr','20yr','30yr','Retirement'. Default legacyTimeframe is 'Retirement'. Chart svg on Legacy is 300x110. Tooltip uppercase probes: match /PROJECTED|ACTUAL|COMPOUND|GROW|RETIREMENT/ to find tooltip content in DOM. Web login: postMessage 'navigate:login' to window then use [data-testid=\"login-email\"/\"login-password\"/\"login-submit\"]. New user shows a top 'Verify your email' banner — dismissable; does not block chart interaction.",
+  "rca_of_issue": "N/A — no bugs blocking; two low-priority polish items noted above.",
+  "check_results": {
+    "1_login_nav_legacy": "PASS",
+    "2_projection_chart_visible": "PASS — 300x110 SVG under headline",
+    "3_build_checkpoints_3yr": "PASS — labels Now/1YR/2YR/3YR present (count=1 each)",
+    "4_tooltip_tap_left_mid_right": "PASS — TODAY·ACTUAL / 2 YEARS FROM NOW·PROJECTED / 3 YEARS FROM NOW·PROJECTED; updates instantly, no errors",
+    "5_grow_20yr_checkpoints": "PASS — Now/5YR/10YR/15YR/20YR present; middle tap yields 'YEAR 10 · PROJECTED' with subtitle 'GROW · 7% compound'",
+    "6_retirement_retire_label": "PASS for label strip ('RETIRE' present). MINOR: tooltip fullLabel reads 'YEAR 35' instead of 'RETIRE'.",
+    "7_wealth_networth_tooltip_regression": "PASS — chart renders with synthetic history, tap does not crash",
+    "8_home_teaser_chart": "PASS — chart renders, tap does not crash, no JS errors",
+    "9_regression_sweep": "PASS — Home/Budget/Reports/Activity/Wealth/Legacy nav all fine, zero JS errors (only pre-existing shadow* deprecation warnings + one new pointerEvents-prop deprecation)"
+  }
+}

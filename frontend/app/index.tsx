@@ -3668,23 +3668,59 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
           gradientBottom="rgba(232,201,143,0)"
           emptyLabel={years > 0 ? 'Updating…' : 'Select a timeframe to see the projection.'}
           points={(() => {
-            // Compute meaningful checkpoints depending on horizon length.
-            // BUILD 1-5yr: yearly checkpoints (0, 1, 2, ...N).
-            // GROW / Retirement: sample 6 evenly-spaced checkpoints so the
-            // compounding curve is visible (0 → N/5 → 2N/5 → ... → N).
+            // Real-data chart points — every value comes from the SAME
+            // projection math as the headline number.
+            //
+            // BUILD (spec #22): 1-5yr — plot yearly checkpoints. Each
+            // point equals `buildProjectionAt(y)` which sums the actual
+            // per-month Net (Actual/Budgeted/Estimated) with investments
+            // held flat.
+            //
+            // GROW / Retirement (spec #21, #23): use meaningful long-term
+            // checkpoints — Now, 5yr, 10yr, 15yr, 20yr, 25yr, 30yr and
+            // (if applicable) Retirement — so the compounding curve is
+            // visible. `growProjectionAt(y)` applies the compound formula
+            // with the currently-selected return rate + contribution.
             if (years <= 0) return [];
             if (isBuild) {
               const pts: any[] = [];
-              for (let y = 0; y <= Math.min(years, 5); y++) pts.push({ label: y === 0 ? 'Now' : `${y}YR`, value: buildProjectionAt(y) });
+              for (let y = 0; y <= Math.min(years, 5); y++) {
+                pts.push({
+                  label: y === 0 ? 'Now' : `${y}YR`,
+                  value: buildProjectionAt(y),
+                  meta: {
+                    source: y === 0 ? 'actual' : 'projected',
+                    fullLabel: y === 0 ? 'Today' : `${y} year${y === 1 ? '' : 's'} from now`,
+                    subtitle: 'BUILD · investments held flat',
+                  },
+                });
+              }
               return pts;
             }
-            const stops = 6;
-            const pts: any[] = [];
-            for (let i = 0; i <= stops; i++) {
-              const y = Math.round((years * i) / stops);
-              pts.push({ label: y === 0 ? 'Now' : `${y}YR`, value: growProjectionAt(y) });
+            // Long-horizon (GROW / Retirement) — meaningful checkpoints.
+            const checkpoints: number[] = [];
+            if (isRetirement) {
+              // Every 5 yrs up to Retirement, then the exact retirement year.
+              for (let y = 0; y <= years; y += 5) checkpoints.push(y);
+              if (checkpoints[checkpoints.length - 1] !== years) checkpoints.push(years);
+            } else {
+              // GROW modes (10/20/30yr): every 5 yrs.
+              for (let y = 0; y <= years; y += 5) checkpoints.push(y);
+              if (checkpoints[checkpoints.length - 1] !== years) checkpoints.push(years);
             }
-            return pts;
+            return checkpoints.map((y, i) => ({
+              label: y === 0 ? 'Now' : (isRetirement && i === checkpoints.length - 1 ? 'RETIRE' : `${y}YR`),
+              value: growProjectionAt(y),
+              meta: {
+                source: y === 0 ? 'actual' : 'projected',
+                fullLabel: y === 0
+                  ? 'Today'
+                  : (isRetirement && i === checkpoints.length - 1
+                      ? 'Retire'
+                      : `Year ${y}`),
+                subtitle: `${isRetirement ? 'Retirement' : 'GROW'} · ${Math.round(RATE * 100)}% compound`,
+              },
+            }));
           })()}
         />
       </View>
