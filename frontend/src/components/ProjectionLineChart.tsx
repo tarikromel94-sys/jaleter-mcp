@@ -207,7 +207,7 @@ export default function ProjectionLineChart({
                 fontWeight: '700',
                 marginTop: 1,
               }}>
-                {delta >= 0 ? '+' : '−'}{currency(Math.abs(delta))} vs {prev?.label}
+                {delta >= 0 ? '+' : '−'}{currency(Math.abs(delta))} projected {delta >= 0 ? 'increase' : 'decrease'}
               </Text>
             )}
             {active.meta?.subtitle && (

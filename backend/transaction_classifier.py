@@ -32,7 +32,20 @@ SYSTEM_CATEGORIES = {"transfer", "credit_card_payment", "loan_payment"}
 
 # Plaid Personal Finance Categories (see https://plaid.com/documents/transactions-personal-finance-category-taxonomy.csv)
 # We only care about a subset — anything else falls through to "None" (normal spending/income).
-_PFC_TRANSFER_PRIMARY = {"TRANSFER_IN", "TRANSFER_OUT"}
+#
+# IMPORTANT: Plaid's `TRANSFER_IN` primary is **NOT** a reliable transfer
+# signal. Plaid tags a huge variety of incoming money as TRANSFER_IN:
+# paychecks, direct deposits, interest, refunds, ACH from external banks,
+# savings-account sweeps, etc. Most of these are real income for our users.
+# Trusting TRANSFER_IN blindly was systematically understating Earn/Income
+# (particularly bad for Ally accounts where ACH inflows land). So we split
+# the primary set into OUT (still trusted) and IN (needs corroboration).
+_PFC_TRANSFER_OUT_PRIMARY = {"TRANSFER_OUT"}
+_PFC_TRANSFER_IN_PRIMARY = {"TRANSFER_IN"}
+# Only this detailed subcategory unambiguously means "internal account transfer".
+# Other TRANSFER_IN_* detaileds (TRANSFER_IN_DEPOSIT, TRANSFER_IN_CASH_ADVANCES_AND_LOANS,
+# TRANSFER_IN_OTHER_TRANSFER_IN, ...) frequently represent real income.
+_PFC_TRANSFER_IN_INTERNAL_DETAILED = {"TRANSFER_IN_ACCOUNT_TRANSFER"}
 _PFC_CC_PAYMENT_DETAILED = {"LOAN_PAYMENTS_CREDIT_CARD_PAYMENT"}
 _PFC_LOAN_PAYMENT_PRIMARY = {"LOAN_PAYMENTS"}  # covers auto, student, mortgage, etc.
 
@@ -114,8 +127,26 @@ def classify_system(txn: dict[str, Any]) -> Optional[str]:
         # `LOAN_PAYMENTS_CREDIT_CARD_PAYMENT` already caught above; the rest
         # are non-credit-card loans (mortgage, auto, student, personal, etc.).
         return "loan_payment"
-    if primary in _PFC_TRANSFER_PRIMARY:
+    # TRANSFER_OUT: Plaid tags outgoing internal transfers reliably.
+    if primary in _PFC_TRANSFER_OUT_PRIMARY:
         return "transfer"
+    # TRANSFER_IN: DO NOT auto-classify from PFC alone — Plaid tags most
+    # incoming ACH / direct deposits / paychecks / interest as TRANSFER_IN,
+    # which caused Earn/Income to be understated (esp. for Ally accounts).
+    # Only trust this when combined with corroborating evidence:
+    #   • detailed == TRANSFER_IN_ACCOUNT_TRANSFER (Plaid's own "internal"
+    #     signal) AND the description contains a transfer keyword, OR
+    #   • the description independently matches transfer keywords (handled
+    #     by the free-text fallback further below).
+    # If neither, we return None here (falls through to legacy / free-text
+    # checks) so the txn stays in Earn/Income by default. The nightly
+    # `/transactions/match-transfers` job will still promote pairs to
+    # transfer when both sides are visible.
+    if primary in _PFC_TRANSFER_IN_PRIMARY:
+        desc_text = (txn.get("description") or txn.get("name") or "") + " " + (txn.get("merchant_name") or "")
+        if detailed in _PFC_TRANSFER_IN_INTERNAL_DETAILED and _KW_TRANSFER.search(desc_text):
+            return "transfer"
+        # fall through — do NOT return "transfer" from PFC alone.
 
     # 3. Legacy category hierarchy
     legacy = _legacy_category(txn)
@@ -123,7 +154,14 @@ def classify_system(txn: dict[str, Any]) -> Optional[str]:
         return "credit_card_payment"
     if any("loan" in c and "payment" in c for c in legacy):
         return "loan_payment"
-    if any(c in ("transfer",) or "internal account transfer" in c or "account transfer" in c for c in legacy):
+    # NOTE: Plaid's legacy `category` puts a huge amount of INCOME under the
+    # top-level "Transfer" bucket (e.g. `['Transfer', 'Payroll']` for real
+    # paychecks, `['Transfer', 'Deposit']` for check deposits, `['Transfer',
+    # 'Credit']` for Zelle/Cash App income). Matching on the top-level
+    # "transfer" alone was causing systematic under-count of Earn/Income.
+    # Only match when a sub-category unambiguously says "account transfer"
+    # or "internal account transfer".
+    if any("internal account transfer" in c or "account transfer" in c for c in legacy):
         return "transfer"
 
     # 4. Free-text

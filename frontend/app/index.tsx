@@ -1184,16 +1184,19 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
   // BUILD uses Available Cash (Total Cash − Set Aside) as the starting cash
   // per spec. Set-aside money still counts toward Wealth/Net Worth but is
   // reserved, so BUILD projections don't grow it.
-  // BUILD teaser math mirrors LegacyScreen.buildProjectionAt (spec #3/#4):
-  // investments held flat, no assumed return, and monthly net preserved
-  // WITH ITS SIGN so a negative Budget realistically decreases BUILD.
   const buildStartingCash = (typeof availableCash === 'number' ? availableCash : (totalCash || 0)) || 0;
   const signedMonthlyNet = Number(monthlyNet || 0);
   const buildAt = (n: number) => {
+    // Home BUILD teaser math (spec #2): investment portion compounds at
+    // the assumed monthly rate; cash portion accumulates by monthly net.
     const h = hypoAt(n);
-    const heldInvest = (investmentTotal || 0) + h.addToPrincipal; // no compounding in BUILD
-    const cashPortion = buildStartingCash + signedMonthlyNet * 12 * n + h.addToCash;
-    return Math.round(heldInvest + cashPortion);
+    const months = Math.max(0, Math.round(n * 12));
+    const investPrincipal = (investmentTotal || 0) + h.addToPrincipal;
+    const monthlyR = 0.07 / 12; // matches DEFAULT_LEGACY_RATE
+    const invGrowthFactor = Math.pow(1 + monthlyR, months);
+    const investAtN = investPrincipal * invGrowthFactor;
+    const cashPortion = buildStartingCash + signedMonthlyNet * months + h.addToCash;
+    return Math.round(investAtN + cashPortion);
   };
   const build1 = buildAt(1);
   const build2 = buildAt(2);
@@ -1339,11 +1342,11 @@ const HomeScreen = ({ name, initials, experience, netWorth, investmentTotal, tot
           </View>
           <Text style={[{ fontSize: 9, marginBottom: 6 }, t.textMuted]}>
             {financialsReady
-              ? `BUILD uses cash + monthly Budget Net (investments held flat). GROW compounds your investments at ${rate}%.`
+              ? `BUILD projects your wealth using cash + monthly Budget Net + investment compounding at ${rate}%. GROW compounds investments only.`
               : 'Updating projections — numbers will appear once your accounts finish loading.'}
           </Text>
           {/* BUILD row — near-term (1/2/3/5 yr). Same math as Legacy BUILD. */}
-          <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8, marginTop: 4 }}>BUILD · CASH + MONTHLY NET · INVESTMENTS FLAT</Text>
+          <Text style={{ fontSize: 8, fontWeight: '800', color: '#a97c39', letterSpacing: 0.8, marginTop: 4 }}>BUILD · CASH + NET + INVESTMENT GROWTH</Text>
           <View style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
             {[
               { label: '1YR', v: build1 },
@@ -2906,6 +2909,12 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
   const [showSplits, setShowSplits] = useState(Array.isArray(item.splits) && item.splits.length > 0);
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
   const [categoryQuery, setCategoryQuery] = useState('');
+  // Split-line category picker (latest spec). Tracks which split row is
+  // currently choosing its category. null = closed. Uses the same
+  // searchable Sheet UX as the regular Activity picker so users only
+  // learn one pattern.
+  const [splitPickerIdx, setSplitPickerIdx] = useState<number | null>(null);
+  const [splitPickerQuery, setSplitPickerQuery] = useState('');
   const isIncome = tx.type === 'income';
   const isTransfer = isSystemTransaction(tx);
   const currentGroup = isIncome ? incomeSources.find((s: any) => s.id === tx.groupId) : categories.find((c: any) => c.id === tx.groupId);
@@ -3152,68 +3161,33 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
           {showSplits && (
             <View style={{ marginTop: 8, padding: 10, borderRadius: 10, borderWidth: 1, borderColor: t.dark ? D.border : '#ece5d5' }}>
               {(tx.splits || []).map((sp: any, idx: number) => {
+                // Simplified split row (latest spec): only "Category" +
+                // "Amount". No Income/Expense toggle, no chip wall. Any
+                // category (Earn / Give / Steward / Grow / Enjoy / Transfer)
+                // is available regardless of sign so refunds, credits, and
+                // reimbursements can offset any category cleanly.
+                const isSplitTransfer = !!sp.is_transfer;
+                const spIncomeGroup = incomeSources.find((c: any) => c.id === sp.groupId);
+                const spExpenseGroup = categories.find((c: any) => c.id === sp.groupId);
+                const spSub = spExpenseGroup?.subcategories?.find((sb: any) => sb.id === sp.detailId);
+                const splitLabel = isSplitTransfer
+                  ? 'Transfer'
+                  : spIncomeGroup
+                    ? spIncomeGroup.name
+                    : spExpenseGroup
+                      ? (spSub ? `${spExpenseGroup.name} › ${spSub.name}` : spExpenseGroup.name)
+                      : 'Select category';
                 return (
-                  <View key={idx} style={{ paddingVertical: 8, borderBottomWidth: idx < (tx.splits.length - 1) ? 1 : 0, borderBottomColor: t.dark ? '#3a342b' : '#f1ede6' }}>
-                    {/* Per-split type toggle (spec #17): each split line
-                        can independently be Income or Expense so a $100
-                        refund can be $60 → Food & Dining expense offset,
-                        $40 → Extra Giving income, etc. Defaults to parent
-                        type when not explicitly set. */}
-                    <View style={{ flexDirection: 'row', gap: 6, marginBottom: 6 }}>
-                      {(['income', 'expense'] as const).map((sType) => {
-                        const effective = (sp.type as 'income' | 'expense') || tx.type;
-                        const on = effective === sType;
-                        return (
-                          <Pressable
-                            key={sType}
-                            onPress={() => {
-                              // Switching side resets group/sub because the
-                              // available lists differ (incomeSources vs categories).
-                              const listing = sType === 'income' ? incomeSources : categories;
-                              const first = listing[0];
-                              updateSplit(idx, {
-                                type: sType,
-                                groupId: first?.id,
-                                detailId: sType === 'income' ? undefined : first?.subcategories?.[0]?.id,
-                              });
-                            }}
-                            style={[s.pickerChip, on && s.pickerChipOn, { paddingHorizontal: 8, paddingVertical: 3 }]}
-                            testID={`tx-split-${idx}-side-${sType}`}
-                          >
-                            <Text style={[s.pickerChipText, on && { color: '#fff' }, { fontSize: 10 }]}>{sType === 'income' ? 'Income' : 'Expense'}</Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
+                  <View key={idx} style={{ paddingVertical: 10, borderBottomWidth: idx < (tx.splits.length - 1) ? 1 : 0, borderBottomColor: t.dark ? '#3a342b' : '#f1ede6' }}>
                     <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                      <View style={{ flex: 1 }}>
-                        {(() => {
-                          const spType = (sp.type as 'income' | 'expense') || tx.type;
-                          const spOptions = spType === 'income' ? incomeSources : categories;
-                          const spGroup = spOptions.find((c: any) => c.id === sp.groupId);
-                          const spSubs = spType === 'expense' && spGroup ? spGroup.subcategories : [];
-                          return (
-                            <>
-                              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
-                                {spOptions.map((c: any) => (
-                                  <Pressable key={c.id} onPress={() => updateSplit(idx, { groupId: c.id, detailId: c.subcategories?.[0]?.id })} style={[s.pickerChip, sp.groupId === c.id && s.pickerChipOn, { paddingHorizontal: 8, paddingVertical: 4 }]} testID={`tx-split-${idx}-group-${c.id}`}>
-                                    <Text style={[s.pickerChipText, sp.groupId === c.id && { color: '#fff' }, { fontSize: 10 }]}>{c.name}</Text>
-                                  </Pressable>
-                                ))}
-                              </View>
-                              {spType === 'expense' && spSubs.length > 0 && (
-                                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
-                                  {spSubs.map((sub: any) => (
-                                    <Pressable key={sub.id} onPress={() => updateSplit(idx, { detailId: sub.id })} style={[s.pickerChip, sp.detailId === sub.id && s.pickerChipOn, { paddingHorizontal: 8, paddingVertical: 4 }]} testID={`tx-split-${idx}-sub-${sub.id}`}>
-                                      <Text style={[s.pickerChipText, sp.detailId === sub.id && { color: '#fff' }, { fontSize: 10 }]}>{sub.name}</Text>
-                                    </Pressable>
-                                  ))}
-                                </View>
-                              )}
-                            </>
-                          );
-                        })()}
-                      </View>
+                      <Pressable
+                        onPress={() => setSplitPickerIdx(idx)}
+                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderColor: t.dark ? D.border : '#e2dcd2', backgroundColor: t.dark ? D.surfaceAlt : '#fff' }}
+                        testID={`tx-split-${idx}-category-open`}
+                      >
+                        <Text style={[{ fontSize: 12, flex: 1 }, t.textInk]} numberOfLines={1}>{splitLabel}</Text>
+                        <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : C.goldEyebrow} />
+                      </Pressable>
                       <View style={{ width: 90 }}>
                         <View style={s.amountInput}>
                           <Text style={s.amountPrefix}>$</Text>
@@ -3238,25 +3212,24 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
                 <Ionicons name="add-circle-outline" size={14} color="#9a6d32" />
                 <Text style={{ color: '#9a6d32', fontWeight: '700', fontSize: 11 }}>Add split</Text>
               </Pressable>
-              <View style={{ marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                {/* Cent-precision formatter — MONEY() rounds to whole
-                    dollars for headline KPI cards, which is wrong for a
-                    split allocation that must reconcile down to the penny.
-                    Use `toFixed(2)` here (and only here). */}
+              <View style={{ marginTop: 10, gap: 4 }}>
                 {(() => {
                   const MONEY_C = (n: number) => `$${(Number(n) || 0).toFixed(2)}`;
                   return (
                     <>
-                      <Text style={[{ fontSize: 10, fontWeight: '700' }, t.textInk]}>Allocated {MONEY_C(splitsTotal)} / {MONEY_C(parsedAmountCents / 100)}</Text>
-                      <Text style={{ fontSize: 10, fontWeight: '800', color: splitsValid ? '#4c8b56' : '#b06a5b' }}>
-                        {splitsValid
-                          ? 'Balanced'
-                          : splitsRemaining > 0
-                            ? `${MONEY_C(splitsRemaining)} left`
-                            : splitsRemaining < 0
-                              ? `${MONEY_C(-splitsRemaining)} over`
-                              : (tx.splits && tx.splits.length < 2 ? 'Add another row' : 'Each row needs an amount')}
-                      </Text>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>
+                          Allocated: {MONEY_C(splitsTotal)} of {MONEY_C(parsedAmountCents / 100)}
+                          {splitsValid ? ' ✓' : ''}
+                        </Text>
+                        <Text style={{ fontSize: 11, fontWeight: '800', color: splitsValid ? '#4c8b56' : '#b06a5b' }}>
+                          Remaining: {MONEY_C(Math.max(0, splitsRemaining))}
+                          {splitsRemaining < 0 ? ` (over by ${MONEY_C(-splitsRemaining)})` : ''}
+                        </Text>
+                      </View>
+                      {!splitsValid && (tx.splits && tx.splits.length < 2) && (
+                        <Text style={{ fontSize: 10, color: '#b06a5b' }}>Add at least 2 rows.</Text>
+                      )}
                     </>
                   );
                 })()}
@@ -3417,6 +3390,87 @@ const TxForm = ({ item, categories, incomeSources, save, remove }: any) => {
           })()}
         </View>
       </Sheet>
+
+      {/* Split-line category picker — same searchable Sheet UX as the main
+          picker so users learn one pattern. Full hierarchy (Earn, Give,
+          Steward, Grow, Enjoy, Transfer) available for every split line
+          regardless of sign. */}
+      <Sheet
+        visible={splitPickerIdx !== null}
+        close={() => { setSplitPickerIdx(null); setSplitPickerQuery(''); }}
+        title="Select Category"
+        subtitle="Choose any category — refunds and credits can offset any type."
+      >
+        <View>
+          <TextInput
+            value={splitPickerQuery}
+            onChangeText={setSplitPickerQuery}
+            placeholder="Search..."
+            style={[{ borderWidth: 1, borderColor: '#eae3d5', borderRadius: 12, padding: 10, fontSize: 13, backgroundColor: '#fff', marginBottom: 10 }, t.inputBg]}
+            placeholderTextColor={t.dark ? '#5a5148' : '#b0a89c'}
+            testID="tx-split-category-search"
+            autoFocus
+          />
+          {(() => {
+            const q = splitPickerQuery.trim().toLowerCase();
+            const matches = (name: string) => !q || name.toLowerCase().includes(q);
+            const applyToSplit = (fields: any) => {
+              if (splitPickerIdx == null) return;
+              updateSplit(splitPickerIdx, fields);
+              setSplitPickerIdx(null);
+              setSplitPickerQuery('');
+            };
+            return (
+              <View>
+                {/* Earn (income) sources */}
+                {incomeSources.map((src: any) => (
+                  matches(src.name) && (
+                    <Pressable
+                      key={`earn-${src.id}`}
+                      onPress={() => applyToSplit({ type: 'income', groupId: src.id, detailId: undefined, is_transfer: false })}
+                      style={{ padding: 12, borderRadius: 10, backgroundColor: t.dark ? '#2a251f' : '#fbf5e9', borderWidth: 1, borderColor: t.dark ? D.border : '#e5decf', marginBottom: 8 }}
+                      testID={`tx-split-earn-${src.id}`}
+                    >
+                      <Text style={{ fontSize: 10, fontWeight: '800', color: '#a97c39', letterSpacing: 0.6 }}>EARN</Text>
+                      <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 2, color: '#9a6d32' }]}>{src.name}</Text>
+                    </Pressable>
+                  )
+                ))}
+                {/* Give / Steward / Grow / Enjoy — expense groups */}
+                {categories.map((g: any) => {
+                  const groupHit = matches(g.name);
+                  const subHits = (g.subcategories || []).filter((sub: any) => matches(sub.name) || groupHit);
+                  if (!groupHit && subHits.length === 0) return null;
+                  return (
+                    <View key={`exp-${g.id}`} style={{ marginBottom: 12 }}>
+                      <Text style={[{ fontSize: 10, fontWeight: '800', color: '#9a6d32', letterSpacing: 0.6, marginBottom: 4 }]}>{g.name.toUpperCase()}</Text>
+                      {subHits.map((sub: any) => (
+                        <Pressable
+                          key={sub.id}
+                          onPress={() => applyToSplit({ type: 'expense', groupId: g.id, detailId: sub.id, is_transfer: false })}
+                          style={{ paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: t.dark ? '#3a342b' : '#f0ebe4' }}
+                          testID={`tx-split-sub-${sub.id}`}
+                        >
+                          <Text style={[{ fontSize: 12 }, t.textInk]}>{g.name} › {sub.name}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  );
+                })}
+                {/* Transfer */}
+                <Pressable
+                  onPress={() => applyToSplit({ is_transfer: true, groupId: '', detailId: undefined, type: 'expense' })}
+                  style={{ marginTop: 8, padding: 12, borderRadius: 10, backgroundColor: t.dark ? '#3a2f22' : '#fbf1de', borderWidth: 1, borderColor: '#c49450', flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                  testID="tx-split-transfer"
+                >
+                  <Ionicons name="swap-horizontal-outline" size={16} color="#9a6d32" />
+                  <Text style={{ fontSize: 12, fontWeight: '800', color: '#9a6d32' }}>Transfer</Text>
+                </Pressable>
+              </View>
+            );
+          })()}
+        </View>
+      </Sheet>
     </View>
   );
 };
@@ -3432,6 +3486,17 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
   const t = useThemed();
   const [editingHypo, setEditingHypo] = useState(false);
   const [hypoDraft, setHypoDraft] = useState('');
+  // Direct-typed Monthly Contribution editor (spec #3). Users tap the
+  // contribution chip → sheet opens with a TextInput pre-filled with the
+  // current value. Save applies immediately and closes the sheet.
+  const [editingContrib, setEditingContrib] = useState(false);
+  const [contribDraft, setContribDraft] = useState('');
+  const commitContribution = () => {
+    const clean = Math.max(0, Math.round(Number((contribDraft || '').replace(/[^0-9.]/g, '')) || 0));
+    setContribution(clean);
+    setEditingContrib(false);
+    setContribDraft('');
+  };
   const [hypoFreqDraft, setHypoFreqDraft] = useState<'onetime' | 'monthly' | 'annual'>('onetime');
   const [hypoDurDraft, setHypoDurDraft] = useState<string>('');
   const [editingRate, setEditingRate] = useState(false);
@@ -3495,17 +3560,16 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
 
   const buildStartingCash = (typeof availableCash === 'number' ? availableCash : (totalCash - (totalRestricted || 0))) || 0;
   const buildProjectionAt = (n: number): number => {
+    // BUILD (per latest spec): investments held FLAT — no return
+    // assumption applied. Cash portion accumulates real Budgeted /
+    // Estimated monthly net (both surpluses AND deficits included).
     const h = hypoContributions(hypoValue, hypoFreq, hypoDur, n);
-    // Spec #3: Investments are held FLAT in BUILD — no assumed return.
-    // Hypothetical `addToPrincipal` (user's "what if I add $X to
-    // investments today") still applies as a one-time additive lump.
+    const months = Math.max(0, Math.round(n * 12));
     const heldInvestments = investmentTotal + h.addToPrincipal;
-    const months = Math.max(1, Math.round(n * 12));
     const netRows = perMonthNetFn(months);
-    // Sum EVERY month's net — negatives allowed (spec #4).
     const cashFromNet = netRows.reduce((sum, r) => sum + r.net, 0);
-    const cashPortion = buildStartingCash + cashFromNet + h.addToCash;
-    return Math.round(heldInvestments + cashPortion);
+    const cashAtN = buildStartingCash + cashFromNet + h.addToCash;
+    return Math.round(heldInvestments + cashAtN);
   };
   const growProjectionAt = (n: number): number => {
     const h = hypoContributions(hypoValue, hypoFreq, hypoDur, n);
@@ -3579,7 +3643,7 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
 
   const projectionTitle = isBuild ? 'PROJECTED WEALTH' : 'PROJECTED INVESTMENTS';
   const projectionSubtitle = isBuild
-    ? `Investments held flat. Cash grows from your positive monthly surplus only.`
+    ? `Based on your current wealth and projected monthly cash flow.`
     : `Assumes a ${Math.round(RATE * 100)}% annual return and your selected monthly contribution.`;
 
   const hypoDesc = hypoValue > 0
@@ -3733,14 +3797,23 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
           <Text style={[{ fontSize: 8 }, t.textMuted]}>Tap to edit</Text>
         </View>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-          {/* Return rate chip — always shown */}
-          <Pressable onPress={() => { setRateDraft(String(returnRate ?? DEFAULT_LEGACY_RATE)); setEditingRate(true); }} style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 1, borderColor: '#c49450', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }} testID="legacy-chip-rate">
+          {/* Return rate chip — only shown on GROW/Retirement modes, where
+              the assumption actually applies. BUILD holds investments flat,
+              so surfacing "7% Return" there is confusing. */}
+          {!isBuild && (
+            <Pressable onPress={() => { setRateDraft(String(returnRate ?? DEFAULT_LEGACY_RATE)); setEditingRate(true); }} style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 1, borderColor: '#c49450', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }} testID="legacy-chip-rate">
             <Text style={{ fontSize: 8, color: '#a97c39', fontWeight: '800', letterSpacing: 0.6 }}>RETURN</Text>
             <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 2 }, t.textInk]}>{Math.round(RATE * 100)}%</Text>
           </Pressable>
-          {/* Monthly contribution — GROW modes only */}
+          )}
+          {/* Monthly contribution — GROW modes only. Spec #3: tap to type
+              the exact dollar amount instead of using +/- buttons. */}
           {!isBuild && (
-            <Pressable onPress={() => setContribution(contribution)} style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 1, borderColor: '#c49450', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
+            <Pressable
+              onPress={() => { setContribDraft(String(contribution || '')); setEditingContrib(true); }}
+              style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 1, borderColor: '#c49450', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}
+              testID="legacy-chip-contrib"
+            >
               <Text style={{ fontSize: 8, color: '#a97c39', fontWeight: '800', letterSpacing: 0.6 }}>CONTRIB / MO</Text>
               <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 2 }, t.textInk]}>{MONEY(contribution)}</Text>
             </Pressable>
@@ -3786,38 +3859,31 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
       {showMath && (
         <View style={[s.assumptionsCard, t.cardBg]}>
           {isBuild ? (
-            <>
-              <Text style={[{ fontSize: 10, lineHeight: 15 }, t.textInk]}>
-                <Text style={{ fontWeight: '800' }}>BUILD mode ({timeframe})</Text> — {years} year{years === 1 ? '' : 's'}.{'\n'}
-              </Text>
-              <View style={{ marginTop: 6, gap: 4 }}>
-                <Row label={`Available Cash (grows by monthly net, sign preserved)`} value={`${MONEY(buildStartingCash)} + monthly net × ${years * 12} months${hypoValue > 0 && hypoFreq !== 'onetime' ? ' + hypo' : ''}`} muted={t.textMuted} ink={t.textInk} />
-                <Row label={`= Available Cash at Y${years}`} value={MONEY(buildStartingCash + perMonthNetFn(years * 12).reduce((s, r) => s + r.net, 0) + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToCash)} muted={t.textMuted} ink={t.textInk} valueColor="#4c8b56" />
-                {(() => {
-                  // Spec #4: surface exactly how many months in the horizon
-                  // used ACTUAL transaction data, BUDGETED per-month figures,
-                  // and ESTIMATED carry-forward. Users can trust the number
-                  // above when they see the composition below.
-                  const rows = perMonthNetFn(years * 12);
-                  const actualCount = rows.filter(r => r.source === 'actual').length;
-                  const budgetedCount = rows.filter(r => r.source === 'budgeted').length;
-                  const estCount = rows.filter(r => r.source === 'estimated').length;
-                  return (
-                    <Text style={[{ fontSize: 9, marginTop: 2, fontStyle: 'italic' }, t.textMuted]}>
-                      {actualCount > 0 ? `${actualCount} actual · ` : ''}{budgetedCount} budgeted · {estCount} estimated (carry-forward).
-                    </Text>
-                  );
-                })()}
-                <View style={{ height: 6 }} />
-                <Row label={`Investments (held flat in BUILD)`} value={MONEY(investmentTotal + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToPrincipal)} muted={t.textMuted} ink={t.textInk} />
-                <Row label={`= Investments at Y${years}`} value={MONEY(investmentTotal + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToPrincipal)} muted={t.textMuted} ink={t.textInk} valueColor="#4c8b56" />
-                <View style={{ height: 6 }} />
-                <Row label="TOTAL PROJECTION" value={MONEY(projection)} muted={t.textMuted} ink={t.textInk} valueColor="#9a6d32" />
-              </View>
-              <Text style={[{ fontSize: 9, marginTop: 8, lineHeight: 13 }, t.textMuted]}>
-                BUILD uses your current investments held flat (no assumed return) plus Available Cash growing by each month&apos;s Net (Actual/Budgeted/Estimated). The 7% assumption belongs only in GROW and Retirement.{rawMonthlyNet < 0 ? ` Heads up: your current monthly net is negative (${MONEY(rawMonthlyNet)}/mo) — BUILD reflects that, so the total goes down over time. Fix your Budget or Actual spending to turn this around.` : ''}
-              </Text>
-            </>
+            (() => {
+              // Spec #2: simplified customer-facing BUILD math.
+              const rowsFull = perMonthNetFn(years * 12);
+              const netSum = rowsFull.reduce((s, r) => s + r.net, 0);
+              const avgMonthly = rowsFull.length > 0 ? netSum / rowsFull.length : 0;
+              const startingWealth = buildStartingCash + investmentTotal;
+              const investmentGrowth = Math.round(
+                (investmentTotal + hypoContributions(hypoValue, hypoFreq, hypoDur, years).addToPrincipal)
+                * (Math.pow(1 + MONTHLY_RATE, years * 12) - 1)
+              );
+              return (
+                <>
+                  <Text style={[{ fontSize: 10, fontWeight: '800', color: '#a97c39', letterSpacing: 1 }]}>PROJECTED WEALTH</Text>
+                  <Text style={[{ fontSize: 32, fontWeight: '800', marginTop: 4 }, t.textInk]}>{MONEY(projection)}</Text>
+                  <Text style={[{ fontSize: 10, marginTop: 2 }, t.textMuted]}>in {years} year{years === 1 ? '' : 's'}</Text>
+                  <View style={{ marginTop: 14, gap: 6 }}>
+                    <Row label="Current Wealth" value={MONEY(startingWealth)} muted={t.textMuted} ink={t.textInk} />
+                    <Row label="Average Monthly Change" value={`${avgMonthly >= 0 ? '+' : '−'}${MONEY(Math.abs(avgMonthly))}`} muted={t.textMuted} ink={t.textInk} valueColor={avgMonthly >= 0 ? '#4c8b56' : '#b0453d'} />
+                  </View>
+                  <Text style={[{ fontSize: 10, marginTop: 12, lineHeight: 14, fontStyle: 'italic' }, t.textMuted]}>
+                    How we calculate this: We use your current wealth, planned budgets, actual results when available, and estimated investment growth. Your projection becomes more personalized as you use Jaleter.
+                  </Text>
+                </>
+              );
+            })()
           ) : (
             <>
               <Text style={[{ fontSize: 10, lineHeight: 15 }, t.textInk]}>
@@ -3878,7 +3944,7 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
           {isBuild ? (
             <>
               <Row label="Available Cash (Total Cash − Set Aside)" value={MONEY(buildStartingCash)} muted={t.textMuted} ink={t.textInk} />
-              <Row label="Current Investments (held flat in BUILD)" value={MONEY(investmentTotal)} muted={t.textMuted} ink={t.textInk} />
+              <Row label="Current Investments" value={MONEY(investmentTotal)} muted={t.textMuted} ink={t.textInk} />
               <Pressable onPress={() => setShowSurplusBreakdown(true)} hitSlop={4} testID="legacy-surplus-drill">
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                   <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
@@ -4019,6 +4085,32 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
           </Pressable>
         </View>
       </Sheet>
+      {/* Monthly Contribution editor (spec #3) — direct-typed dollar entry. */}
+      <Sheet
+        visible={editingContrib}
+        close={() => { setEditingContrib(false); setContribDraft(''); }}
+        title="Monthly Contribution"
+        subtitle="Type the exact dollar amount you plan to contribute each month."
+      >
+        <View>
+          <Text style={s.label}>Amount / month</Text>
+          <View style={s.amountInput}>
+            <Text style={[s.amountPrefix, t.textInk]}>$</Text>
+            <TextInput
+              style={[s.input, { paddingLeft: 26 }]}
+              value={contribDraft}
+              onChangeText={(v) => setContribDraft(v.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1').replace(/^(\d*\.\d{0,2}).*/, '$1'))}
+              keyboardType="decimal-pad"
+              placeholder="0"
+              autoFocus
+              testID="legacy-contrib-input"
+            />
+          </View>
+          <View style={{ marginTop: 14 }}>
+            <GoldButton label="Save" onPress={commitContribution} testID="legacy-contrib-save" />
+          </View>
+        </View>
+      </Sheet>
 
       {/* Monthly Budget Net drill-down — read-only breakdown so users can
           verify the projection input. Shows Budgeted Income − Budgeted Expenses
@@ -4111,14 +4203,30 @@ const CoachingScreen = ({ back }: any) => {
       <PageHeader title="Coaching" subtitle="Personal financial clarity, one hour at a time." back={back} />
       <View style={s.coachingCard}>
         <View style={s.coachingIcon}><Ionicons name="chatbubble-outline" size={24} color={C.goldText} /></View>
-        <Text style={{ color: '#cda86d', fontSize: 9, letterSpacing: 1.2 }}>PRIVATE SESSION · 30 MIN</Text>
-        <Text style={s.coachingPrice}>$50</Text>
-        <Text style={{ color: '#aaa298', fontSize: 10, textAlign: 'center' }}>Work through your budget, goals, or next financial decision with Danyell.</Text>
+        <Text style={{ color: '#cda86d', fontSize: 9, letterSpacing: 1.2 }}>COACHING · 1 HOUR</Text>
+        <Text style={[{ fontSize: 22, fontWeight: '700', color: '#f2e5c8', marginVertical: 4, textAlign: 'center' }]}>Private Financial Clarity Session</Text>
+        <Text style={s.coachingPrice}>$75<Text style={{ fontSize: 13, color: '#aaa298', fontWeight: '500' }}> / session</Text></Text>
+        <Text style={{ color: '#aaa298', fontSize: 11, textAlign: 'center', marginTop: 8, lineHeight: 15 }}>
+          One focused session to get clear on a financial question, budget concern, or next step.
+        </Text>
+        <View style={{ marginTop: 12, alignSelf: 'stretch', gap: 6 }}>
+          {[
+            'Review one primary financial concern',
+            'Budget, cash-flow, or goal review',
+            'Identify priorities and opportunities',
+            'Questions answered during the session',
+            'Clear next steps',
+          ].map((line) => (
+            <View key={line} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
+              <Text style={{ color: '#e8c98f', fontSize: 12, fontWeight: '800' }}>✓</Text>
+              <Text style={{ color: '#e6ddca', fontSize: 11, flex: 1, lineHeight: 15 }}>{line}</Text>
+            </View>
+          ))}
+        </View>
       </View>
 
       {/* Single CTA — Stripe on jaleter.com handles the checkout and then
-          redirects the user directly into Calendly to pick their slot.
-          The previous 2-step "Schedule then Pay" flow is retired. */}
+          redirects the user directly into Calendly to pick their slot. */}
       <View style={{ marginTop: 18 }}>
         <Pressable
           onPress={() => openJaleter('coaching')}
@@ -4126,11 +4234,11 @@ const CoachingScreen = ({ back }: any) => {
           testID="coaching-book-pay"
         >
           <Ionicons name="lock-closed-outline" size={16} color="#fff" />
-          <Text style={s.coachingCtaText}>Book & Pay at jaleter.com</Text>
+          <Text style={s.coachingCtaText}>Book & Pay — $75</Text>
           <Ionicons name="open-outline" size={14} color="#fff" />
         </Pressable>
         <Text style={[{ fontSize: 10, textAlign: 'center', marginTop: 10 }, t.textMuted]}>
-          Secure Stripe checkout — Calendly opens automatically after payment.
+          You&apos;ll choose your session time right after payment.
         </Text>
       </View>
 
@@ -4169,18 +4277,35 @@ const MembershipScreen = ({ back }: any) => {
       <PageHeader title="Membership" subtitle="One simple annual plan." back={back} />
       <View style={[s.priceCard, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
         <Text style={{ color: C.goldEyebrow2, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 }}>JALETER PREMIUM</Text>
-        <Text style={[s.priceStrong, t.textInk]}>$90<Text style={{ fontSize: 13, color: t.dark ? D.textMuted : '#8d867d', fontWeight: '500' }}>/year</Text></Text>
+        <Text style={{ fontSize: 18, fontWeight: '700', color: t.dark ? D.text : C.ink, marginTop: 4 }}>Annual Membership</Text>
+        <Text style={[{ color: t.dark ? D.textMuted : '#8d867d', fontSize: 11, marginTop: 2 }]}>Everything you need to plan, track, and grow your money.</Text>
+        <Text style={[s.priceStrong, t.textInk, { marginTop: 6 }]}>$90<Text style={{ fontSize: 13, color: t.dark ? D.textMuted : '#8d867d', fontWeight: '500' }}> / year</Text></Text>
+        <Text style={{ fontSize: 10, color: t.dark ? D.textMuted : '#8d867d', marginTop: 2 }}>$7.50 / month equivalent</Text>
         {membership?.active && (
           <View style={{ marginTop: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: '#8fa88f22', alignSelf: 'flex-start' }}>
             <Text style={{ color: '#5a7f60', fontSize: 10, fontWeight: '700' }}>ACTIVE · renews {new Date(membership.expires_at as string).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>
           </View>
         )}
-        {['Private statement import (any bank)','Full Budget and Transactions','Net Worth and Legacy planning','Faith + Focus library'].map(item => (
-          <View key={item} style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginVertical: 5 }}>
-            <Ionicons name="checkmark" size={15} color="#a57537" />
-            <Text style={{ color: t.dark ? D.textSubtle : '#615b52', fontSize: 11 }}>{item}</Text>
-          </View>
-        ))}
+        <View style={{ marginTop: 12, gap: 6 }}>
+          {[
+            'Secure bank & account syncing',
+            'Budgeting + transaction tracking',
+            'Reports & spending insights',
+            'Net Worth + Set Aside goals',
+            'Build, Grow & retirement projections',
+            'Jaleter Coach AI',
+            'Faith + Focus library',
+            'Statement import from supported bank files',
+          ].map(item => (
+            <View key={item} style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start' }}>
+              <Text style={{ color: '#a57537', fontSize: 12, fontWeight: '800' }}>✓</Text>
+              <Text style={{ color: t.dark ? D.textSubtle : '#615b52', fontSize: 11, flex: 1, lineHeight: 15 }}>{item}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+      <View style={{ marginTop: 14, alignItems: 'center' }}>
+        <Text style={{ fontSize: 13, fontWeight: '700', color: t.dark ? D.text : C.ink, textAlign: 'center' }}>Join for $90 / year</Text>
       </View>
       <BillingWebsiteNotice target="membership" />
     </ScrollView>
@@ -4557,7 +4682,7 @@ const LegalSheet = ({ visible, close, type }: any) => (
     ) : (
       <View>
         <Text style={s.privacyPara}>Jaleter provides budgeting and planning tools for educational purposes. It does not provide investment, tax, or legal advice.</Text>
-        <Text style={s.privacyPara}>Premium membership is $90 per year. Coaching is a separate $50 per hour service. Renewal and cancellation details are shown before checkout.</Text>
+        <Text style={s.privacyPara}>Premium membership is $90 per year. Coaching is a separate $75 per session service. Renewal and cancellation details are shown before checkout.</Text>
         <Text style={s.privacyPara}>Projections are estimates and are not guarantees of future performance.</Text>
       </View>
     )}
@@ -5280,8 +5405,27 @@ function MainApp() {
       else if (tx.type === 'expense') txByYm[key].expense += Math.abs(tx.amount || 0);
     }
 
-    // Latest known budget net (current-year selections).
+    // Latest known budget net (current-year selections) — used only as a
+    // last-resort fallback if the user has NO actual history yet.
     const latestBudgetNet = monthlyBudgetIncome - monthlyBudgetExpense;
+
+    // Spec #2: build a chronological array of ACTUAL nets from past
+    // months so estimates for future months can use a trailing 1/2/3-mo
+    // average (whichever is available). Older → newer.
+    const trailingNow = new Date();
+    const pastActualNets: number[] = [];
+    for (let i = 12; i >= 1; i--) {
+      const d = new Date(trailingNow.getFullYear(), trailingNow.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      if (txByYm[key]) pastActualNets.push(txByYm[key].income - txByYm[key].expense);
+    }
+    const trailingAverage = (): number => {
+      if (pastActualNets.length === 0) return latestBudgetNet;
+      const take = Math.min(3, pastActualNets.length);
+      const slice = pastActualNets.slice(-take);
+      const sum = slice.reduce((a, b) => a + b, 0);
+      return sum / take;
+    };
 
     for (let i = 0; i < totalMonths; i++) {
       const my = new Date(startY, startM + i, 1);
@@ -5322,7 +5466,10 @@ function MainApp() {
         net = bi - be;
         source = 'budgeted';
       } else {
-        net = latestBudgetNet;
+        // Spec #2: no per-month override → estimate using trailing 1/2/3-mo
+        // average of ACTUAL history when available. Falls back to the
+        // latest known Budget Net for brand-new users.
+        net = trailingAverage();
         source = 'estimated';
       }
 

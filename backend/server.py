@@ -7,7 +7,7 @@ from passlib.context import CryptContext
 from jose import jwt, JWTError, jwk
 from jose.exceptions import ExpiredSignatureError, JWTClaimsError
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional
+from typing import Optional, Any
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import os
@@ -315,6 +315,27 @@ async def _startup():
         logger.info('Retention scheduler started (daily 03:00 UTC)')
     except Exception as e:  # noqa: BLE001
         logger.warning('Retention scheduler skipped: %s', e)
+
+    # ---- One-shot: reclassify Plaid TRANSFER_IN false-positives ---------
+    # Historical bug: Plaid tags ACH deposits / paychecks / interest as
+    # TRANSFER_IN, which we were treating as internal transfers — causing
+    # Earn/Income to be understated (esp. for Ally). The classifier is now
+    # stricter; sweep once at startup to clean already-ingested rows.
+    # Guarded by a marker doc in `reclassify_runs` so this only runs once
+    # per deployment (idempotent even if the marker is missing — the query
+    # narrows to fewer rows every time).
+    try:
+        marker = await db.reclassify_runs.find_one({'source': 'startup_v2'})
+        if not marker:
+            report = await _reclassify_transfer_in_backfill()
+            await db.reclassify_runs.insert_one({
+                'started_at': datetime.now(timezone.utc),
+                'source': 'startup_v2',
+                **report,
+            })
+            logger.info('TRANSFER_IN reclassify backfill: %s', report)
+    except Exception as e:  # noqa: BLE001
+        logger.warning('TRANSFER_IN reclassify backfill skipped: %s', e)
 
 
 @app.on_event('shutdown')
@@ -1958,6 +1979,98 @@ async def admin_retention_status(current_user: dict = Depends(get_current_user))
         raise HTTPException(status_code=403, detail='Admin access required')
     cursor = db.retention_runs.find({}, {'_id': 0}).sort('started_at', -1).limit(10)
     return {'runs': await cursor.to_list(length=10)}
+
+
+# ---- Reclassify TRANSFER_IN backfill (admin + auto once at startup) --------
+async def _reclassify_transfer_in_backfill(*, user_id: Optional[str] = None) -> dict:
+    """Undo the historical over-classification of Plaid TRANSFER_IN.
+
+    Scope of rows touched:
+      • provider == 'plaid' (CSV/SimpleFIN rows never came through PFC)
+      • system_category == 'transfer'
+      • amount > 0 (only incoming — outgoing TRANSFER_OUT stays trusted)
+      • system_category_override NOT in transfer/cc/loan/none — never touch
+        anything a user has explicitly labeled
+      • paired_external_id not set — never touch rows the reconciliation
+        job matched to an opposing outgoing side
+      • description does NOT contain a transfer keyword (regex) — leave
+        rows that read "Transfer from Savings" alone
+
+    Anything left in that filter is (with very high confidence) a Plaid
+    PFC-TRANSFER_IN false-positive: paycheck ACH, direct deposit, interest,
+    refund, external-bank inflow, etc. We set:
+        system_category      -> None
+        system_category_auto -> None
+        is_transfer          -> False
+    """
+    import transaction_classifier as tc
+
+    q: dict[str, Any] = {
+        'provider': 'plaid',
+        'system_category': 'transfer',
+        'amount': {'$gt': 0},
+        '$and': [
+            {'$or': [
+                {'system_category_override': {'$exists': False}},
+                {'system_category_override': None},
+                {'system_category_override': ''},
+            ]},
+            {'$or': [
+                {'paired_external_id': {'$exists': False}},
+                {'paired_external_id': None},
+                {'paired_external_id': ''},
+            ]},
+        ],
+    }
+    if user_id:
+        q['user_id'] = user_id
+
+    scanned = 0
+    cleared = 0
+    kept = 0
+    async for tx in db.bank_transactions.find(q):
+        scanned += 1
+        # Rebuild a virtual txn dict for the classifier — prefer stored `raw`
+        # (has full Plaid PFC + category), fall back to top-level fields.
+        raw = tx.get('raw') if isinstance(tx.get('raw'), dict) else {}
+        virtual = {
+            'personal_finance_category': raw.get('personal_finance_category'),
+            'category': raw.get('category') or tx.get('category'),
+            'description': tx.get('description') or raw.get('name'),
+            'name': raw.get('name'),
+            'merchant_name': raw.get('merchant_name'),
+        }
+        new_cat = tc.classify_system(virtual)
+        if new_cat == 'transfer':
+            kept += 1
+            continue
+        await db.bank_transactions.update_one(
+            {'_id': tx['_id']},
+            {'$set': {
+                'system_category': new_cat,  # usually None
+                'system_category_auto': new_cat,
+                'is_transfer': new_cat == 'transfer',
+            }},
+        )
+        cleared += 1
+    return {'scanned': scanned, 'cleared': cleared, 'kept_as_transfer': kept}
+
+
+@api_router.post('/admin/reclassify-transfer-in')
+async def admin_reclassify_transfer_in(current_user: dict = Depends(get_current_user)):
+    """Admin-only: one-shot re-scan that undoes over-classification of
+    Plaid `TRANSFER_IN` on already-ingested transactions. Idempotent —
+    running twice is a no-op once every stale row has been cleared."""
+    if not current_user.get('is_admin'):
+        raise HTTPException(status_code=403, detail='Admin access required')
+    report = await _reclassify_transfer_in_backfill()
+    try:
+        await db.reclassify_runs.insert_one({
+            'started_at': datetime.now(timezone.utc), 'source': 'admin_endpoint', **report,
+        })
+    except Exception:  # noqa: BLE001
+        pass
+    return report
 
 
 # ------------------------------------------------------------------

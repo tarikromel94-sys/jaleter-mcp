@@ -233,9 +233,18 @@ class TestPhase2WealthClassification:
 # =========================================================================
 class TestPhase3Classifier:
     def test_pfc_transfer_in(self):
+        # Post-fix: TRANSFER_IN + TRANSFER_IN_ACCOUNT_TRANSFER alone is not
+        # sufficient — description must also confirm a transfer. Without
+        # description, this stays income (None).
         assert tc.classify_system({
             'personal_finance_category': {'primary': 'TRANSFER_IN',
                                           'detailed': 'TRANSFER_IN_ACCOUNT_TRANSFER'}
+        }) is None
+        # With confirming description keyword, it becomes a transfer.
+        assert tc.classify_system({
+            'personal_finance_category': {'primary': 'TRANSFER_IN',
+                                          'detailed': 'TRANSFER_IN_ACCOUNT_TRANSFER'},
+            'description': 'Transfer from Checking'
         }) == 'transfer'
 
     def test_pfc_loan_payments_cc(self):

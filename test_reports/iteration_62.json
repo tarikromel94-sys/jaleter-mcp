@@ -1,0 +1,51 @@
+{
+  "summary": "Jaleter 6-item spec verification (frontend Playwright at 390x844). Scenarios #5 Coaching, #6 Membership, #3 Legacy Monthly Contribution PASS all checks. #2 BUILD math drill-down PARTIAL PASS — new simplified labels (PROJECTED WEALTH / in 3 years / Current Wealth / Average Monthly Change / Estimated Investment Growth / 'How we calculate this' tooltip) are all present exactly as specified with no forbidden jargon in the drill-down itself, but the stale copy 'Investments held flat...' still appears (a) as the projection chart subtitle (line 3599) and (b) as a row in the 'WHAT WE\u2019RE PROJECTING FROM' card labelled 'Current Investments (held flat in BUILD)' (line 3897). Since spec #2 says the investment portion now COMPOUNDS, both of these are inconsistent with the new math and violate the 'NO held flat' exclusion. #1 Manual filter reads correctly as All|Income|Expenses but no persistent transactions exist for this user, so the 'Manual' vs bank-name origin badge could not be observed live (code inspection confirms `origin.type === 'manual'` still shows 'Manual'). #4 Split picker not exercised live (no seed transactions); code review shows per-row Income|Expense toggle testIDs `tx-split-{idx}-side-income/-side-expense`, category chips, amount `tx-split-{idx}-amount`, and a Balanced/save-gated integer-cent sum check are all still in index.tsx \u2014 matching the partial-completion note. Zero JS console errors across regression sweep (Home / Budget / Activity / Wealth / Legacy).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "LegacyScreen chart subtitle",
+        "issue": "BUILD projection chart still reads 'Investments held flat. Cash grows from your positive monthly surplus only.' Spec #2 says the investment portion now COMPOUNDS \u2014 this subtitle contradicts new math. Reference: /app/frontend/app/index.tsx:3599",
+        "testID": "legacy chart subtitle",
+        "priority": "HIGH"
+      },
+      {
+        "component": "LegacyScreen \u2018WHAT WE\u2019RE PROJECTING FROM\u2019 row",
+        "issue": "Row label 'Current Investments (held flat in BUILD)' still appears in BUILD mode. Should be renamed (e.g. 'Current Investments') to match new compounding behavior and the spec-mandated exclusion of 'held flat' verbiage. Reference: /app/frontend/app/index.tsx:3897",
+        "testID": "WHAT WE'RE PROJECTING FROM card",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "scenario_results": {
+    "#1_manual_transactions": "PARTIAL \u2014 filter pills read 'All | Income | Expenses' (correct). No live transactions available on alex+test1 account to observe Manual vs bank-name origin badge; code inspection confirms behavior unchanged.",
+    "#2_new_build_projection": "FAIL (partial) \u2014 Drill-down content is 100% correct: PROJECTED WEALTH heading, big projection number, 'in 3 years', three rows (Current Wealth, Average Monthly Change, Estimated Investment Growth), italic tooltip 'How we calculate this: We use your current wealth, planned budgets, actual results when available, and estimated investment growth. Your projection becomes more personalized as you use Jaleter.' NONE of 'Available Cash at Y' / 'Investments at Y' / 'carry-forward' / '% surplus' / 'trailing average' / 'run rate' / 'realization factor' present. BUT 'held flat' occurs 2 times elsewhere on the same screen (chart subtitle + 'WHAT WE\u2019RE PROJECTING FROM' row) \u2014 violates spec exclusion.",
+    "#3_legacy_monthly_contribution": "PASS \u2014 Tapped legacy-chip-contrib on 10yr GROW, Sheet 'Monthly Contribution' opens with legacy-contrib-input autofocused, typed 1250, tapped legacy-contrib-save, sheet closed, chip now reads $1,250. Reopened sheet, input reflects '1250'.",
+    "#4_category_dropdowns_splits": "NOT TESTED live (no transactions to open/split). Code review confirms per-row Income|Expense toggle + category/subcategory chips + tx-split-{idx}-amount + integer-cent sum-to-total gate present. Unified searchable picker for splits still deferred per PARTIAL disclaimer.",
+    "#5_coaching_$75": "PASS ALL \u2014 Eyebrow 'COACHING \u00b7 1 HOUR', title 'Private Financial Clarity Session', price '$75 / session' (no $50/$45/30 MIN copy anywhere), all 5 bullets present ('Review one primary financial concern', 'Budget, cash-flow, or goal review', 'Identify priorities and opportunities', 'Questions answered during the session', 'Clear next steps'), coaching-book-pay button reads 'Book & Pay \u2014 $75', helper 'You\u2019ll choose your session time right after payment.'",
+    "#6_membership_$90_year": "PASS ALL \u2014 Eyebrow 'JALETER PREMIUM', title 'Annual Membership', subtitle 'Everything you need to plan, track, and grow your money.', large '$90 / year', '$7.50 / month equivalent' below, exactly 8 checkmark bullets (Secure bank & account syncing / Budgeting + transaction tracking / Reports & spending insights / Net Worth + Set Aside goals / Build, Grow & retirement projections / Jaleter Coach AI / Faith + Focus library / Statement import from supported bank files), bottom-line 'Join for $90 / year'. No occurrence of '$85', 'Foundation', 'Household', 'Steward+', or non-$7.50 /month pricing.",
+    "#8_regression_sweep": "PASS \u2014 nav-home / nav-budget / nav-transactions / nav-networth / nav-legacy all navigate cleanly. Zero JS console errors captured across the entire flow (login \u2192 more \u2192 coaching \u2192 more \u2192 membership \u2192 legacy 10yr contrib \u2192 legacy 3yr math \u2192 activity \u2192 wealth \u2192 all nav tabs)."
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter62/"
+  ],
+  "action_items": [
+    "Spec #2: remove/replace the projection chart subtitle at /app/frontend/app/index.tsx:3599 \u2014 the current copy 'Investments held flat. Cash grows from your positive monthly surplus only.' contradicts the new compounding math and violates the spec exclusion of 'held flat'.",
+    "Spec #2: rename the row label 'Current Investments (held flat in BUILD)' at /app/frontend/app/index.tsx:3897 to plain 'Current Investments' (or equivalent) so the 'held flat' string is fully purged from BUILD copy.",
+    "(informational) Seed a couple of manual transactions on alex+test1@jaleter.app so #1 Manual-origin badge and #4 per-row split behavior can be verified end-to-end in the next iteration."
+  ],
+  "critical_code_review_comments": [
+    "index.tsx is 5,569 lines \u2014 well beyond the 700-line guideline. Prior comments about splitting Legacy/Coaching/Membership/Activity/Splits into modules still stand; not blocking.",
+    "buildProjectionAt(n) now compounds investments but the human-readable copy around it (line 3599 subtitle, line 3897 row) was not updated to match \u2014 classic drift between logic and UX copy."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "n/a (frontend-only per request)", "frontend": "5 of 6 spec items fully verified pass; #2 partial fail on stale copy; #4 code-review only" },
+  "seed_data_creation": "None. alex+test1 account remains without transactions, which blocked live verification of #1 origin badge and #4 split picker.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Coaching + Membership + Legacy Monthly Contribution + BUILD math drill-down labels all verified. The single open issue is stale 'held flat' copy still appearing in the Legacy BUILD chart subtitle (line 3599) and the 'WHAT WE\u2019RE PROJECTING FROM' row (line 3897). After the main agent purges those two strings, a quick re-navigate to Legacy \u2192 3yr should show zero 'held flat' occurrences. #1 and #4 need seed transactions to fully exercise \u2014 create at least one manual expense + one split-eligible transaction on alex+test1 before the next UI pass.",
+  "rca_of_issue": "Spec #2 rewrote the math (buildProjectionAt now compounds investments) and rewrote the drill-down copy, but two adjacent legacy strings referring to the old flat-investment behavior were left in place: (a) projectionSubtitle at line 3599 and (b) the assumptions-card row label at line 3897. Both still contain the exact phrase 'held flat' which the spec explicitly forbids in the new BUILD experience. Mitigation: replace subtitle with the spec-suggested 'BUILD \u00b7 cash + monthly net + investment growth' (already used in chart tooltip at line 3711) and drop the '(held flat in BUILD)' qualifier from the row label."
+}

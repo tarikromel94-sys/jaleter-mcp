@@ -121,8 +121,26 @@ def _cleanup_seed(user_id: str):
 # UNIT: transaction_classifier.classify_system
 # ============================================================================
 class TestClassifySystem:
-    def test_pfc_transfer_in(self):
-        assert tc.classify_system({'personal_finance_category': {'primary': 'TRANSFER_IN', 'detailed': 'TRANSFER_IN_ACCOUNT_TRANSFER'}}) == 'transfer'
+    def test_pfc_transfer_in_alone_returns_none(self):
+        # Post-fix: TRANSFER_IN by itself is NOT enough. Plaid tags ACH deposits,
+        # paychecks, interest, etc. as TRANSFER_IN — those should stay as income.
+        assert tc.classify_system({'personal_finance_category': {'primary': 'TRANSFER_IN', 'detailed': 'TRANSFER_IN_ACCOUNT_TRANSFER'}}) is None
+
+    def test_pfc_transfer_in_with_description_keyword(self):
+        # Only when the description also says "transfer" AND detailed is
+        # TRANSFER_IN_ACCOUNT_TRANSFER do we trust it.
+        assert tc.classify_system({
+            'personal_finance_category': {'primary': 'TRANSFER_IN', 'detailed': 'TRANSFER_IN_ACCOUNT_TRANSFER'},
+            'description': 'Transfer from Savings',
+        }) == 'transfer'
+
+    def test_pfc_transfer_in_deposit_stays_income(self):
+        # TRANSFER_IN_DEPOSIT (paycheck-style ACH credits) must NOT be
+        # auto-classified as transfer regardless of description not saying so.
+        assert tc.classify_system({
+            'personal_finance_category': {'primary': 'TRANSFER_IN', 'detailed': 'TRANSFER_IN_DEPOSIT'},
+            'description': 'ACH Credit ALLY BANK',
+        }) is None
 
     def test_pfc_transfer_out(self):
         assert tc.classify_system({'personal_finance_category': {'primary': 'TRANSFER_OUT', 'detailed': 'TRANSFER_OUT_ACCOUNT_TRANSFER'}}) == 'transfer'
@@ -172,10 +190,10 @@ class TestClassifySystem:
 
     def test_override_invalid_ignored(self):
         # Invalid override falls back to normal detection.
+        # Post-fix: TRANSFER_IN alone no longer classifies as transfer.
         txn = {'personal_finance_category': {'primary': 'TRANSFER_IN', 'detailed': 'X'},
                'system_category_override': 'bogus'}
-        # Because 'bogus' is neither 'none' nor in SYSTEM_CATEGORIES, it falls through.
-        assert tc.classify_system(txn) == 'transfer'
+        assert tc.classify_system(txn) is None
 
     def test_is_transfer_helper(self):
         assert tc.is_transfer({'personal_finance_category': {'primary': 'TRANSFER_OUT', 'detailed': 'X'}}) is True

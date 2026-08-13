@@ -1,0 +1,23 @@
+{
+  "summary": "Retest of BUILD copy fix on Legacy screen (spec #2). All 7 numbered checks PASS: (1) Login as alex+test1 OK; (2) Nav to Legacy OK; (3) Switched to legacy-build-period-3yr OK; (4) Projection subtitle now reads EXACTLY 'Cash grows by your monthly net; investments compound at 7%.' (old 'Investments held flat...surplus only.' string is gone); (5) Under 'How this is calculated' the row label is now 'Current Investments' (no '(held flat in BUILD)' suffix), and PROJECTED WEALTH, Current Wealth, Average Monthly Change, Estimated Investment Growth rows remain present; (6) 0 matches for 'held flat' in Legacy DOM; (7) 0 matches for 'surplus' (case-insensitive) in Legacy DOM. Regression: nav Home/Budget/Activity(transactions)/Wealth(networth) work with 0 console errors; Coaching page shows '$75 / session' and Membership entry shows '$90 / year'. No blockers found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iteration_63.json"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Non-blocking: Home screen 'LEGACY SNAPSHOT' card at /app/frontend/app/index.tsx line 1342 still uses copy '(investments held flat)' and line 1346 renders 'BUILD · CASH + MONTHLY NET · INVESTMENTS FLAT'. This does NOT appear on the Legacy screen (which is what spec #2 scoped) so it does not fail the retest, but it is now inconsistent with the new BUILD math description on the Legacy card. Consider updating for consistency in a future spec.",
+    "Non-blocking: In-code comment at line 3694 still says 'investments held flat.' — code comment only, does not render, but the actual buildProjectionAt math should be re-audited if the intent truly changed to compound investments."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only retest)", "frontend": "100% (7/7 spec checks + regression)"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Login flow: on web the Welcome screen renders inside an iframe. To reach the Login screen, evaluate `window.postMessage('navigate:login', '*')` before interacting with [data-testid=\"login-email\"]. Bottom-nav testIDs: nav-home, nav-budget, nav-reports, nav-transactions (Activity), nav-networth (Wealth), nav-legacy. Legacy BUILD period pills: legacy-build-period-{1yr|2yr|3yr|5yr}. Math section is behind Pressable [data-testid=\"legacy-math-toggle\"].",
+  "rca_of_issue": "N/A — this is a retest of an applied fix, not a bug RCA. Both stale strings (projection subtitle + 'Current Investments (held flat in BUILD)' row label) are now updated and no residual 'held flat' or 'surplus' language remains on the Legacy screen."
+}
