@@ -48,6 +48,14 @@ type Props = {
   tooltipBg?: string;
   tooltipText?: string;
   tooltipMuted?: string;
+  // How to compute the tooltip delta.
+  //   • 'previous' (default): compare selected point to the previous point
+  //     (used by GROW where each period compounds on the last).
+  //   • 'from-today': compare selected point to the FIRST point (index 0),
+  //     which is always "today's" starting value. Preferred for BUILD so
+  //     every year's tooltip reads "+$X from today" (or "−$X from today")
+  //     rather than a confusing year-over-year delta.
+  deltaMode?: 'previous' | 'from-today';
 };
 
 const DEFAULT_MONEY = (n: number) => `$${Math.round(n).toLocaleString('en-US')}`;
@@ -70,6 +78,7 @@ export default function ProjectionLineChart({
   tooltipBg = '#181714ee',
   tooltipText = '#f3ecdf',
   tooltipMuted = '#bdb6ac',
+  deltaMode = 'previous',
 }: Props) {
   // Selected point index (null = no tooltip). Set by pan/tap.
   const [activeIdx, setActiveIdx] = useState<number | null>(null);
@@ -166,8 +175,19 @@ export default function ProjectionLineChart({
 
   const { xAt, yAt, pathD, areaD, minV } = chartMath;
   const active = activeIdx != null ? points[activeIdx] : null;
-  const prev = activeIdx != null && activeIdx > 0 ? points[activeIdx - 1] : null;
-  const delta = active && prev ? active.value - prev.value : null;
+  // Delta calculation depends on `deltaMode`:
+  //   • 'previous'  — value − previous point value (year-over-year style)
+  //   • 'from-today' — value − first point value ("Today"). Delta on the
+  //     first point itself is null so we don't render "+$0 from today".
+  const baselinePoint = (() => {
+    if (activeIdx == null) return null;
+    if (deltaMode === 'from-today') {
+      return activeIdx > 0 ? points[0] : null;
+    }
+    return activeIdx > 0 ? points[activeIdx - 1] : null;
+  })();
+  const delta = active && baselinePoint ? active.value - baselinePoint.value : null;
+  const deltaLabel = deltaMode === 'from-today' ? 'from today' : (delta != null && delta >= 0 ? 'projected increase' : 'projected decrease');
 
   return (
     <View style={{ marginTop: 8 }} ref={containerRef} onLayout={onLayout}>
@@ -207,7 +227,7 @@ export default function ProjectionLineChart({
                 fontWeight: '700',
                 marginTop: 1,
               }}>
-                {delta >= 0 ? '+' : '−'}{currency(Math.abs(delta))} projected {delta >= 0 ? 'increase' : 'decrease'}
+                {delta >= 0 ? '+' : '−'}{currency(Math.abs(delta))} {deltaLabel}
               </Text>
             )}
             {active.meta?.subtitle && (

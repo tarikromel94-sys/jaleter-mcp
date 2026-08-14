@@ -1,0 +1,41 @@
+{
+  "summary": "Frontend-only verification of the BUILD projection rewrite in Legacy screen. Login worked, Legacy tab loaded cleanly, BUILD (1yr/2yr/3yr/5yr) and GROW (10yr) modes were exercised end-to-end. All copy/label/chip-visibility items from the spec pass. Tapping the BUILD chart shows a tooltip with the correct 'BUILD · investments held flat' subtitle and NO 'projected increase/decrease' wording; tapping the GROW chart shows 'GROW · 7% compound' subtitle. Delta-line dollar text ('+$X from today') could not be visually verified because the test user has no linked accounts / no budget cash flow / no investments (all projection points come out to the same value, so |delta| < 0.5 and the delta text line is suppressed by design in ProjectionLineChart). Code review confirms deltaMode='from-today' is passed only when isBuild is true and the delta label is 'from today' vs 'projected increase/decrease' for GROW. Home LEGACY SNAPSHOT block is not rendered for the test account because showSnapshot requires cash/investments/monthlyNet > 0 — code review of index.tsx lines 1340-1346 confirms the exact required strings are in place.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter65/04_home.jpeg",
+    "/app/test_reports/screenshots/iter65/05_legacy.jpeg",
+    "/app/test_reports/screenshots/iter65/06_build_1yr.jpeg",
+    "/app/test_reports/screenshots/iter65/07_build_math.jpeg",
+    "/app/test_reports/screenshots/iter65/08_build_tooltip.jpeg",
+    "/app/test_reports/screenshots/iter65/09_grow_tooltip.jpeg",
+    "/app/test_reports/screenshots/iter65/15_build_after_hypo.jpeg",
+    "/app/test_reports/screenshots/iter65/16_build_tooltip_delta.jpeg"
+  ],
+  "action_items": [
+    "None blocking. Optional: consider showing the 'BUILD · investments held flat' subtitle even when delta is zero (currently the subtitle DOES render — good). No changes required.",
+    "Optional: To make manual QA of delta text easier for empty accounts, seed the test user (alex+test1@jaleter.app) with a small cash balance + a monthly budget so BUILD points differ year-over-year. Right now all projection points are $0 (or all equal to the one-time hypothetical), so |delta| < 0.5 and the tooltip's delta line is suppressed by ProjectionLineChart's own guard."
+  ],
+  "critical_code_review_comments": [
+    "index.tsx line 3734: deltaMode is correctly gated on isBuild → 'from-today' for BUILD and 'previous' for GROW.",
+    "index.tsx line 3759: BUILD tooltip subtitle 'BUILD · investments held flat' verified in DOM.",
+    "index.tsx line 3646: BUILD subtitle string 'Based on your current wealth and projected monthly cash flow.' verified in DOM.",
+    "index.tsx line 3804/3812/3823: 7% RETURN chip and CONTRIB/MO are gated on !isBuild; CASH chip is gated on isBuild → confirmed in the rendered UI.",
+    "index.tsx lines 3862-3885: BUILD math shows 'Current Wealth (Cash + Investments)' + 'Average Monthly Cash Flow' rows only; no 'Investment Growth' technical row. Italic footer exact-match verified.",
+    "index.tsx lines 3944-3958: WHAT WE'RE PROJECTING FROM BUILD variant shows 'Cash (from Wealth)', 'Current Investments (held flat)', 'Monthly Budget Cash Flow' — all three verified in DOM.",
+    "index.tsx line 1207: showSnapshot condition requires cash>0 || investmentTotal>0 || monthlyNet>0. Empty test account will NEVER show LEGACY SNAPSHOT on Home. Copy strings at lines 1342 and 1346 match the spec verbatim.",
+    "ProjectionLineChart.tsx lines 178-190: deltaMode='from-today' → baselinePoint is points[0]; deltaLabel switches to 'from today'. Suppressed when |delta|<=0.5, which is why we can't visually confirm the string with the empty test account."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend only)", "frontend": "13/13 verifiable checks pass; 2 items (tooltip delta text on BUILD, Home LEGACY SNAPSHOT copy) not visually verifiable for the empty test account but code review passes."},
+  "seed_data_creation": "None. All testing done with the existing alex+test1@jaleter.app account.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "To visually verify the delta text 'from today' on BUILD and 'projected increase/decrease' on GROW, seed alex+test1 with a small cash balance + budgeted income/expense that yields a non-zero monthlyNet. Then BUILD projection points will diverge year-over-year and the tooltip's delta line will render.",
+  "rca_of_issue": "No bugs reproduced. Rewrite verified against all 15 spec items via a mix of live DOM checks (13) and code review (2)."
+}
