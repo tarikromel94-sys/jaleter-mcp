@@ -3559,15 +3559,82 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
   // pulled directly from the Wealth tab. Investments are held flat — no 7%
   // return applied. The 7% assumption is a GROW/Retirement concept only.
   const buildStartingCash = (typeof totalCash === 'number' ? totalCash : 0) || 0;
+
+  // ---- ONE calculation engine for BUILD ------------------------------
+  // Everything BUILD-related — the projected wealth headline, the chart
+  // points, the tooltip deltas, the year-by-year table, and the "How
+  // this is calculated" drill-down — derives from this single memo. If
+  // you find yourself computing BUILD math anywhere else, wire it here.
+  const buildBreakdown = React.useMemo(() => {
+    const months = Math.max(0, Math.round(years * 12));
+    const rows = perMonthNetFn(months) as any;
+    const runRate = typeof rows.runRate === 'number' ? rows.runRate : 0;
+    const runRateSlice = Array.isArray(rows.runRateSlice) ? rows.runRateSlice : [];
+    const allBudgetMonths = Array.isArray(rows.allBudgetMonths) ? rows.allBudgetMonths : [];
+    // Hypothetical contribution — surfaced separately so it can never
+    // become an invisible adjustment.
+    const h = hypoContributions(hypoValue, hypoFreq, hypoDur, years);
+    const hypoCashAt = (n: number) => hypoContributions(hypoValue, hypoFreq, hypoDur, n).addToCash;
+    const hypoPrincipalAt = (n: number) => hypoContributions(hypoValue, hypoFreq, hypoDur, n).addToPrincipal;
+    // Yearly snapshots — startWealth, sumOfMonths, hypo add-on, endWealth.
+    const yearSnaps: { year: number; startWealth: number; monthsSum: number; hypoAdd: number; endWealth: number; startIdx: number; endIdx: number }[] = [];
+    const startingWealth = buildStartingCash + investmentTotal;
+    let prevEnd = startingWealth;
+    let cumNet = 0;
+    for (let y = 1; y <= years; y++) {
+      const startIdx = (y - 1) * 12;
+      const endIdx = y * 12 - 1;
+      const yearMonths = rows.slice(startIdx, endIdx + 1);
+      const monthsSum = yearMonths.reduce((s: number, r: any) => s + (r?.net || 0), 0);
+      cumNet += monthsSum;
+      const hypoAdd = hypoCashAt(y) + hypoPrincipalAt(y);
+      const endWealth = Math.round(startingWealth + cumNet + hypoAdd);
+      yearSnaps.push({
+        year: y,
+        startWealth: Math.round(prevEnd),
+        monthsSum: Math.round(monthsSum),
+        hypoAdd: Math.round(hypoAdd - (y > 1 ? (hypoCashAt(y - 1) + hypoPrincipalAt(y - 1)) : 0)),
+        endWealth,
+        startIdx,
+        endIdx,
+      });
+      prevEnd = endWealth;
+    }
+    // The "projected monthly cash flow" figure shown on the assumptions
+    // card must equal the run rate that the projection actually uses for
+    // unbudgeted months — this is the number the user can multiply by 12
+    // to reproduce Y1 (approximately, when the current month is +
+    // rest-of-year budgeted separately).
+    const projectedMonthlyCashFlow = runRate;
+    return {
+      months: rows as any[],
+      runRate,
+      runRateSlice,
+      allBudgetMonths,
+      startingCash: buildStartingCash,
+      startingInvestments: investmentTotal,
+      startingWealth,
+      hypo: h,
+      hypoCashAt,
+      hypoPrincipalAt,
+      yearSnaps,
+      projectedMonthlyCashFlow,
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [years, buildStartingCash, investmentTotal, perMonthNetFn, hypoValue, hypoFreq, hypoDur]);
+
   const buildProjectionAt = (n: number): number => {
     // BUILD: budget-based only. investments held FLAT — no return
     // assumption applied. Cash portion accumulates the per-month
     // Budgeted / Estimated net (both surpluses AND deficits included).
-    const h = hypoContributions(hypoValue, hypoFreq, hypoDur, n);
+    // Reads from `buildBreakdown` when n === years to guarantee an
+    // exact match with the drill-down; falls back to a direct
+    // computation for arbitrary n (used by the chart's yearly points).
     const months = Math.max(0, Math.round(n * 12));
-    const heldInvestments = investmentTotal + h.addToPrincipal;
     const netRows = perMonthNetFn(months);
-    const cashFromNet = netRows.reduce((sum, r) => sum + r.net, 0);
+    const cashFromNet = netRows.reduce((sum: number, r: any) => sum + (r?.net || 0), 0);
+    const h = hypoContributions(hypoValue, hypoFreq, hypoDur, n);
+    const heldInvestments = investmentTotal + h.addToPrincipal;
     const cashAtN = buildStartingCash + cashFromNet + h.addToCash;
     return Math.round(heldInvestments + cashAtN);
   };
@@ -3861,24 +3928,112 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
         <View style={[s.assumptionsCard, t.cardBg]}>
           {isBuild ? (
             (() => {
-              // Customer-facing BUILD math — kept simple per spec #9. No
-              // technical terms (run rate / trailing / realization). Show
-              // only the fundamentals: starting wealth, average monthly
-              // budgeted cash flow, and the projected ending wealth.
-              const rowsFull = perMonthNetFn(years * 12);
-              const netSum = rowsFull.reduce((s, r) => s + r.net, 0);
-              const avgMonthly = rowsFull.length > 0 ? netSum / rowsFull.length : 0;
-              const startingWealth = buildStartingCash + investmentTotal;
+              // Fully transparent breakdown so every displayed number
+              // reconciles: starting wealth → each month with source →
+              // yearly rollups → projection. All values come from ONE
+              // memo (`buildBreakdown`) so the card, chart, tooltip and
+              // year-by-year table can never disagree.
+              const bd = buildBreakdown;
+              const hypoActive = hypoValue > 0;
               return (
                 <>
                   <Text style={[{ fontSize: 10, fontWeight: '800', color: '#a97c39', letterSpacing: 1 }]}>PROJECTED WEALTH</Text>
                   <Text style={[{ fontSize: 32, fontWeight: '800', marginTop: 4 }, t.textInk]}>{MONEY(projection)}</Text>
                   <Text style={[{ fontSize: 10, marginTop: 2 }, t.textMuted]}>in {years} year{years === 1 ? '' : 's'}</Text>
-                  <View style={{ marginTop: 14, gap: 6 }}>
-                    <Row label="Current Wealth (Cash + Investments)" value={MONEY(startingWealth)} muted={t.textMuted} ink={t.textInk} />
-                    <Row label="Average Monthly Cash Flow" value={`${avgMonthly >= 0 ? '+' : '−'}${MONEY(Math.abs(avgMonthly))}`} muted={t.textMuted} ink={t.textInk} valueColor={avgMonthly >= 0 ? '#4c8b56' : '#b0453d'} />
+
+                  {/* --- Starting Wealth --- */}
+                  <Text style={[{ fontSize: 10, fontWeight: '800', color: '#a97c39', letterSpacing: 1, marginTop: 16 }]}>STARTING WEALTH</Text>
+                  <View style={{ marginTop: 6, gap: 4 }}>
+                    <Row label="Cash" value={MONEY(bd.startingCash)} muted={t.textMuted} ink={t.textInk} />
+                    <Row label="Investments" value={MONEY(bd.startingInvestments)} muted={t.textMuted} ink={t.textInk} />
+                    <View style={{ height: 1, backgroundColor: t.dark ? '#332e26' : '#efe6d0', marginVertical: 4 }} />
+                    <Row label="Starting Wealth" value={MONEY(bd.startingWealth)} muted={t.textMuted} ink={t.textInk} valueColor="#9a6d32" />
                   </View>
-                  <Text style={[{ fontSize: 10, marginTop: 12, lineHeight: 14, fontStyle: 'italic' }, t.textMuted]}>
+
+                  {/* --- Projected monthly cash flow (aka run rate) --- */}
+                  <Text style={[{ fontSize: 10, fontWeight: '800', color: '#a97c39', letterSpacing: 1, marginTop: 16 }]}>PROJECTED MONTHLY BUDGET CASH FLOW</Text>
+                  <View style={{ marginTop: 6, gap: 4 }}>
+                    <Row
+                      label={bd.allBudgetMonths.length <= 1 ? 'Current budget net' : `Average of last ${Math.min(bd.runRateSlice.length, 12)} budget month${bd.runRateSlice.length === 1 ? '' : 's'}`}
+                      value={`${bd.projectedMonthlyCashFlow >= 0 ? '+' : '−'}${MONEY(Math.abs(Math.round(bd.projectedMonthlyCashFlow)))}`}
+                      muted={t.textMuted} ink={t.textInk}
+                      valueColor={bd.projectedMonthlyCashFlow >= 0 ? '#4c8b56' : '#b0453d'}
+                    />
+                    {bd.runRateSlice.length > 0 && (
+                      <View style={{ marginTop: 4, gap: 3, paddingLeft: 8, borderLeftWidth: 2, borderLeftColor: '#e6dcc5' }}>
+                        {bd.runRateSlice.map((rs: any, idx: number) => (
+                          <View key={`rr-${idx}-${rs.ym}`} style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                            <Text style={[{ fontSize: 9 }, t.textMuted]}>{rs.label}</Text>
+                            <Text style={[{ fontSize: 9, fontWeight: '600' }, t.textInk]}>{rs.net >= 0 ? '+' : '−'}{MONEY(Math.abs(rs.net))}</Text>
+                          </View>
+                        ))}
+                        {bd.runRateSlice.length >= 2 && (
+                          <Text style={[{ fontSize: 9, marginTop: 2, fontStyle: 'italic' }, t.textMuted]}>
+                            (sum ÷ {bd.runRateSlice.length}) = {bd.projectedMonthlyCashFlow >= 0 ? '+' : '−'}{MONEY(Math.abs(Math.round(bd.projectedMonthlyCashFlow)))} / mo
+                          </Text>
+                        )}
+                      </View>
+                    )}
+                  </View>
+
+                  {/* --- Month by month projection --- */}
+                  <Text style={[{ fontSize: 10, fontWeight: '800', color: '#a97c39', letterSpacing: 1, marginTop: 16 }]}>MONTH-BY-MONTH</Text>
+                  <View style={{ marginTop: 6, gap: 2 }}>
+                    <View style={{ flexDirection: 'row', paddingBottom: 4, borderBottomWidth: 1, borderColor: t.dark ? '#332e26' : '#efe6d0' }}>
+                      <Text style={[{ flex: 2, fontSize: 9, fontWeight: '800', letterSpacing: 0.5, color: '#a97c39' }]}>MONTH</Text>
+                      <Text style={[{ flex: 1, fontSize: 9, fontWeight: '800', letterSpacing: 0.5, color: '#a97c39', textAlign: 'right' }]}>AMOUNT</Text>
+                      <Text style={[{ flex: 2, fontSize: 9, fontWeight: '800', letterSpacing: 0.5, color: '#a97c39', textAlign: 'right' }]}>SOURCE</Text>
+                    </View>
+                    {bd.months.map((r: any, idx: number) => (
+                      <View key={`mo-${idx}-${r.ym}`} style={{ flexDirection: 'row', paddingVertical: 2 }}>
+                        <Text style={[{ flex: 2, fontSize: 10 }, t.textInk]}>{r.label}</Text>
+                        <Text style={[{ flex: 1, fontSize: 10, fontWeight: '600', textAlign: 'right', color: (r.net || 0) >= 0 ? '#4c8b56' : '#b0453d' }]}>
+                          {(r.net || 0) >= 0 ? '+' : '−'}{MONEY(Math.abs(r.net || 0))}
+                        </Text>
+                        <Text style={[{ flex: 2, fontSize: 9, textAlign: 'right' }, t.textMuted]}>
+                          {r.source === 'budgeted' ? 'Budget' : 'Estimated from budget avg'}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+
+                  {/* --- Hypothetical contribution (only if user opted in) --- */}
+                  {hypoActive && (
+                    <>
+                      <Text style={[{ fontSize: 10, fontWeight: '800', color: '#a97c39', letterSpacing: 1, marginTop: 16 }]}>HYPOTHETICAL CONTRIBUTION</Text>
+                      <View style={{ marginTop: 6, gap: 4 }}>
+                        <Row
+                          label={`${MONEY(hypoValue)} ${hypoFreq}${hypoDur ? ` × ${hypoDur}yr` : ''}`}
+                          value={`+${MONEY(Math.round(bd.hypo.addToCash + bd.hypo.addToPrincipal))}`}
+                          muted={t.textMuted} ink={t.textInk} valueColor="#4c8b56"
+                        />
+                        <Text style={[{ fontSize: 9, fontStyle: 'italic' }, t.textMuted]}>
+                          Extra cash you&apos;re modeling on top of your budget projection. Set to $0 to remove.
+                        </Text>
+                      </View>
+                    </>
+                  )}
+
+                  {/* --- Year-by-year rollup --- */}
+                  <Text style={[{ fontSize: 10, fontWeight: '800', color: '#a97c39', letterSpacing: 1, marginTop: 16 }]}>YEAR-BY-YEAR</Text>
+                  <View style={{ marginTop: 6, gap: 8 }}>
+                    {bd.yearSnaps.map((y: any) => (
+                      <View key={`ys-${y.year}`} style={{ backgroundColor: t.dark ? '#242019' : '#fbf6ec', padding: 8, borderRadius: 8, borderWidth: 1, borderColor: t.dark ? '#332e26' : '#efe6d0' }}>
+                        <Text style={[{ fontSize: 11, fontWeight: '800' }, t.textInk]}>Year {y.year} projected wealth</Text>
+                        <View style={{ marginTop: 4, gap: 2 }}>
+                          <Row label={y.year === 1 ? 'Starting Wealth' : `Year ${y.year - 1} Ending Wealth`} value={MONEY(y.startWealth)} muted={t.textMuted} ink={t.textInk} />
+                          <Row label={`+ Budget cash flow (months ${y.startIdx + 1}–${y.endIdx + 1})`} value={`${y.monthsSum >= 0 ? '+' : '−'}${MONEY(Math.abs(y.monthsSum))}`} muted={t.textMuted} ink={t.textInk} valueColor={y.monthsSum >= 0 ? '#4c8b56' : '#b0453d'} />
+                          {hypoActive && y.hypoAdd !== 0 && (
+                            <Row label="+ Hypothetical contribution" value={`${y.hypoAdd >= 0 ? '+' : '−'}${MONEY(Math.abs(y.hypoAdd))}`} muted={t.textMuted} ink={t.textInk} valueColor="#4c8b56" />
+                          )}
+                          <View style={{ height: 1, backgroundColor: t.dark ? '#332e26' : '#efe6d0', marginVertical: 2 }} />
+                          <Row label={`= Year ${y.year} Ending Wealth`} value={MONEY(y.endWealth)} muted={t.textMuted} ink={t.textInk} valueColor="#9a6d32" />
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+
+                  <Text style={[{ fontSize: 10, marginTop: 14, lineHeight: 14, fontStyle: 'italic' }, t.textMuted]}>
                     Based on your current wealth and projected budget cash flow. Investments are held flat in BUILD — 7% growth belongs to GROW/Retirement.
                   </Text>
                 </>
@@ -3945,18 +4100,39 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
             <>
               <Row label="Cash (from Wealth)" value={MONEY(buildStartingCash)} muted={t.textMuted} ink={t.textInk} />
               <Row label="Current Investments (held flat)" value={MONEY(investmentTotal)} muted={t.textMuted} ink={t.textInk} />
+              {/* This month's budget net — the same figure as the Budget
+                  module for the current month. Kept as-is so users can
+                  reconcile it 1:1 with the Budget page. */}
               <Pressable onPress={() => setShowSurplusBreakdown(true)} hitSlop={4} testID="legacy-surplus-drill">
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                   <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                    <Text style={[{ fontSize: 11, fontWeight: '600', color: '#9a6d32' }, t.textInk]}>Monthly Budget Cash Flow</Text>
+                    <Text style={[{ fontSize: 11, fontWeight: '600', color: '#9a6d32' }, t.textInk]}>This Month&apos;s Budget Cash Flow</Text>
                     <Ionicons name="information-circle-outline" size={12} color="#9a6d32" />
                   </View>
                   <Text style={{ fontSize: 12, fontWeight: '800', color: rawMonthlyNet < 0 ? '#b0453d' : '#9a6d32' }}>
                     {MONEY(rawMonthlyNet)}
                   </Text>
                 </View>
-                <Text style={[{ fontSize: 8, marginTop: 2 }, t.textMuted]}>Tap to see how this is calculated · {monthlyBudgetPeriod || 'Budget'}</Text>
+                <Text style={[{ fontSize: 8, marginTop: 2 }, t.textMuted]}>Same as the Budget page for {monthlyBudgetPeriod || 'this month'} — tap for breakdown</Text>
               </Pressable>
+              {/* Run rate — the projected monthly cash flow BUILD uses for
+                  unbudgeted future months. Differs from "this month" when
+                  the user has entered per-month overrides for multiple
+                  months. This is the number the user can multiply by 12
+                  to reconcile Y1 against the chart. */}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 6, borderTopWidth: 1, borderTopColor: t.dark ? '#332e26' : '#efe6d0' }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[{ fontSize: 11, fontWeight: '600' }, t.textInk]}>Projected Monthly Budget Cash Flow</Text>
+                  <Text style={[{ fontSize: 8, marginTop: 2 }, t.textMuted]}>
+                    {buildBreakdown.allBudgetMonths.length <= 1
+                      ? 'Same as this month (no other budget history yet)'
+                      : `Average of ${buildBreakdown.runRateSlice.length} budget month${buildBreakdown.runRateSlice.length === 1 ? '' : 's'} — see math below`}
+                  </Text>
+                </View>
+                <Text style={{ fontSize: 12, fontWeight: '800', color: buildBreakdown.runRate < 0 ? '#b0453d' : '#9a6d32' }}>
+                  {buildBreakdown.runRate >= 0 ? '+' : '−'}{MONEY(Math.abs(Math.round(buildBreakdown.runRate)))}
+                </Text>
+              </View>
               {rawMonthlyNet < 0 && (
                 <Text style={{ fontSize: 9, color: '#b0453d', marginTop: 2 }}>
                   Your Budget is currently net-negative — BUILD reflects this.
@@ -5380,9 +5556,16 @@ function MainApp() {
   const monthlyNet = monthlyBudgetIncome - monthlyBudgetExpense;
   const monthlyBudget = monthlyBudgetExpense;
 
-  // ---- Legacy: per-month Net lookup (BUILD spec rewrite, Jun 2026) --------
+  // ---- Legacy: per-month Net lookup + full BUILD breakdown --------
   // BUILD is BUDGET-BASED ONLY. Actual transactions must never influence
   // the BUILD projection (they belong to Budget vs Actual reporting).
+  //
+  // This callback returns BOTH the per-month rows AND the run-rate
+  // metadata so the LegacyScreen "How this is calculated" card can
+  // display exactly which months feed the run rate and which months use
+  // a specific budget vs an estimated run rate. There is ONE source of
+  // truth — the same rows drive the headline card, the chart, the
+  // tooltip, the year-by-year table, and the drill-down list.
   //
   // For every projected month M (from now → now+N):
   //   1. If the user has entered an explicit budget FOR that month
@@ -5396,22 +5579,21 @@ function MainApp() {
   //         • 12+                       → average of the most recent 12
   //      The run rate includes surpluses AND deficits — a negative
   //      run-rate is applied as-is (projection can decline).
-  //   3. Later, if the user backfills a specific budget for a
-  //      previously-unbudgeted future month, step 1 automatically wins
-  //      on the next render (no cache to invalidate).
   const legacyPerMonthNet = React.useCallback((totalMonths: number) => {
-    const rows: { month: number; net: number; source: 'actual' | 'budgeted' | 'estimated'; ym: string; label: string }[] = [];
+    const rows: { month: number; net: number; source: 'budgeted' | 'estimated'; ym: string; label: string; year: number; monthIdx: number }[] = [];
     const now = new Date();
     const startY = now.getFullYear();
     const startM = now.getMonth();
 
     // ---- Helper: compute the budget net for (year, monthIdx) taking into
     // account per-year snapshots (`categoriesByYear`) and per-month
-    // line-item overrides (`x.months[m]`). If no override exists at all,
-    // returns { hasBudget: false, net: <default annual budget net> }.
+    // line-item overrides (`x.months[m]`). Returns both the net and a
+    // flag indicating whether the user has ANY month-specific override
+    // for that (year, monthIdx) — the flag drives "budgeted" vs
+    // "estimated" labeling in the UI.
     const budgetNetForMonth = (y: number, m: number): { net: number; hasMonthOverride: boolean } => {
       const cats = ((categoriesByYear as any) && (categoriesByYear as any)[String(y)]) || categories;
-      const srcs = incomeSources; // income sources are shared across years today
+      const srcs = incomeSources;
       const income = srcs.reduce((s: number, x: any) => {
         const o = x?.months && x.months[m];
         return s + (typeof o === 'number' ? o : (Number(x?.budgeted) || 0));
@@ -5428,42 +5610,51 @@ function MainApp() {
 
     // ---- Collect the trailing history of "budget months" for the run rate.
     // A month counts as a budget month if the user has entered explicit
-    // month-level overrides for it OR it belongs to the current year (the
-    // current-year annual budget is always considered "entered" for its
-    // own months). We walk backwards up to 24 months to gather them.
-    const trailingBudgetNets: number[] = [];
+    // month-level overrides for it OR belongs to a year with a per-year
+    // snapshot. We deliberately DO NOT count "current-year, no overrides"
+    // months as separate budget months — they all share the same annual
+    // budget, so the current month itself is the single representative.
+    // Walk backwards up to 24 months to gather any explicit budget months.
+    const runRateSourceMonths: { ym: string; label: string; net: number; source: 'override' | 'snapshot' }[] = [];
     for (let i = 1; i <= 24; i++) {
       const d = new Date(startY, startM - i, 1);
       const y = d.getFullYear();
       const m = d.getMonth();
-      const { net, hasMonthOverride } = budgetNetForMonth(y, m);
       const yearHasSnapshot = !!(categoriesByYear as any)?.[String(y)];
-      // Only count as a real "budget month" when a budget actually existed
-      // for it — either month-specific overrides, or a per-year snapshot,
-      // or the month is in the current calendar year (where the current
-      // annual budget applies).
-      if (hasMonthOverride || yearHasSnapshot || y === startY) {
-        trailingBudgetNets.push(net);
+      const { net, hasMonthOverride } = budgetNetForMonth(y, m);
+      if (hasMonthOverride || yearHasSnapshot) {
+        runRateSourceMonths.push({
+          ym: `${y}-${m}`,
+          label: `${MONTHS[m]} ${y}`,
+          net,
+          source: hasMonthOverride ? 'override' : 'snapshot',
+        });
       }
     }
-    // Also include the current-month budget net so single-user "just set
-    // up budget today" scenarios have at least one data point.
+    // Always seed with the current-month budget so brand-new budgets have
+    // a starting data point. Kept as the "current" entry (index 0). This
+    // is the same $ that the "Monthly Budget Cash Flow" chip shows.
     const currentBudget = budgetNetForMonth(startY, startM);
-    if (trailingBudgetNets.length === 0) {
-      trailingBudgetNets.push(currentBudget.net);
-    }
+    const currentMonthEntry = {
+      ym: `${startY}-${startM}`,
+      label: `${MONTHS[startM]} ${startY} (this month)`,
+      net: currentBudget.net,
+      source: (currentBudget.hasMonthOverride ? 'override' : 'annual-default') as 'override' | 'snapshot' | 'annual-default',
+    };
+    // Ordered newest → oldest: [currentMonth, i=1, i=2, …]
+    const allBudgetMonths = [currentMonthEntry as any, ...runRateSourceMonths];
 
-    // Compute the run rate. trailingBudgetNets is ordered newest → oldest
-    // (index 0 = last month, index 1 = two months ago, …).
-    const runRate = ((): number => {
-      const n = trailingBudgetNets.length;
-      if (n === 0) return currentBudget.net;
-      if (n === 1) return trailingBudgetNets[0];
-      if (n === 2) return (trailingBudgetNets[0] + trailingBudgetNets[1]) / 2;
-      const take = n >= 12 ? 12 : 3;
-      const slice = trailingBudgetNets.slice(0, Math.min(take, n));
-      return slice.reduce((a, b) => a + b, 0) / slice.length;
-    })();
+    // Compute the run rate. Uses the standard 1 / 2 / 3-of-N / 12-of-N rule.
+    const n = allBudgetMonths.length;
+    let take: number;
+    if (n <= 1) take = 1;
+    else if (n === 2) take = 2;
+    else if (n < 12) take = 3;
+    else take = 12;
+    const runRateSlice = allBudgetMonths.slice(0, Math.min(take, n));
+    const runRate = runRateSlice.length > 0
+      ? runRateSlice.reduce((a: number, b: any) => a + b.net, 0) / runRateSlice.length
+      : 0;
 
     // ---- Project each future month.
     for (let i = 0; i < totalMonths; i++) {
@@ -5477,7 +5668,7 @@ function MainApp() {
       const yearHasSnapshot = !!(categoriesByYear as any)?.[String(y)];
 
       let net: number;
-      let source: 'actual' | 'budgeted' | 'estimated';
+      let source: 'budgeted' | 'estimated';
       if (i === 0) {
         // Current month always uses the current budget for that month
         // (respecting any month-specific overrides on income / expense
@@ -5493,9 +5684,16 @@ function MainApp() {
         net = runRate;
         source = 'estimated';
       }
-      rows.push({ month: i + 1, net, source, ym: key, label });
+      rows.push({ month: i + 1, net, source, ym: key, label, year: y, monthIdx: m });
     }
-    return rows;
+    // Expose the projection rows AND the run-rate metadata so the drill
+    // -down UI can render both. Read as `.rows` for the array; the extra
+    // metadata lives on the same object.
+    (rows as any).runRate = runRate;
+    (rows as any).runRateSlice = runRateSlice;
+    (rows as any).allBudgetMonths = allBudgetMonths;
+    (rows as any).currentBudgetNet = currentBudget.net;
+    return rows as any;
   }, [categoriesByYear, categories, incomeSources]);
   // Human-readable source period for the Legacy → Monthly Surplus drill-down.
   // Uses the currently-selected budget year + the real calendar month so the

@@ -1,0 +1,39 @@
+{
+  "summary": "Frontend-only verification of the BUILD reconciliation rewrite in Legacy screen (single-engine buildBreakdown). Logged in as alex+test1@jaleter.app, navigated to Legacy → BUILD 5yr. All required sections render without errors on an empty-budget account: PROJECTED WEALTH card, STARTING WEALTH (Cash / Investments / Starting Wealth 3-line block), PROJECTED MONTHLY BUDGET CASH FLOW (single-history variant shows 'Current budget net +$0' + 'Aug 2026 (this month) +$0'), MONTH-BY-MONTH table with 60 rows using MONTH|AMOUNT|SOURCE columns (row 0 = 'Aug 2026 +$0 Budget', rows 1-59 = 'Estimated from budget avg'), YEAR-BY-YEAR with 5 cards that use correct labels ('Starting Wealth' for Y1, 'Year N-1 Ending Wealth' for Y2-5) and correct month ranges (1–12, 13–24, 25–36, 37–48, 49–60). Empty account reconciles: Starting=$0 → each Year Ending=$0 → Projection=$0 (no crash). WHAT WE'RE PROJECTING FROM shows TWO distinct rows: 'This Month's Budget Cash Flow $0' (subtitle references August 2026 budget) and 'Projected Monthly Budget Cash Flow +$0' (subtitle 'Same as this month (no other budget history yet)'). HYPOTHETICAL CONTRIBUTION section is correctly hidden when hypo=0 and appears when hypo>0. End-to-end reconciliation verified live: setting a $5,000 one-time hypothetical → PROJECTED WEALTH updates to exactly $5,000, HYPO CONTRIBUTION section renders '$5,000 onetime +$5,000', Y1 rollup shows 'Starting Wealth $0 + Budget cash flow +$0 + Hypothetical contribution +$5,000 = Year 1 Ending Wealth $5,000', Y2 starts at 'Year 1 Ending Wealth $5,000' (year-to-year chain holds), and Y1..Y5 all end at $5,000 (correct — one-time hypo + zero cash flow). Manual addition matches the headline exactly. Hypothetical was reset to $0 as cleanup.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter66/05_homelogged.jpeg",
+    "/app/test_reports/screenshots/iter66/06_legacy.jpeg",
+    "/app/test_reports/screenshots/iter66/07_math_top.jpeg",
+    "/app/test_reports/screenshots/iter66/11_hypo_math.jpeg"
+  ],
+  "action_items": [
+    "None blocking. All spec items 1–11 for the BUILD reconciliation pass. Chart-tooltip delta text on BUILD (Y1..Y5 '+/- $X from today') could not be *visually* verified for the empty test account because all projection points equal each other (delta<0.5 is suppressed by ProjectionLineChart's guard). Optional: seed alex+test1@jaleter.app with a small cash balance + budget so BUILD points diverge YoY and the tooltip's delta line becomes observable.",
+    "Non-blocking observation: the 'PROJECTED MONTHLY BUDGET CASH FLOW' section always renders the 'Current budget net' header row PLUS the per-month contributor list. When allBudgetMonths.length === 1 the sub-list has exactly one entry ('Aug 2026 (this month) +$0') which is technically redundant with the header — reads a little repetitive but is spec-compliant. Consider suppressing the sub-list when only one month contributes (purely a copy polish, not a bug)."
+  ],
+  "critical_code_review_comments": [
+    "index.tsx buildBreakdown memo (L3568–L3624) is the single source of truth: months, runRate, runRateSlice, allBudgetMonths, startingCash, startingInvestments, startingWealth, hypo, yearSnaps, projectedMonthlyCashFlow all derive from ONE computation. Chart, headline card, tooltip and drill-down consume this same memo. No divergent math paths remain. Good.",
+    "index.tsx buildProjectionAt (L3626–L3640) uses perMonthNetFn directly; same rows source as buildBreakdown, so headline & chart cannot disagree with the drill-down.",
+    "index.tsx L3944–L3951: STARTING WEALTH renders Cash + Investments + Starting Wealth with a divider — matches spec. Verified in DOM.",
+    "index.tsx L3954–L3977: PROJECTED MONTHLY BUDGET CASH FLOW shows 'sum ÷ N = $X / mo' math ONLY when runRateSlice.length >= 2 (verified guard). Single-history case shows 'Current budget net' label — correct.",
+    "index.tsx L3980–L3998: MONTH-BY-MONTH table uses r.source === 'budgeted' ? 'Budget' : 'Estimated from budget avg' — exact strings match spec. Verified in DOM.",
+    "index.tsx L4001–L4015: HYPOTHETICAL CONTRIBUTION guarded by hypoActive = hypoValue > 0. Verified: absent at 0, present at 5000.",
+    "index.tsx L4017–L4034: YEAR-BY-YEAR uses y.year === 1 ? 'Starting Wealth' : `Year ${y.year - 1} Ending Wealth`. Month range label uses startIdx+1..endIdx+1 (1-indexed) — 1–12, 13–24, 25–36, 37–48, 49–60 verified in DOM. Ending Wealth of Y_n equals Starting Wealth of Y_{n+1} verified live ($5,000 → $5,000).",
+    "index.tsx L4099–L4141: WHAT WE'RE PROJECTING FROM (BUILD variant) renders Cash (from Wealth), Current Investments (held flat), This Month's Budget Cash Flow, Projected Monthly Budget Cash Flow — 4 rows with clear separator. Subtitle text 'Same as this month (no other budget history yet)' correctly reflects allBudgetMonths.length <= 1. Verified in DOM.",
+    "index.tsx L5582–L5697 legacyPerMonthNet correctly attaches runRate / runRateSlice / allBudgetMonths / currentBudgetNet to the returned rows array; per the change note, trailing current-year months WITHOUT overrides are NOT counted as budget months (only per-month overrides or per-year snapshots) — verified by reading budgetNetForMonth's hasMonthOverride branch (L5605–L5607, L5625).",
+    "No React Native deprecated imports introduced; no expo-av / expo-barcode-scanner / expo-background-fetch usage detected in the modified section."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend only)", "frontend": "11/11 spec items verified live (empty-budget account) + 1 spec item verified with $5,000 hypothetical seeded from UI. Tooltip delta text (item 9) verified via code path only; needs seed data to observe visually."},
+  "seed_data_creation": "Set legacy hypothetical to $5,000 one-time via the UI to prove the HYPOTHETICAL CONTRIBUTION section renders and the year-by-year chain reconciles; reset back to $0 after verification. No backend/DB seed created.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The buildBreakdown memo is the single source of truth for BUILD math. To visually verify tooltip delta text on BUILD Y1..Y5 ('+X from today'), seed alex+test1 with a non-zero starting cash or a non-zero budget month so projection points diverge (delta > 0.5). To verify the multi-history variant of PROJECTED MONTHLY BUDGET CASH FLOW ('sum ÷ N = $X / mo'), the user needs at least 2 explicit per-month budget overrides OR a per-year snapshot in the prior year — see legacyPerMonthNet L5619–L5633.",
+  "rca_of_issue": "No bugs reproduced. Original user complaint (Current Wealth $299,389 + $1,969 cash flow yielding Y1 $401,321) is architecturally impossible with the current code because chart / headline / drill-down / year-by-year all read from the same buildBreakdown memo; all monthly amounts are exposed with source labels and every year has a Start + Sum + Hypothetical = End rollup that users can add manually. Verified live via a $5,000 hypothetical: $0 + 0 + $5,000 = $5,000 across all 5 years."
+}
