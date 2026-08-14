@@ -1622,7 +1622,66 @@ async function exportTransactionsCsv(categories: Category[], incomeSources: any[
 }
 
 /* ---------------- Budget Screen ---------------- */
-const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSources, setIncomeSources, transactions, setTransactions, focusCategory, clearFocus, alerts, budgetYear, onSwitchYear, onCopyLastYear }: any) => {
+// Small picker row used inside the Reset-Budget confirmation sheet. Lets
+// the user switch between months (0–11) or years (currentYear-2 .. +5)
+// without leaving the sheet. Purely presentational — parent owns state.
+function YearMonthPickerRow({ kind, target, onChange, currentYear }: {
+  kind: 'month' | 'year';
+  target: { kind: 'month' | 'year'; year: number; monthIdx?: number };
+  onChange: (t: { kind: 'month' | 'year'; year: number; monthIdx?: number }) => void;
+  currentYear: number;
+}) {
+  const t = useThemed();
+  const years = [currentYear - 2, currentYear - 1, currentYear, currentYear + 1, currentYear + 2, currentYear + 3, currentYear + 4, currentYear + 5];
+  return (
+    <View style={{ marginTop: 4 }}>
+      {kind === 'month' && (
+        <View style={{ marginBottom: 10 }}>
+          <Text style={[{ fontSize: 10, fontWeight: '700', letterSpacing: 0.4, color: '#a97c39', marginBottom: 6 }]}>MONTH</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+            {MONTHS.map((m, idx) => {
+              const selected = target.monthIdx === idx;
+              return (
+                <Pressable
+                  key={m}
+                  onPress={() => onChange({ ...target, monthIdx: idx })}
+                  style={{
+                    paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8,
+                    borderWidth: 1, borderColor: selected ? '#b28a4c' : '#e6dcc5',
+                    backgroundColor: selected ? '#fbf6ec' : 'transparent',
+                  }}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: selected ? '800' : '600', color: selected ? '#8b6437' : '#7a6a4d' }}>{m}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      )}
+      <Text style={[{ fontSize: 10, fontWeight: '700', letterSpacing: 0.4, color: '#a97c39', marginBottom: 6 }]}>YEAR</Text>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+        {years.map((y) => {
+          const selected = target.year === y;
+          return (
+            <Pressable
+              key={y}
+              onPress={() => onChange({ ...target, year: y })}
+              style={{
+                paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8,
+                borderWidth: 1, borderColor: selected ? '#b28a4c' : '#e6dcc5',
+                backgroundColor: selected ? '#fbf6ec' : 'transparent',
+              }}
+            >
+              <Text style={{ fontSize: 11, fontWeight: selected ? '800' : '600', color: selected ? '#8b6437' : t.dark ? '#d9cfb6' : '#7a6a4d' }}>{y}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+const BudgetScreen = ({ categories, setCategories, categoriesByYear, setCategoriesByYear, incomeSources, setIncomeSources, transactions, setTransactions, focusCategory, clearFocus, alerts, budgetYear, finalizedBudgetMonths, setFinalizedBudgetMonths, onSwitchYear, onCopyLastYear }: any) => {
   const t = useThemed();
   const [period, setPeriod] = useState<string>(currentMonth());
   const [view, setView] = useState<'cards' | 'grid'>('cards');
@@ -1633,6 +1692,9 @@ const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSourc
   const [addingEarn, setAddingEarn] = useState(false);
   const [addingCategory, setAddingCategory] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  // Budget-options menu + reset-confirmation state.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [resetTarget, setResetTarget] = useState<{ kind: 'month' | 'year'; year: number; monthIdx?: number } | null>(null);
   const [newEarnName, setNewEarnName] = useState('');
   const [newCatName, setNewCatName] = useState('');
   const [newCatTagline, setNewCatTagline] = useState('');
@@ -1725,7 +1787,10 @@ const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSourc
           }
           return { ...sc, budgeted: perMonth, months: nextMonths };
         }
-        // Setting for a specific month → override that month only.
+        // Setting for a specific month → override that month only. The
+        // month becomes editable in the monthly view, but stays a DRAFT
+        // until the user explicitly taps "Finalize" — only finalized
+        // months feed BUILD.
         const months = { ...(sc.months || {}), [mIdx]: clean };
         return { ...sc, months };
       }),
@@ -1961,7 +2026,241 @@ const BudgetScreen = ({ categories, setCategories, categoriesByYear, incomeSourc
           <Ionicons name="download-outline" size={15} color="#9a6d32" />
           <Text style={s.budgetActionText}>Export</Text>
         </Pressable>
+        <Pressable style={s.budgetActionBtn} onPress={() => setSettingsOpen(true)} testID="budget-settings">
+          <Ionicons name="settings-outline" size={15} color="#9a6d32" />
+          <Text style={s.budgetActionText}>Options</Text>
+        </Pressable>
       </View>
+
+      {/* Draft / Finalized banner — monthly view only. Only Finalized months
+          feed BUILD's projection. Users toggle explicitly so nothing
+          slips into BUILD before they're ready. */}
+      {!annual && (() => {
+        const key = `${yr}-${mIdx}`;
+        const isFinalized = Array.isArray(finalizedBudgetMonths) && finalizedBudgetMonths.includes(key);
+        return (
+          <View style={{
+            marginTop: 8, padding: 12, borderRadius: 12, borderWidth: 1,
+            borderColor: isFinalized ? '#c9d9c1' : '#e6dcc5',
+            backgroundColor: isFinalized ? (t.dark ? '#1f2620' : '#f4f9ee') : (t.dark ? '#26221c' : '#fbf6ec'),
+            flexDirection: 'row', alignItems: 'center', gap: 12,
+          }}>
+            <View style={{ flex: 1 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <View style={{
+                  paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999,
+                  backgroundColor: isFinalized ? '#4c8b56' : '#8b6437',
+                }}>
+                  <Text style={{ fontSize: 9, fontWeight: '800', color: '#fff', letterSpacing: 0.6 }}>
+                    {isFinalized ? 'FINALIZED' : 'DRAFT'}
+                  </Text>
+                </View>
+                <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>{period} {yr}</Text>
+              </View>
+              <Text style={[{ fontSize: 10, marginTop: 4, lineHeight: 14 }, t.textMuted]}>
+                {isFinalized
+                  ? 'Feeding BUILD projections. Edits keep this month finalized until you switch back to Draft.'
+                  : 'Draft budgets do not feed BUILD. Finalize when you\u2019re done to include this month in the BUILD run rate.'}
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => {
+                if (!setFinalizedBudgetMonths) return;
+                if (isFinalized) {
+                  setFinalizedBudgetMonths((prev: string[]) => (prev || []).filter((k: string) => k !== key));
+                  setToast(`${period} ${yr} moved to Draft. BUILD updated.`);
+                } else {
+                  setFinalizedBudgetMonths((prev: string[]) => ((prev || []).includes(key) ? prev : [...(prev || []), key]));
+                  setToast(`${period} ${yr} finalized. BUILD updated.`);
+                }
+              }}
+              style={{
+                paddingVertical: 8, paddingHorizontal: 14, borderRadius: 10,
+                backgroundColor: isFinalized ? 'transparent' : '#9a6d32',
+                borderWidth: isFinalized ? 1 : 0,
+                borderColor: '#c9b98f',
+              }}
+              testID={isFinalized ? 'budget-set-draft' : 'budget-finalize'}
+            >
+              <Text style={{
+                fontSize: 11, fontWeight: '800',
+                color: isFinalized ? '#7a6a4d' : '#fff',
+              }}>
+                {isFinalized ? 'Return to Draft' : 'Finalize Budget'}
+              </Text>
+            </Pressable>
+          </View>
+        );
+      })()}
+      {/* Budget settings / options menu — houses destructive actions like
+          Reset Budget behind a menu (per user spec: keep it out of the
+          primary Budget screen surface). */}
+      <Sheet visible={settingsOpen} close={() => setSettingsOpen(false)} title="Budget Options" subtitle="Manage your budget data. Destructive actions require a second confirm.">
+        <View>
+          <Pressable
+            style={s.moreGridBtn}
+            onPress={() => {
+              setSettingsOpen(false);
+              setResetTarget({ kind: 'month', year: yr, monthIdx: annual ? new Date().getMonth() : mIdx });
+            }}
+            testID="budget-reset-month"
+          >
+            <View style={s.moreGridIcon}><Ionicons name="refresh-outline" size={20} color={C.goldEyebrow} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 12, fontWeight: '700' }}>Reset a Month</Text>
+              <Text style={{ fontSize: 9, color: C.muted2 }}>Clears budgeted income, expenses, and category amounts for one month. Transactions are preserved.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#aaa39a" />
+          </Pressable>
+          <Pressable
+            style={s.moreGridBtn}
+            onPress={() => {
+              setSettingsOpen(false);
+              setResetTarget({ kind: 'year', year: yr });
+            }}
+            testID="budget-reset-year"
+          >
+            <View style={s.moreGridIcon}><Ionicons name="calendar-outline" size={20} color={C.goldEyebrow} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 12, fontWeight: '700' }}>Reset a Full Year</Text>
+              <Text style={{ fontSize: 9, color: C.muted2 }}>Clears all budget data for a full calendar year. Transactions, accounts, and other years are preserved.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#aaa39a" />
+          </Pressable>
+        </View>
+      </Sheet>
+
+      {/* Reset confirmation sheet — one sheet handles both month and year
+          resets with slightly different copy. */}
+      <Sheet visible={!!resetTarget} close={() => setResetTarget(null)} title={
+        resetTarget?.kind === 'year'
+          ? 'Reset Year Budget?'
+          : (resetTarget ? `Reset ${MONTHS[resetTarget.monthIdx ?? 0]} ${resetTarget.year} Budget?` : '')
+      } subtitle={undefined}>
+        {resetTarget && (
+          <View>
+            <YearMonthPickerRow
+              kind={resetTarget.kind}
+              target={resetTarget}
+              onChange={setResetTarget}
+              currentYear={yr}
+            />
+            <Text style={[{ fontSize: 12, marginTop: 10, lineHeight: 17 }, t.textInk]}>
+              {resetTarget.kind === 'year'
+                ? `This will remove all budget data for January–December ${resetTarget.year}.`
+                : `This will remove the budgeted income, expenses, categories/amounts, and other budget entries for ${MONTHS[resetTarget.monthIdx ?? 0]} ${resetTarget.year}.`}
+            </Text>
+            <Text style={[{ fontSize: 10, marginTop: 8, lineHeight: 14 }, t.textMuted]}>
+              Preserved: transactions, accounts, wealth balances{resetTarget.kind === 'year' ? ', other years' : ", other months' budgets"}, and BUILD projections (which will automatically recompute from your remaining budget months).
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+              <Pressable
+                style={{ flex: 1, borderWidth: 1, borderColor: '#d9cfb6', borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}
+                onPress={() => setResetTarget(null)}
+                testID="budget-reset-cancel"
+              >
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#7a6a4d' }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={{ flex: 1, backgroundColor: '#b0453d', borderRadius: 10, paddingVertical: 12, alignItems: 'center' }}
+                onPress={() => {
+                  if (!resetTarget) return;
+                  if (resetTarget.kind === 'month') {
+                    const targetY = resetTarget.year;
+                    const targetM = resetTarget.monthIdx ?? 0;
+                    // Clear per-month overrides on expenses for the CURRENT
+                    // budget year (this is what the user sees in `categories`).
+                    if (targetY === yr) {
+                      setCategories((prev: Category[]) => prev.map((c) => ({
+                        ...c,
+                        subcategories: c.subcategories.map((sub: any) => {
+                          if (!sub?.months || sub.months[targetM] === undefined) return sub;
+                          const next = { ...sub.months };
+                          delete next[targetM];
+                          return { ...sub, months: Object.keys(next).length ? next : undefined };
+                        }),
+                      })));
+                    }
+                    // Also clear any snapshot for that year (if the year
+                    // isn't the current budget year, e.g., 2027 while
+                    // budgeting 2026).
+                    if (setCategoriesByYear) {
+                      setCategoriesByYear((prev: any) => {
+                        const key = String(targetY);
+                        if (!prev || !prev[key]) return prev;
+                        return {
+                          ...prev,
+                          [key]: prev[key].map((c: any) => ({
+                            ...c,
+                            subcategories: (c.subcategories || []).map((sub: any) => {
+                              if (!sub?.months || sub.months[targetM] === undefined) return sub;
+                              const next = { ...sub.months };
+                              delete next[targetM];
+                              return { ...sub, months: Object.keys(next).length ? next : undefined };
+                            }),
+                          })),
+                        };
+                      });
+                    }
+                    // Clear income sources' per-month override for that month.
+                    setIncomeSources((prev: any[]) => prev.map((x: any) => {
+                      if (!x?.months || x.months[targetM] === undefined) return x;
+                      const next = { ...x.months };
+                      delete next[targetM];
+                      return { ...x, months: Object.keys(next).length ? next : undefined };
+                    }));
+                    // Drop the month from finalizedBudgetMonths.
+                    if (setFinalizedBudgetMonths) {
+                      const dropKey = `${targetY}-${targetM}`;
+                      setFinalizedBudgetMonths((prev: string[]) => (prev || []).filter((k: string) => k !== dropKey));
+                    }
+                    setToast(`${MONTHS[targetM]} ${targetY} budget reset.`);
+                  } else {
+                    // Reset a full year.
+                    const targetY = resetTarget.year;
+                    if (targetY === yr) {
+                      // Clear amounts on the current-year categories in place
+                      // (keeps user-defined structure intact).
+                      setCategories((prev: Category[]) => prev.map((c) => ({
+                        ...c,
+                        subcategories: c.subcategories.map((sub: any) => ({ ...sub, budgeted: 0, months: undefined })),
+                      })));
+                      // Clear income-source month overrides (base `budgeted`
+                      // is left alone because income sources are shared
+                      // across years today — clearing base would affect
+                      // other years too).
+                      setIncomeSources((prev: any[]) => prev.map((x: any) => ({ ...x, months: undefined })));
+                    }
+                    // Delete any per-year snapshot for that year.
+                    if (setCategoriesByYear) {
+                      setCategoriesByYear((prev: any) => {
+                        if (!prev || !prev[String(targetY)]) return prev;
+                        const next = { ...prev };
+                        delete next[String(targetY)];
+                        return next;
+                      });
+                    }
+                    // Drop every "targetY-*" from finalizedBudgetMonths.
+                    if (setFinalizedBudgetMonths) {
+                      setFinalizedBudgetMonths((prev: string[]) => (prev || []).filter((k: string) => {
+                        const [ky] = String(k).split('-');
+                        return Number(ky) !== targetY;
+                      }));
+                    }
+                    setToast(`${targetY} budget reset.`);
+                  }
+                  setResetTarget(null);
+                }}
+                testID="budget-reset-confirm"
+              >
+                <Text style={{ fontSize: 13, fontWeight: '800', color: '#fff' }}>
+                  {resetTarget.kind === 'year' ? `Reset ${resetTarget.year}` : `Reset ${MONTHS[resetTarget.monthIdx ?? 0]} ${resetTarget.year}`}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+      </Sheet>
       <Sheet visible={exportMenuOpen} close={() => setExportMenuOpen(false)} title="Export" subtitle="Choose a format. All numbers come from your current Budget + Transactions.">
         <View>
           <Pressable style={s.moreGridBtn} onPress={async () => { setExportMenuOpen(false); await exportBudgetXlsx(categories, incomeSources, transactions, setToast); }} testID="export-workbook">
@@ -3952,29 +4251,38 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
 
                   {/* --- Projected monthly cash flow (aka run rate) --- */}
                   <Text style={[{ fontSize: 10, fontWeight: '800', color: '#a97c39', letterSpacing: 1, marginTop: 16 }]}>PROJECTED MONTHLY BUDGET CASH FLOW</Text>
-                  <View style={{ marginTop: 6, gap: 4 }}>
-                    <Row
-                      label={bd.allBudgetMonths.length <= 1 ? 'Current budget net' : `Average of last ${Math.min(bd.runRateSlice.length, 12)} budget month${bd.runRateSlice.length === 1 ? '' : 's'}`}
-                      value={`${bd.projectedMonthlyCashFlow >= 0 ? '+' : '−'}${MONEY(Math.abs(Math.round(bd.projectedMonthlyCashFlow)))}`}
-                      muted={t.textMuted} ink={t.textInk}
-                      valueColor={bd.projectedMonthlyCashFlow >= 0 ? '#4c8b56' : '#b0453d'}
-                    />
-                    {bd.runRateSlice.length > 0 && (
-                      <View style={{ marginTop: 4, gap: 3, paddingLeft: 8, borderLeftWidth: 2, borderLeftColor: '#e6dcc5' }}>
-                        {bd.runRateSlice.map((rs: any, idx: number) => (
-                          <View key={`rr-${idx}-${rs.ym}`} style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                            <Text style={[{ fontSize: 9 }, t.textMuted]}>{rs.label}</Text>
-                            <Text style={[{ fontSize: 9, fontWeight: '600' }, t.textInk]}>{rs.net >= 0 ? '+' : '−'}{MONEY(Math.abs(rs.net))}</Text>
-                          </View>
-                        ))}
-                        {bd.runRateSlice.length >= 2 && (
-                          <Text style={[{ fontSize: 9, marginTop: 2, fontStyle: 'italic' }, t.textMuted]}>
-                            (sum ÷ {bd.runRateSlice.length}) = {bd.projectedMonthlyCashFlow >= 0 ? '+' : '−'}{MONEY(Math.abs(Math.round(bd.projectedMonthlyCashFlow)))} / mo
-                          </Text>
-                        )}
-                      </View>
-                    )}
-                  </View>
+                  {bd.allBudgetMonths.length === 0 ? (
+                    <View style={{ marginTop: 6, padding: 10, borderRadius: 10, borderWidth: 1, borderColor: '#e6dcc5', backgroundColor: t.dark ? '#26221c' : '#fbf6ec' }}>
+                      <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>No finalized budgets yet</Text>
+                      <Text style={[{ fontSize: 10, marginTop: 4, lineHeight: 14 }, t.textMuted]}>
+                        BUILD needs at least one finalized monthly budget to project forward. Head to Budget → pick a month → tap <Text style={{ fontWeight: '800' }}>Finalize Budget</Text>. Draft budgets are ignored.
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={{ marginTop: 6, gap: 4 }}>
+                      <Row
+                        label={bd.allBudgetMonths.length === 0 ? 'No finalized budget yet' : bd.allBudgetMonths.length === 1 ? `From ${bd.allBudgetMonths[0].label}` : `Average of ${bd.runRateSlice.length} finalized budget month${bd.runRateSlice.length === 1 ? '' : 's'}`}
+                        value={`${bd.projectedMonthlyCashFlow >= 0 ? '+' : '−'}${MONEY(Math.abs(Math.round(bd.projectedMonthlyCashFlow)))}`}
+                        muted={t.textMuted} ink={t.textInk}
+                        valueColor={bd.projectedMonthlyCashFlow >= 0 ? '#4c8b56' : '#b0453d'}
+                      />
+                      {bd.runRateSlice.length > 0 && (
+                        <View style={{ marginTop: 4, gap: 3, paddingLeft: 8, borderLeftWidth: 2, borderLeftColor: '#e6dcc5' }}>
+                          {bd.runRateSlice.map((rs: any, idx: number) => (
+                            <View key={`rr-${idx}-${rs.ym}`} style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                              <Text style={[{ fontSize: 9 }, t.textMuted]}>{rs.label}</Text>
+                              <Text style={[{ fontSize: 9, fontWeight: '600' }, t.textInk]}>{rs.net >= 0 ? '+' : '−'}{MONEY(Math.abs(rs.net))}</Text>
+                            </View>
+                          ))}
+                          {bd.runRateSlice.length >= 2 && (
+                            <Text style={[{ fontSize: 9, marginTop: 2, fontStyle: 'italic' }, t.textMuted]}>
+                              (sum ÷ {bd.runRateSlice.length}) = {bd.projectedMonthlyCashFlow >= 0 ? '+' : '−'}{MONEY(Math.abs(Math.round(bd.projectedMonthlyCashFlow)))} / mo
+                            </Text>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  )}
 
                   {/* --- Month by month projection --- */}
                   <Text style={[{ fontSize: 10, fontWeight: '800', color: '#a97c39', letterSpacing: 1, marginTop: 16 }]}>MONTH-BY-MONTH</Text>
@@ -3991,7 +4299,7 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
                           {(r.net || 0) >= 0 ? '+' : '−'}{MONEY(Math.abs(r.net || 0))}
                         </Text>
                         <Text style={[{ flex: 2, fontSize: 9, textAlign: 'right' }, t.textMuted]}>
-                          {r.source === 'budgeted' ? 'Budget' : 'Estimated from budget avg'}
+                          {r.source === 'budgeted' ? 'Finalized budget' : 'Estimated from budget average'}
                         </Text>
                       </View>
                     ))}
@@ -4124,9 +4432,11 @@ const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalRestrict
                 <View style={{ flex: 1 }}>
                   <Text style={[{ fontSize: 11, fontWeight: '600' }, t.textInk]}>Projected Monthly Budget Cash Flow</Text>
                   <Text style={[{ fontSize: 8, marginTop: 2 }, t.textMuted]}>
-                    {buildBreakdown.allBudgetMonths.length <= 1
-                      ? 'Same as this month (no other budget history yet)'
-                      : `Average of ${buildBreakdown.runRateSlice.length} budget month${buildBreakdown.runRateSlice.length === 1 ? '' : 's'} — see math below`}
+                    {buildBreakdown.allBudgetMonths.length === 0
+                      ? 'Finalize a monthly budget to start projecting BUILD.'
+                      : buildBreakdown.allBudgetMonths.length === 1
+                        ? `From ${buildBreakdown.allBudgetMonths[0].label}`
+                        : `Average of ${buildBreakdown.runRateSlice.length} finalized budget month${buildBreakdown.runRateSlice.length === 1 ? '' : 's'} — see math below`}
                   </Text>
                 </View>
                 <Text style={{ fontSize: 12, fontWeight: '800', color: buildBreakdown.runRate < 0 ? '#b0453d' : '#9a6d32' }}>
@@ -5090,6 +5400,14 @@ function MainApp() {
   const _currentYear = new Date().getFullYear();
   const [budgetYear, setBudgetYear] = useState<number>(_currentYear);
   const [categoriesByYear, setCategoriesByYear] = useState<Record<string, any[]>>({});
+  // Tracks which months the user has explicitly SAVED a budget for. Keys
+  // are "YYYY-M" (M is 0-indexed). Only months in this set are treated as
+  // "real budget months" for BUILD's run-rate / trailing-average — annual
+  // budget spreads and per-year snapshot copies do NOT auto-add months
+  // to this set. Users add months by editing a specific month in the
+  // Budget monthly view, or by using "Copy last year". Users can remove
+  // months via the Reset Budget menu (Reset Month / Reset Year).
+  const [finalizedBudgetMonths, setFinalizedBudgetMonths] = useState<string[]>([]);
   const [incomeSources, setIncomeSources] = useState(initialIncome);
   const [restrictedBuckets, setRestrictedBuckets] = useState<Array<{ id: string; name: string; amount: number }>>([]);
   const [transactions, setTransactions] = useState<Tx[]>(initialTx);
@@ -5176,6 +5494,8 @@ function MainApp() {
           if (typeof data.retirementAge === 'number') setRetirementAge(data.retirementAge);
           if (typeof data.budgetYear === 'number') setBudgetYear(data.budgetYear);
           if (data.categoriesByYear && typeof data.categoriesByYear === 'object') setCategoriesByYear(data.categoriesByYear);
+          if (Array.isArray(data.finalizedBudgetMonths)) setFinalizedBudgetMonths(data.finalizedBudgetMonths.filter((k: any) => typeof k === 'string'));
+          else if (Array.isArray(data.savedBudgetMonths)) setFinalizedBudgetMonths(data.savedBudgetMonths.filter((k: any) => typeof k === 'string'));
         }
       } catch {}
       setHydrated(true);
@@ -5184,8 +5504,8 @@ function MainApp() {
   // Persist on change (skip auth-managed fields)
   useEffect(() => {
     if (!hydrated) return;
-    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyHypoFrequency, legacyHypoDuration, legacyCumulative, legacyReturnRate, budgetYear, categoriesByYear, currentAge, retirementAge })).catch(() => {});
-  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyHypoFrequency, legacyHypoDuration, legacyCumulative, legacyReturnRate, budgetYear, categoriesByYear, currentAge, retirementAge]);
+    storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyHypoFrequency, legacyHypoDuration, legacyCumulative, legacyReturnRate, budgetYear, categoriesByYear, finalizedBudgetMonths, currentAge, retirementAge })).catch(() => {});
+  }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyHypoFrequency, legacyHypoDuration, legacyCumulative, legacyReturnRate, budgetYear, categoriesByYear, finalizedBudgetMonths, currentAge, retirementAge]);
 
   // Listen for SnapTrade OAuth callback deep link (jaleter://snaptrade-callback).
   useEffect(() => {
@@ -5584,14 +5904,13 @@ function MainApp() {
     const now = new Date();
     const startY = now.getFullYear();
     const startM = now.getMonth();
+    const savedSet = new Set<string>(finalizedBudgetMonths);
 
-    // ---- Helper: compute the budget net for (year, monthIdx) taking into
-    // account per-year snapshots (`categoriesByYear`) and per-month
-    // line-item overrides (`x.months[m]`). Returns both the net and a
-    // flag indicating whether the user has ANY month-specific override
-    // for that (year, monthIdx) — the flag drives "budgeted" vs
-    // "estimated" labeling in the UI.
-    const budgetNetForMonth = (y: number, m: number): { net: number; hasMonthOverride: boolean } => {
+    // Compute the net for (year, monthIdx) purely from category /
+    // income-source data. This function does NOT decide whether the
+    // month is "budgeted" vs "estimated" — that's the caller's job
+    // via the `finalizedBudgetMonths` set.
+    const budgetNetForMonth = (y: number, m: number): number => {
       const cats = ((categoriesByYear as any) && (categoriesByYear as any)[String(y)]) || categories;
       const srcs = incomeSources;
       const income = srcs.reduce((s: number, x: any) => {
@@ -5602,58 +5921,78 @@ function MainApp() {
         const o = x?.months && x.months[m];
         return s + (typeof o === 'number' ? o : (Number(x?.budgeted) || 0));
       }, 0);
-      const hasMonthOverride =
-        cats.some((c: any) => c?.subcategories?.some((sub: any) => sub?.months && sub.months[m] !== undefined && sub.months[m] !== null)) ||
-        srcs.some((sr: any) => sr?.months && sr.months[m] !== undefined && sr.months[m] !== null);
-      return { net: income - expense, hasMonthOverride };
+      return income - expense;
     };
 
-    // ---- Collect the trailing history of "budget months" for the run rate.
-    // A month counts as a budget month if the user has entered explicit
-    // month-level overrides for it OR belongs to a year with a per-year
-    // snapshot. We deliberately DO NOT count "current-year, no overrides"
-    // months as separate budget months — they all share the same annual
-    // budget, so the current month itself is the single representative.
-    // Walk backwards up to 24 months to gather any explicit budget months.
-    const runRateSourceMonths: { ym: string; label: string; net: number; source: 'override' | 'snapshot' }[] = [];
-    for (let i = 1; i <= 24; i++) {
+    // ---- Build the trailing history of ACTUAL saved budget months. Only
+    // months in `finalizedBudgetMonths` count — annual defaults, unsaved
+    // future months, and per-year snapshots without per-month edits are
+    // deliberately excluded so the run rate reflects real, user-declared
+    // budgets only.
+    const allBudgetMonths: { ym: string; label: string; net: number; year: number; monthIdx: number }[] = [];
+    // Walk back 60 months (5yr) to gather any saved budget months.
+    for (let i = 0; i <= 60; i++) {
       const d = new Date(startY, startM - i, 1);
       const y = d.getFullYear();
       const m = d.getMonth();
-      const yearHasSnapshot = !!(categoriesByYear as any)?.[String(y)];
-      const { net, hasMonthOverride } = budgetNetForMonth(y, m);
-      if (hasMonthOverride || yearHasSnapshot) {
-        runRateSourceMonths.push({
-          ym: `${y}-${m}`,
-          label: `${MONTHS[m]} ${y}`,
-          net,
-          source: hasMonthOverride ? 'override' : 'snapshot',
+      const key = `${y}-${m}`;
+      if (savedSet.has(key)) {
+        allBudgetMonths.push({
+          ym: key,
+          label: `${MONTHS[m]} ${y}${i === 0 ? ' (this month)' : ''}`,
+          net: budgetNetForMonth(y, m),
+          year: y,
+          monthIdx: m,
         });
       }
     }
-    // Always seed with the current-month budget so brand-new budgets have
-    // a starting data point. Kept as the "current" entry (index 0). This
-    // is the same $ that the "Monthly Budget Cash Flow" chip shows.
-    const currentBudget = budgetNetForMonth(startY, startM);
-    const currentMonthEntry = {
-      ym: `${startY}-${startM}`,
-      label: `${MONTHS[startM]} ${startY} (this month)`,
-      net: currentBudget.net,
-      source: (currentBudget.hasMonthOverride ? 'override' : 'annual-default') as 'override' | 'snapshot' | 'annual-default',
-    };
-    // Ordered newest → oldest: [currentMonth, i=1, i=2, …]
-    const allBudgetMonths = [currentMonthEntry as any, ...runRateSourceMonths];
+    // Also walk forward up to 60 months in case the user has saved
+    // budgets for future months — those count as saved-budget history
+    // for run-rate purposes, but are ordered newest-first (most recent
+    // saved months first) so the "recent 3" slice picks up the freshest.
+    const forwardSaved: { ym: string; label: string; net: number; year: number; monthIdx: number }[] = [];
+    for (let i = 1; i <= 60; i++) {
+      const d = new Date(startY, startM + i, 1);
+      const y = d.getFullYear();
+      const m = d.getMonth();
+      const key = `${y}-${m}`;
+      if (savedSet.has(key)) {
+        forwardSaved.push({
+          ym: key,
+          label: `${MONTHS[m]} ${y}`,
+          net: budgetNetForMonth(y, m),
+          year: y,
+          monthIdx: m,
+        });
+      }
+    }
+    // Merge: [...forwardSaved (soonest first), ...allBudgetMonths (this
+    // month first, then trailing)]. Sort by proximity to "now" desc so
+    // the newest saved budget appears first regardless of past/future.
+    const merged = [...allBudgetMonths, ...forwardSaved]
+      .sort((a, b) => {
+        const da = (a.year - startY) * 12 + (a.monthIdx - startM);
+        const db = (b.year - startY) * 12 + (b.monthIdx - startM);
+        // Order: current month, then closest future, then closest past.
+        return Math.abs(da) - Math.abs(db);
+      });
 
-    // Compute the run rate. Uses the standard 1 / 2 / 3-of-N / 12-of-N rule.
-    const n = allBudgetMonths.length;
+    // ---- Compute the run rate from the trailing saved budget months.
+    //   • 0 real budget months → 0 (BUILD projects Starting Wealth flat)
+    //   • 1                    → use it
+    //   • 2                    → average
+    //   • 3–11                 → average of most recent 3
+    //   • 12+                  → average of most recent 12
+    const n = merged.length;
     let take: number;
-    if (n <= 1) take = 1;
+    if (n === 0) take = 0;
+    else if (n === 1) take = 1;
     else if (n === 2) take = 2;
     else if (n < 12) take = 3;
     else take = 12;
-    const runRateSlice = allBudgetMonths.slice(0, Math.min(take, n));
+    const runRateSlice = merged.slice(0, take);
     const runRate = runRateSlice.length > 0
-      ? runRateSlice.reduce((a: number, b: any) => a + b.net, 0) / runRateSlice.length
+      ? runRateSlice.reduce((a, b) => a + b.net, 0) / runRateSlice.length
       : 0;
 
     // ---- Project each future month.
@@ -5664,37 +6003,28 @@ function MainApp() {
       const label = `${MONTHS[m]} ${y}`;
       const key = `${y}-${m}`;
 
-      const { net: monthBudgetNet, hasMonthOverride } = budgetNetForMonth(y, m);
-      const yearHasSnapshot = !!(categoriesByYear as any)?.[String(y)];
-
       let net: number;
       let source: 'budgeted' | 'estimated';
-      if (i === 0) {
-        // Current month always uses the current budget for that month
-        // (respecting any month-specific overrides on income / expense
-        // line items, or a per-year snapshot).
-        net = monthBudgetNet;
-        source = 'budgeted';
-      } else if (hasMonthOverride || yearHasSnapshot) {
-        // Future month with its own explicit budget.
-        net = monthBudgetNet;
+      if (savedSet.has(key)) {
+        // Real user-saved budget for this month.
+        net = budgetNetForMonth(y, m);
         source = 'budgeted';
       } else {
-        // Unbudgeted future month → apply the run rate.
+        // No real budget → estimate from the run rate.
         net = runRate;
         source = 'estimated';
       }
       rows.push({ month: i + 1, net, source, ym: key, label, year: y, monthIdx: m });
     }
-    // Expose the projection rows AND the run-rate metadata so the drill
-    // -down UI can render both. Read as `.rows` for the array; the extra
-    // metadata lives on the same object.
+    // Expose metadata alongside the array so the drill-down UI can render
+    // the exact contributing months and the resulting run rate.
     (rows as any).runRate = runRate;
     (rows as any).runRateSlice = runRateSlice;
-    (rows as any).allBudgetMonths = allBudgetMonths;
-    (rows as any).currentBudgetNet = currentBudget.net;
+    (rows as any).allBudgetMonths = merged;
+    (rows as any).currentBudgetNet = budgetNetForMonth(startY, startM);
+    (rows as any).finalizedBudgetMonthCount = merged.length;
     return rows as any;
-  }, [categoriesByYear, categories, incomeSources]);
+  }, [categoriesByYear, categories, incomeSources, finalizedBudgetMonths]);
   // Human-readable source period for the Legacy → Monthly Surplus drill-down.
   // Uses the currently-selected budget year + the real calendar month so the
   // label reads e.g. "August 2026 budget".
@@ -5753,7 +6083,7 @@ function MainApp() {
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
           <EmailVerificationBanner isDark={isDark} />
           {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} totalCash={totalCash} availableCash={availableCash} monthlyNet={monthlyNet} legacyContribution={legacyContribution} legacyHypothetical={legacyHypothetical} legacyHypoFrequency={legacyHypoFrequency} legacyHypoDuration={legacyHypoDuration} legacyReturnRate={legacyReturnRate} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} financialsReady={financialsReady} />}
-          {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} categoriesByYear={categoriesByYear} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} setTransactions={setTransactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} budgetYear={budgetYear} onSwitchYear={switchBudgetYear} onCopyLastYear={(prevYear: number) => {
+          {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} categoriesByYear={categoriesByYear} setCategoriesByYear={setCategoriesByYear} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} setTransactions={setTransactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} budgetYear={budgetYear} finalizedBudgetMonths={finalizedBudgetMonths} setFinalizedBudgetMonths={setFinalizedBudgetMonths} onSwitchYear={switchBudgetYear} onCopyLastYear={(prevYear: number) => {
             // "Copy last year" — deep-copies categories + planned amounts (per-
             // month figures inside subcategories.monthly + the base .budgeted
             // value) but strips any actual transactions. Categories that only

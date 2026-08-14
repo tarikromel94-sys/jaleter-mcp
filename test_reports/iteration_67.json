@@ -1,0 +1,43 @@
+{
+  "summary": "Frontend testing for the 3-part Budget / BUILD update (fallback rules, Draft/Finalized status, Reset Budget). Live browser interaction was blocked by the same Expo srcdoc iframe detach + Metro websocket 'Disconnected from Metro (1006)' issue flagged in the iteration-67 request: I could load the landing page and reach the Login form, but submitting the Log-in button caused the srcdoc iframe to detach and immediately re-attach as a new frame with no text yet available; Playwright's frame_locator('iframe').content_frame did not resolve into the srcdoc either. Four different acquisition strategies were attempted (page.locator auto-cross, frame_locator, direct page.frames iteration + evaluate with retry, native input setter + dispatchEvent). Each attempt reached the login form and successfully filled credentials, but the post-login home never rendered inside a queryable frame before Metro dropped the socket. Given the loop-prevention rule, I stopped after 4 attempts and completed the review via source code inspection. All 13 spec items pass code review against /app/frontend/app/index.tsx.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Playwright UI harness", "issue": "Expo srcdoc iframe detaches on route change AND Metro websocket disconnects during our automation session ('Disconnected from Metro (1006)'). Neither page.frame_locator('iframe') nor page.frames iteration re-resolves the swapped frame reliably. This is an automation-only issue — real users are unaffected. Recommend testing in headed mode or after a Metro warm-up run. Reference: /app/test_reports/iteration_67.json context_for_next_testing_agent.", "affected_testIDs": []}
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter67/00_landing.jpeg",
+    "/app/test_reports/screenshots/iter67/01_login_form.jpeg"
+  ],
+  "action_items": [
+    "Main agent: consider self-testing the Budget → Options → Reset flow and the Draft/Finalize toggle in a browser session. Playwright automation is blocked by an Expo/Metro environment issue, not a code bug. Code review confirms all 13 spec items are implemented correctly (see critical_code_review_comments).",
+    "Optional polish: the empty-state hint currently splits into a bold title 'No finalized budgets yet' + body 'BUILD needs at least one finalized monthly budget to project forward. Head to Budget → pick a month → tap Finalize Budget. Draft budgets are ignored.' The row inside 'WHAT WE\u2019RE PROJECTING FROM' shows subtitle 'Finalize a monthly budget to start projecting BUILD.' Together these satisfy the spec (empty state + hint) but if a single verbatim 'No finalized budgets yet — Finalize a monthly budget to start projecting BUILD.' string is required in one place, consider concatenating in the empty-state <View> at line 4256."
+  ],
+  "critical_code_review_comments": [
+    "SPEC 1 (fallback rules) — index.tsx L5986–L5995: n=0 → take=0; n=1 → take=1; n=2 → take=2; n<12 → take=3; else take=12. Exactly matches the spec. runRate = mean(runRateSlice) which is used as the projected-monthly-cash-flow for any month not in finalizedBudgetMonths.",
+    "SPEC 1 (BUILD does NOT require prior budget history) — index.tsx L5988 explicitly handles n===1 → take=1, so a single finalized month drives the projection immediately. Verified by tracing: budgetNetForMonth(y,m) is computed at L5913 from the current categories/incomeSources; if the month key is in savedSet, its net enters runRateSlice.",
+    "SPEC 2 (Draft/Finalized banner) — index.tsx L2038–L2094 renders only when !annual (monthly view). Pill uses green (#4c8b56) when isFinalized, amber (#8b6437) when draft. Button copy is exactly 'Finalize Budget' or 'Return to Draft' (L2089). testIDs 'budget-finalize' / 'budget-set-draft' present (L2083).",
+    "SPEC 2 (Year view hides banner) — the entire banner block is wrapped in `{!annual && (() => { ... })()}` at L2038 — verified.",
+    "SPEC 2 (editing does NOT auto-finalize) — commitEdit at L1772–L1800 no longer pushes `${yr}-${mIdx}` into finalizedBudgetMonths; the trailing comment at L1791–L1793 states 'stays a DRAFT until the user explicitly taps Finalize'. Only the setFinalizedBudgetMonths calls in the banner (L2070, L2073) mutate the set.",
+    "SPEC 2 (toast) — L2074: `${period} ${yr} finalized. BUILD updated.` matches spec verbatim. L2071 unfinalize toast: `${period} ${yr} moved to Draft. BUILD updated.`",
+    "SPEC 2 (persistence across reload) — L5507 persists `finalizedBudgetMonths` into storage; L5497–L5498 hydrates it AND migrates the legacy `savedBudgetMonths` key (backwards-compat).",
+    "SPEC 2 (BUILD auto-recalculates) — legacyPerMonthNet depends on `finalizedBudgetMonths` (L6027 dependency array) → useCallback re-creates on change → LegacyScreen re-derives buildBreakdown → chart, headline, month-by-month all update.",
+    "SPEC 3 (Options button) — L2029–L2032 renders a 3rd budgetActionBtn 'Options' with testID 'budget-settings' alongside Add Category + Export.",
+    "SPEC 3 (Options menu) — L2098–L2131 Sheet titled 'Budget Options' with two moreGridBtn rows: 'Reset a Month' (testID budget-reset-month, L2106) and 'Reset a Full Year' (testID budget-reset-year, L2121).",
+    "SPEC 3 (Reset sheet copy) — L2148–L2155 renders the exact spec strings: year → 'This will remove all budget data for January\u2013December ${resetTarget.year}.'; month → 'This will remove the budgeted income, expenses, categories/amounts, and other budget entries for ${MONTHS[m]} ${y}.' Includes a preserved-list line.",
+    "SPEC 3 (Reset actions) — L2166–L2252: month reset clears per-month overrides in categories + categoriesByYear[year] + incomeSources.months[m], then drops `${targetY}-${targetM}` from finalizedBudgetMonths (L2213–L2216). Year reset clears ALL months, deletes categoriesByYear[year], and drops every finalizedBudgetMonths entry whose year matches (L2244–L2249). Transactions/linkedAccounts/wealth are untouched — verified.",
+    "BUILD copy strings — L4302: `r.source === 'budgeted' ? 'Finalized budget' : 'Estimated from budget average'` exactly matches spec. L4256: 'No finalized budgets yet'. L4258: 'BUILD needs at least one finalized monthly budget… tap Finalize Budget.' L4436: 'Finalize a monthly budget to start projecting BUILD.' L4264/L4439 subtitle uses 'finalized budget month(s)'.",
+    "No deprecated Expo packages introduced (no expo-av / expo-barcode-scanner / expo-background-fetch usage in modified sections). No new SafeAreaView issues. No sync IO in modified code."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only review)", "frontend": "13/13 spec items verified via code review. 0/13 verified via live click-through due to Metro/iframe automation issue (see integration_issues)."},
+  "seed_data_creation": "None. No live UI interaction beyond reaching the login form.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Automation limitation observed: page.frame_locator('iframe').content_frame does NOT auto-resolve into Expo's about:srcdoc iframe on this environment. page.frames iteration + fr.evaluate() works before login but the srcdoc frame DETACHES on the login submit navigation and Playwright's frame handle becomes invalid. Combined with intermittent Metro websocket disconnects ('Disconnected from Metro (1006)'), the post-login DOM cannot be queried reliably. Workarounds to try next iteration: (a) run in HEADED mode so Metro stays warm; (b) use `context.on('framenavigated')` to re-acquire the srcdoc frame after login; (c) call `sudo supervisorctl restart expo` before starting the run to reset Metro; (d) bypass login by injecting a valid JWT into expo-secure-store (localStorage key `jaleter_auth_token`) then navigate directly to /budget. All 13 spec items are already verified by static code review — this is purely a live-click verification gap.",
+  "rca_of_issue": "N/A — no application bugs found. The blocker is a Playwright/Expo/Metro automation issue previously flagged in the iteration-67 request note. Code review passes all 13 items."
+}
