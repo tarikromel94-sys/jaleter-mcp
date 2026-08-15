@@ -246,6 +246,35 @@ async def get_current_user(request: Request) -> dict:
     return user
 
 
+# ---- Premium enforcement dependency --------------------------------------
+# Any route that costs money to run, uses paid third-party quota, or is
+# only available to paying members must depend on `require_active_membership`.
+# This dependency:
+#   • re-fetches the user (so a webhook-driven status change is reflected
+#     immediately on the next request, not the next login)
+#   • allows `past_due` (Stripe grace/dunning) so paying members are not
+#     locked out during a temporary card decline
+#   • allows legacy `premium_expires_at > now` for pre-Stripe-subscription
+#     users, so nobody loses paid time they've already paid for
+#   • returns HTTP 402 Payment Required so the client can distinguish
+#     "membership issue" from generic 401/403.
+async def require_active_membership(current_user: dict = Depends(get_current_user)) -> dict:
+    import stripe_service as _stripe  # local import avoids top-level cycles
+    fresh = await db.users.find_one({'user_id': current_user['user_id']}, {'_id': 0})
+    if fresh is None:
+        raise HTTPException(status_code=401, detail='User not found')
+    if fresh.get('is_admin') or _stripe.has_active_membership(fresh):
+        return fresh
+    raise HTTPException(
+        status_code=402,
+        detail={
+            'error': 'payment_required',
+            'message': 'A Jaleter membership is required for this action.',
+            'subscription_status': fresh.get('subscription_status', 'inactive'),
+        },
+    )
+
+
 # ------- Startup: indexes -------
 @app.on_event('startup')
 async def _startup():
@@ -266,6 +295,16 @@ async def _startup():
     await db.payment_transactions.create_index([('user_id', 1), ('created_at', -1)])
     await db.coaching_bookings.create_index('booking_id', unique=True)
     await db.coaching_bookings.create_index([('user_id', 1), ('scheduled_at', -1)])
+    # ---- Stripe subscription indexes -----------------------------------
+    # Unique+sparse on Stripe IDs so replayed webhooks and repeat-checkouts
+    # cannot end up with two Jaleter users pointing at the same Stripe
+    # Customer / Subscription. Sparse because most users have no Stripe row.
+    await db.users.create_index('stripe_customer_id', unique=True, sparse=True)
+    await db.users.create_index('stripe_subscription_id', unique=True, sparse=True)
+    await db.users.create_index('subscription_status')
+    # Webhook idempotency store — insert-once by Stripe event.id.
+    # (`_id` in MongoDB is implicitly unique — we just use it as the key.)
+    await db.stripe_events.create_index([('type', 1), ('received_at', -1)])
     # Plaid
     await db.plaid_items.create_index('item_id', unique=True)
     await db.plaid_items.create_index([('user_id', 1)])
@@ -336,6 +375,23 @@ async def _startup():
             logger.info('TRANSFER_IN reclassify backfill: %s', report)
     except Exception as e:  # noqa: BLE001
         logger.warning('TRANSFER_IN reclassify backfill skipped: %s', e)
+
+    # ---- Stripe: bootstrap the $90/yr recurring Product+Price -----------
+    # Idempotent — safe to run on every restart. Caches the resulting
+    # (product_id, price_id) onto app.state so the checkout route can
+    # read it without hitting Stripe on every request. If Stripe is
+    # unreachable or the API key is missing, we log and continue —
+    # subscriptions simply cannot be created until the operator fixes it.
+    try:
+        import stripe_service as _stripe
+        product_id, price_id = _stripe.ensure_annual_price()
+        app.state.stripe_product_id = product_id
+        app.state.stripe_price_id = price_id
+        logger.info('Stripe subscription catalog ready: product=%s price=%s', product_id, price_id)
+    except Exception as e:  # noqa: BLE001
+        app.state.stripe_product_id = None
+        app.state.stripe_price_id = None
+        logger.warning('Stripe subscription catalog bootstrap skipped: %s', e)
 
 
 @app.on_event('shutdown')
@@ -1436,15 +1492,62 @@ async def list_products():
 
 @api_router.post('/payments/checkout')
 async def payments_checkout(payload: CheckoutRequest, request: Request, current_user: dict = Depends(get_current_user)):
+    """Create a Stripe Checkout Session.
+
+    ``jaleter_premium`` opens a subscription-mode Checkout for the
+    $90 USD / year recurring plan. All other products keep the legacy
+    one-off Payment mode (coaching sessions).
+
+    IMPORTANT: this endpoint does NOT grant entitlement. Entitlement is
+    granted only after the Stripe webhook is received and verified.
+    """
     if payload.product not in PRODUCTS:
         raise HTTPException(status_code=400, detail='Unknown product')
     platform = payload.platform if payload.platform in ('mobile', 'web') else 'mobile'
 
-    # Determine origin for web return URLs (respect proxy headers set by the ingress)
+    # Determine origin for web return URLs (respect proxy headers set by the ingress).
     forwarded_proto = request.headers.get('x-forwarded-proto') or request.url.scheme
     forwarded_host = request.headers.get('x-forwarded-host') or request.headers.get('host') or ''
     origin = f'{forwarded_proto}://{forwarded_host}' if forwarded_host else ''
 
+    # ---- Membership (subscription) path -------------------------------
+    if payload.product == 'jaleter_premium':
+        import stripe_service as _stripe
+        price_id = getattr(request.app.state, 'stripe_price_id', None)
+        if not price_id:
+            # Try to bootstrap on-demand if startup missed it.
+            try:
+                _, price_id = _stripe.ensure_annual_price()
+                request.app.state.stripe_price_id = price_id
+            except Exception as e:
+                logger.exception('Stripe price bootstrap failed at checkout')
+                raise HTTPException(status_code=503, detail=f'Payments unavailable: {e}')
+        # Success/cancel URLs: web returns to the origin; native uses the
+        # jaleter:// scheme so the app deep-links back automatically.
+        if platform == 'mobile':
+            success_url = 'jaleter://checkout/success?session_id={CHECKOUT_SESSION_ID}'
+            cancel_url = 'jaleter://checkout/cancel?session_id={CHECKOUT_SESSION_ID}'
+        else:
+            base = origin.rstrip('/') or ''
+            success_url = f'{base}/?checkout=success&session_id={{CHECKOUT_SESSION_ID}}'
+            cancel_url = f'{base}/?checkout=cancel&session_id={{CHECKOUT_SESSION_ID}}'
+        try:
+            result = await _stripe.create_subscription_checkout(
+                db, current_user, price_id, success_url, cancel_url,
+            )
+        except Exception as e:
+            logger.exception('Subscription checkout creation failed')
+            raise HTTPException(status_code=502, detail=f'Payment provider error: {e}')
+        return {
+            'session_id': result['session_id'],
+            'url': result['url'],
+            'amount': 90.0,
+            'currency': 'usd',
+            'product_name': 'Jaleter Annual Membership',
+            'mode': 'subscription',
+        }
+
+    # ---- Coaching one-off path (unchanged) -----------------------------
     booking = None
     if payload.product == 'coaching_session':
         try:
@@ -1465,17 +1568,83 @@ async def payments_checkout(payload: CheckoutRequest, request: Request, current_
 
 @api_router.get('/payments/status/{session_id}')
 async def payments_status(session_id: str, current_user: dict = Depends(get_current_user)):
+    """Report the latest known status for a checkout session.
+
+    For SUBSCRIPTION checkouts this now reports ONLY what the backend has
+    already learned from the webhook. It never queries Stripe or grants
+    entitlement — the webhook is the single source of truth.
+    """
     txn = await db.payment_transactions.find_one(
         {'session_id': session_id, 'user_id': current_user['user_id']},
         {'_id': 0},
     )
     if not txn:
         raise HTTPException(status_code=404, detail='Checkout session not found.')
+    if txn.get('kind') == 'subscription':
+        # For subscription checkouts, just echo the txn row + the user's
+        # current membership. Do NOT poll Stripe or grant here.
+        import stripe_service as _stripe
+        fresh_user = await db.users.find_one({'user_id': current_user['user_id']}, {'_id': 0}) or current_user
+        return {
+            'session_id': session_id,
+            'status': txn.get('status'),
+            'payment_status': txn.get('payment_status'),
+            'product': txn.get('product'),
+            'product_name': 'Jaleter Annual Membership',
+            'membership_active': _stripe.has_active_membership(fresh_user),
+            'subscription_status': fresh_user.get('subscription_status', 'inactive'),
+        }
+    # Legacy one-off path still uses status polling.
     try:
         return await pay_fetch_status(db, session_id)
     except Exception as e:
         logger.exception('Stripe status lookup failed')
         raise HTTPException(status_code=502, detail=f'Payment provider error: {e}')
+
+
+@api_router.post('/payments/webhook')
+async def stripe_webhook(request: Request):
+    """Verified Stripe subscription webhook.
+
+    - Reads the RAW request body (never `.json()` first — that would
+      re-encode and break the signature).
+    - Verifies the `Stripe-Signature` header against
+      `STRIPE_WEBHOOK_SECRET`.
+    - Idempotent via `stripe_events` collection (unique `_id`).
+    """
+    import stripe_service as _stripe
+    import stripe  # noqa: F401 — needed for the SignatureVerificationError branch
+    payload = await request.body()
+    sig = request.headers.get('stripe-signature') or request.headers.get('Stripe-Signature') or ''
+    try:
+        event = _stripe.verify_and_parse_event(payload, sig)
+    except RuntimeError as e:
+        # Webhook secret missing — reject rather than allow bypass.
+        logger.error('Stripe webhook rejected: %s', e)
+        raise HTTPException(status_code=503, detail=str(e))
+    except ValueError:
+        logger.warning('Stripe webhook: invalid payload')
+        raise HTTPException(status_code=400, detail='Invalid payload')
+    except stripe.error.SignatureVerificationError:
+        logger.warning('Stripe webhook: signature verification failed')
+        raise HTTPException(status_code=400, detail='Invalid signature')
+    except Exception as e:
+        # Any other verification error is treated as a signature failure
+        # so an attacker gets no additional diagnostic information.
+        logger.warning('Stripe webhook: verification error: %s', e)
+        raise HTTPException(status_code=400, detail='Invalid signature')
+
+    try:
+        report = await _stripe.handle_webhook_event(db, event)
+        # Never leak sensitive Stripe object fields into logs.
+        logger.info('Stripe webhook processed id=%s type=%s user=%s duplicate=%s',
+                    report.get('event_id'), report.get('type'),
+                    report.get('user_id'), report.get('duplicate'))
+        return {'received': True}
+    except Exception as e:  # noqa: BLE001
+        logger.exception('Stripe webhook processing failed')
+        # 500 → Stripe will retry with exponential backoff.
+        raise HTTPException(status_code=500, detail=f'Webhook processing error: {e}')
 
 
 @api_router.get('/coaching/bookings')
@@ -1486,7 +1655,81 @@ async def coaching_bookings(current_user: dict = Depends(get_current_user)):
 
 @api_router.get('/user/membership')
 async def user_membership(current_user: dict = Depends(get_current_user)):
-    return await pay_membership_status(db, current_user)
+    """Return the authoritative membership state for the current user.
+
+    This is a READ-ONLY report of what the backend already knows. It does
+    not query Stripe or perform any side effects. Never trust the client
+    to derive premium access from a boolean here — the same source is
+    consulted server-side by `require_active_membership`.
+    """
+    import stripe_service as _stripe
+    fresh = await db.users.find_one({'user_id': current_user['user_id']}, {'_id': 0}) or current_user
+    active = _stripe.has_active_membership(fresh)
+    return {
+        'active': active,
+        'status': fresh.get('subscription_status') or ('legacy_active' if active else 'inactive'),
+        'plan': 'jaleter_premium_annual' if active else None,
+        'price': 90 if active else None,
+        'currency': 'usd' if active else None,
+        'current_period_start': (
+            fresh['subscription_current_period_start'].isoformat()
+            if isinstance(fresh.get('subscription_current_period_start'), datetime)
+            else None
+        ),
+        'current_period_end': (
+            fresh['subscription_current_period_end'].isoformat()
+            if isinstance(fresh.get('subscription_current_period_end'), datetime)
+            else (fresh['premium_expires_at'].isoformat()
+                  if isinstance(fresh.get('premium_expires_at'), datetime) else None)
+        ),
+        'cancel_at_period_end': bool(fresh.get('subscription_cancel_at_period_end')),
+        'premium_since': (
+            fresh['premium_since'].isoformat()
+            if isinstance(fresh.get('premium_since'), datetime) else None
+        ),
+    }
+
+
+@api_router.post('/payments/billing-portal')
+async def billing_portal(request: Request, current_user: dict = Depends(get_current_user)):
+    """Return a short-lived Stripe billing portal URL. The portal lets
+    the user manage payment methods, cancel, and view invoices."""
+    import stripe_service as _stripe
+    forwarded_proto = request.headers.get('x-forwarded-proto') or request.url.scheme
+    forwarded_host = request.headers.get('x-forwarded-host') or request.headers.get('host') or ''
+    origin = f'{forwarded_proto}://{forwarded_host}' if forwarded_host else 'https://jaleter.com'
+    try:
+        return await _stripe.create_billing_portal_session(db, current_user, origin)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception('Billing portal creation failed')
+        raise HTTPException(status_code=502, detail=f'Billing portal error: {e}')
+
+
+@api_router.post('/payments/cancel-at-period-end')
+async def cancel_at_period_end(current_user: dict = Depends(get_current_user)):
+    """Mark the user's subscription to cancel at period end. Access
+    continues until `current_period_end` — Stripe finalizes cancellation
+    then, and the resulting `customer.subscription.deleted` webhook
+    revokes access."""
+    import stripe_service as _stripe
+    try:
+        result = await _stripe.cancel_at_period_end(current_user)
+        return {**result, 'message': 'Cancellation scheduled at period end.'}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@api_router.post('/payments/resume')
+async def resume_subscription(current_user: dict = Depends(get_current_user)):
+    """Undo a pending cancel_at_period_end (customer changed their mind)."""
+    import stripe_service as _stripe
+    try:
+        result = await _stripe.resume_subscription(current_user)
+        return {**result, 'message': 'Subscription will renew as normal.'}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # Public download endpoint for Jaleter WordPress landing assets.
@@ -1626,7 +1869,7 @@ async def plaid_status():
 
 @api_router.post('/plaid/link-token')
 @limiter.limit('20/minute')
-async def plaid_link_token(request: Request, current_user: dict = Depends(get_current_user), item_id: Optional[str] = None):
+async def plaid_link_token(request: Request, current_user: dict = Depends(require_active_membership), item_id: Optional[str] = None):
     webhook = _plaid_webhook_url(request)
     access_token: Optional[str] = None
     if item_id:
@@ -1653,7 +1896,7 @@ async def plaid_link_token(request: Request, current_user: dict = Depends(get_cu
 
 
 @api_router.post('/plaid/exchange-public-token')
-async def plaid_exchange(payload: PlaidExchangeRequest, current_user: dict = Depends(get_current_user)):
+async def plaid_exchange(payload: PlaidExchangeRequest, current_user: dict = Depends(require_active_membership)):
     if not payload.public_token:
         raise HTTPException(status_code=400, detail='public_token is required')
     try:
@@ -1760,7 +2003,7 @@ async def _plaid_sync_item(user_id: str, item: dict) -> dict:
 
 
 @api_router.post('/plaid/sync')
-async def plaid_sync(current_user: dict = Depends(get_current_user), item_id: Optional[str] = None):
+async def plaid_sync(current_user: dict = Depends(require_active_membership), item_id: Optional[str] = None):
     query: dict = {'user_id': current_user['user_id']}
     if item_id:
         query['item_id'] = item_id
@@ -1785,7 +2028,7 @@ async def plaid_sync(current_user: dict = Depends(get_current_user), item_id: Op
 @api_router.get('/networth/history')
 async def networth_history(
     range: str = 'month',
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_active_membership),
 ):
     """Return the user's Net Worth history over a range window.
 
@@ -1894,16 +2137,24 @@ async def plaid_webhook(request: Request):
     }:
         item = await db.plaid_items.find_one({'item_id': item_id})
         if item:
-            try:
-                await _plaid_sync_item(item['user_id'], item)
-                # Refresh the daily Net Worth snapshot post-webhook sync.
+            # Only auto-sync via webhook if the user still has active
+            # membership (or legacy premium). Historical data is preserved;
+            # we simply stop pulling new transactions for expired members.
+            import stripe_service as _stripe
+            u = await db.users.find_one({'user_id': item['user_id']}, {'_id': 0})
+            if u and (u.get('is_admin') or _stripe.has_active_membership(u)):
                 try:
-                    live_rows = await _plaid_list_accounts_for_user(item['user_id'])
-                    await _persist_networth_snapshot(item['user_id'], live_rows, source='plaid_webhook')
+                    await _plaid_sync_item(item['user_id'], item)
+                    # Refresh the daily Net Worth snapshot post-webhook sync.
+                    try:
+                        live_rows = await _plaid_list_accounts_for_user(item['user_id'])
+                        await _persist_networth_snapshot(item['user_id'], live_rows, source='plaid_webhook')
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning('post-webhook snapshot skipped: %s', e)
                 except Exception as e:  # noqa: BLE001
-                    logger.warning('post-webhook snapshot skipped: %s', e)
-            except Exception as e:  # noqa: BLE001
-                logger.warning('plaid webhook sync failed: %s', e)
+                    logger.warning('plaid webhook sync failed: %s', e)
+            else:
+                logger.info('plaid webhook for user_id=%s skipped: membership inactive', item['user_id'])
     return {'ok': True}
 
 
@@ -2087,7 +2338,7 @@ class CoachChatRequest(BaseModel):
 
 @api_router.post('/coach/chat')
 @limiter.limit('20/minute')
-async def coach_chat(request: Request, payload: CoachChatRequest, current_user: dict = Depends(get_current_user)):
+async def coach_chat(request: Request, payload: CoachChatRequest, current_user: dict = Depends(require_active_membership)):
     """Ask Jaleter Coach a question. Multi-turn — pass the same session_id
     (or omit to get the user's default one) to maintain history.
 
@@ -2144,7 +2395,7 @@ async def coach_chat(request: Request, payload: CoachChatRequest, current_user: 
 
 
 @api_router.get('/coach/history')
-async def coach_history(session_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+async def coach_history(session_id: Optional[str] = None, current_user: dict = Depends(require_active_membership)):
     user_id = current_user['user_id']
     sid = (session_id or coach_ai_service.default_session_id(user_id)).strip()
     cursor = db.coach_messages.find(
@@ -2161,7 +2412,7 @@ async def coach_history(session_id: Optional[str] = None, current_user: dict = D
 
 @api_router.post('/coach/reset')
 @limiter.limit('10/minute')
-async def coach_reset(request: Request, current_user: dict = Depends(get_current_user)):
+async def coach_reset(request: Request, current_user: dict = Depends(require_active_membership)):
     """Start a fresh chat — deletes the current default-session history."""
     user_id = current_user['user_id']
     sid = coach_ai_service.default_session_id(user_id)

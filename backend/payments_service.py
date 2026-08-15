@@ -28,8 +28,8 @@ PRODUCTS = {
         'kind': 'coaching',
     },
     'jaleter_premium': {
-        'name': 'Jaleter Premium (Annual)',
-        'amount': 75.0,
+        'name': 'Jaleter Annual Membership',
+        'amount': 90.0,
         'currency': 'usd',
         'kind': 'membership',
     },

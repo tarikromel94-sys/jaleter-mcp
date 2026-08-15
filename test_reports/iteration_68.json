@@ -1,0 +1,53 @@
+{
+  "summary": "Rewrote /app/backend/tests/test_stripe_subscription.py to use `requests` against the live uvicorn on http://localhost:8001 (avoiding the sync-TestClient + Motor async event-loop conflict). All 22 subscription tests pass: catalog ($90), inactive-user 402 on all seven premium endpoints (plaid link-token/exchange/sync, coach chat/history/reset, networth history), unsigned/invalid-signature webhook → 400, signed customer.subscription.created activates the user (stripe_customer_id / stripe_subscription_id / subscription_status='active' / period_end / premium_since persisted, premium endpoints no longer 402), duplicate webhook is idempotent (single stripe_events row, current_period_end unchanged), past_due retains grace (active=true), customer.subscription.deleted revokes access and re-locks premium routes, cancel_at_period_end=true reported through /api/user/membership, create→delete→create reactivation preserves user_id (no duplicate row), legacy premium_expires_at future→active/past→inactive still honored via has_active_membership(), cancel-at-period-end and billing-portal endpoints correctly return 400 when the user has no subscription/customer, and unsigned Plaid webhook is rejected (401).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "env/STRIPE_API_KEY",
+        "issue": "STRIPE_API_KEY in /app/backend/.env begins with sk_live_ (LIVE mode), but the spec says 'Test-mode Stripe key already configured'. Any real Checkout Session created via /api/payments/checkout would charge live cards. Product prod_V4hCBjSN6apJQn / Price price_1U4XntK4Q3lnYCtM7p5dq7j9 already exist in live Stripe. STRIPE_WEBHOOK_SECRET is a local-only fake (whsec_test_local_secret_for_unit_tests_only) so it cannot verify real Stripe webhook deliveries — good enough for unit tests, but incompatible with any real Stripe→Jaleter webhook until swapped for the actual endpoint secret from the Stripe dashboard.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/payments/webhook (STRIPE_WEBHOOK_SECRET removed)",
+        "issue": "Not re-verified in this run — restarting the backend without the secret would take the service down for other running tests. Code path is present (RuntimeError → HTTPException 503 in stripe_webhook), and the earlier backend log showed `POST /api/payments/webhook HTTP/1.1 503` during the pre-fix window when the secret was not yet set. Recommend a manual one-off restart with STRIPE_WEBHOOK_SECRET unset to confirm 503, if strict spec compliance is needed."
+      },
+      {
+        "endpoint": "POST /api/plaid/webhook (signed JWT branch)",
+        "issue": "The 'plaid webhook with a plaid_items doc pointing at an inactive user is accepted (200) but sync branch is skipped' case cannot be exercised end-to-end without a valid Plaid JWT-signed header. The code path (log line 'plaid webhook for user_id=... skipped: membership inactive') is present in server.py:2153 and inside the `if u and (u.get('is_admin') or _stripe.has_active_membership(u))` guard at server.py:2141. Verified indirectly via the require_active_membership dependency behaviour on other Plaid endpoints."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_stripe_subscription.py",
+    "/app/test_reports/pytest/iteration_68_stripe.xml"
+  ],
+  "action_items": [
+    "Confirm intent behind sk_live_... STRIPE_API_KEY in /app/backend/.env — if this environment is meant to be test-mode, swap to a sk_test_... key. Product/Price will need re-bootstrap; the code already handles this idempotently.",
+    "Once a real Stripe webhook endpoint is registered in the Stripe dashboard, replace STRIPE_WEBHOOK_SECRET with the actual whsec_... signing secret so live subscription events can activate users. Current value is only usable for local tests.",
+    "Optional: add a smoke test that, once the correct test-mode key is in place, actually calls POST /api/payments/checkout with a valid Bearer token and asserts the returned session.url resolves to checkout.stripe.com. This is intentionally NOT part of the automated suite while the key is live."
+  ],
+  "critical_code_review_comments": [
+    "stripe_service.has_active_membership correctly treats both `active` and `past_due` as entitled (dunning grace) and only drops entitlement once Stripe returns canceled/unpaid/incomplete_expired — consistent with the spec.",
+    "handle_webhook_event uses an insert-first / update-on-success pattern against stripe_events with a unique _id. Duplicate deliveries short-circuit on the DuplicateKeyError branch when the earlier event was already processed. If a prior delivery crashed mid-dispatch (`processed: False`), the fallthrough re-runs the dispatcher, which is safe because _apply_subscription() is idempotent — good design.",
+    "server.py `require_active_membership` re-reads the user from Mongo instead of trusting the JWT-decoded dict, so token-carrying stale entitlement is impossible. Admins bypass the paywall (`is_admin`) which is correct for support access.",
+    "stripe_service._resolve_user resolution order (client_reference_id → metadata.jaleter_user_id → stripe_customer_id lookup) correctly handles out-of-order or partial-data events.",
+    "Minor: /api/payments/webhook uses `logger.warning('Stripe webhook: signature verification failed: %s', e)` on the generic Exception branch. This is fine, but the SDK-specific stripe.error.SignatureVerificationError should also be caught explicitly for a clearer log; not a bug."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_stripe_subscription.py — rewrote against live uvicorn using requests; direct-DB seed fallback added so the 10/min /api/auth/register rate limit does not fail the suite."
+  ],
+  "success_rate": {"backend": "100%", "frontend": "n/a"},
+  "seed_data_creation": "22 ephemeral test users are created per run, prefixed 'TEST_' + random hex, either via /api/auth/register or (on 429) inserted directly into db.users. Related fixtures create stripe_events rows for signed webhook deliveries. No cleanup was performed — these rows are isolated by their random prefixes and do not overlap with real users or admin support@jaleter.com.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend tests target http://localhost:8001 directly to avoid ingress rate-limits. /api/auth/register is rate-limited to 10/min per client — the suite falls back to direct MongoDB user seeding + self-minted JWTs (same JWT_SECRET) if the limit is hit, so subsequent re-runs within 60s still pass. The webhook secret is whsec_test_local_secret_for_unit_tests_only in /app/backend/.env and MUST be used verbatim by _sign_webhook() in the tests. If the STRIPE_API_KEY is swapped to sk_test_, the Price lookup_key `jaleter_annual_90_usd_v1` will not be found and a new test-mode Price will be created on next startup — this is expected and idempotent.",
+  "rca_of_issue": "The original test file used fastapi.testclient.TestClient which drives the Motor async DB from a sync context, colliding with the running event loop that the backend uvicorn process already owns. Fix: exercise the app through its already-running uvicorn on 127.0.0.1:8001 using plain requests. This also matches production behavior more closely (real HTTP path, real rate-limiter, real ingress-less service)."
+}
