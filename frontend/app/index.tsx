@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, StatusBar as RNStatusBar, Platform, Linking, Dimensions, Alert } from 'react-native';
+import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, StatusBar as RNStatusBar, Platform, Linking, Dimensions, Alert, ActivityIndicator } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import * as ExpoLinking from 'expo-linking';
 import * as LocalAuthentication from 'expo-local-authentication';
@@ -4748,30 +4748,171 @@ const CoachingScreen = ({ back }: any) => {
 const MembershipScreen = ({ back }: any) => {
   const t = useThemed();
   const { token } = useAuth();
-  const [membership, setMembership] = useState<{ active: boolean; expires_at: string | null; plan: string | null } | null>(null);
+  const pay = usePayment();
+  const [membership, setMembership] = useState<{
+    active: boolean;
+    status: string | null;
+    plan: string | null;
+    price: number | null;
+    currency: string | null;
+    current_period_start: string | null;
+    current_period_end: string | null;
+    cancel_at_period_end: boolean;
+    premium_since: string | null;
+  } | null>(null);
+  // "Confirming…" state — set true after a subscribe attempt returns, cleared
+  // once the backend reports `active: true` (or after we give up polling).
+  const [confirming, setConfirming] = useState(false);
+  const [confirmMsg, setConfirmMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState<'subscribe' | 'portal' | 'cancel' | 'resume' | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
   const refresh = useCallback(async () => {
-    if (!token) return;
+    if (!token) return null;
     try {
       const data = await apiCall('/api/user/membership', { method: 'GET' }, token);
       setMembership(data);
-    } catch { setMembership(null); }
+      return data;
+    } catch { setMembership(null); return null; }
   }, [token]);
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Polls /api/user/membership for up to ~60 seconds after Stripe redirect
+  // until the webhook flips the user to active. Never activates locally;
+  // this is a READ loop.
+  const waitForActivation = useCallback(async () => {
+    setConfirming(true);
+    setConfirmMsg('Payment received. Confirming membership…');
+    const started = Date.now();
+    while (Date.now() - started < 60_000) {
+      const m = await refresh();
+      if (m?.active) {
+        setConfirming(false);
+        setConfirmMsg(null);
+        setNotice('Membership activated. Thanks for supporting Jaleter!');
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    setConfirming(false);
+    setConfirmMsg(null);
+    setNotice("We haven't heard back from Stripe yet. Pull to refresh in a moment — your access will unlock as soon as we receive Stripe's confirmation.");
+  }, [refresh]);
+
+  const startSubscribe = async () => {
+    if (!token) return;
+    setBusy('subscribe');
+    setNotice(null);
+    try {
+      const res = await pay.start('jaleter_premium');
+      // Regardless of the outcome (success, canceled, dismissed) we ask the
+      // backend for the authoritative status. The webhook — not the redirect
+      // — decides entitlement.
+      if (res.ok && res.sessionId) {
+        await waitForActivation();
+      } else if (res.error) {
+        setNotice(res.error);
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const openPortal = async () => {
+    if (!token) return;
+    setBusy('portal');
+    try {
+      const res = await apiCall('/api/payments/billing-portal', { method: 'POST', body: JSON.stringify({}) }, token);
+      if (res?.url) {
+        if (Platform.OS === 'web') { if (typeof window !== 'undefined') window.location.href = res.url; }
+        else { await WebBrowser.openBrowserAsync(res.url); }
+      }
+    } catch (e: any) {
+      setNotice(e?.message || 'Could not open the billing portal.');
+    } finally { setBusy(null); refresh(); }
+  };
+
+  const cancelAtPeriodEnd = async () => {
+    if (!token) return;
+    setBusy('cancel');
+    try {
+      await apiCall('/api/payments/cancel-at-period-end', { method: 'POST', body: JSON.stringify({}) }, token);
+      setNotice("Cancellation scheduled. You'll keep access until the end of the current billing period.");
+    } catch (e: any) { setNotice(e?.message || 'Could not schedule cancellation.'); }
+    finally { setBusy(null); refresh(); }
+  };
+
+  const resume = async () => {
+    if (!token) return;
+    setBusy('resume');
+    try {
+      await apiCall('/api/payments/resume', { method: 'POST', body: JSON.stringify({}) }, token);
+      setNotice('Your subscription will renew as normal.');
+    } catch (e: any) { setNotice(e?.message || 'Could not resume subscription.'); }
+    finally { setBusy(null); refresh(); }
+  };
+
+  const renewsOn = membership?.current_period_end
+    ? new Date(membership.current_period_end).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : null;
 
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Membership" subtitle="One simple annual plan." back={back} />
+
+      {/* Confirming banner — visible while polling the backend after Stripe redirect. */}
+      {confirming && (
+        <View style={{
+          padding: 12, borderRadius: 12, marginBottom: 10,
+          backgroundColor: t.dark ? '#26221c' : '#fbf6ec',
+          borderWidth: 1, borderColor: '#e6dcc5',
+          flexDirection: 'row', gap: 10, alignItems: 'center',
+        }}>
+          <ActivityIndicator color="#9a6d32" />
+          <Text style={[{ flex: 1, fontSize: 12 }, t.textInk]}>{confirmMsg}</Text>
+        </View>
+      )}
+      {notice && !confirming && (
+        <View style={{
+          padding: 12, borderRadius: 12, marginBottom: 10,
+          backgroundColor: t.dark ? '#1f2620' : '#f4f9ee',
+          borderWidth: 1, borderColor: '#c9d9c1',
+        }}>
+          <Text style={[{ fontSize: 12 }, t.textInk]}>{notice}</Text>
+        </View>
+      )}
+
       <View style={[s.priceCard, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
         <Text style={{ color: C.goldEyebrow2, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 }}>JALETER PREMIUM</Text>
         <Text style={{ fontSize: 18, fontWeight: '700', color: t.dark ? D.text : C.ink, marginTop: 4 }}>Annual Membership</Text>
         <Text style={[{ color: t.dark ? D.textMuted : '#8d867d', fontSize: 11, marginTop: 2 }]}>Everything you need to plan, track, and grow your money.</Text>
         <Text style={[s.priceStrong, t.textInk, { marginTop: 6 }]}>$90<Text style={{ fontSize: 13, color: t.dark ? D.textMuted : '#8d867d', fontWeight: '500' }}> / year</Text></Text>
-        <Text style={{ fontSize: 10, color: t.dark ? D.textMuted : '#8d867d', marginTop: 2 }}>$7.50 / month equivalent</Text>
-        {membership?.active && (
-          <View style={{ marginTop: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: '#8fa88f22', alignSelf: 'flex-start' }}>
-            <Text style={{ color: '#5a7f60', fontSize: 10, fontWeight: '700' }}>ACTIVE · renews {new Date(membership.expires_at as string).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>
+        <Text style={{ fontSize: 10, color: t.dark ? D.textMuted : '#8d867d', marginTop: 2 }}>$7.50 / month equivalent · auto-renews annually</Text>
+
+        {/* Membership state pill: ACTIVE / PAST DUE / CANCELING / INACTIVE. */}
+        {membership && (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+            {membership.active ? (
+              <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: '#4c8b5622' }}>
+                <Text style={{ color: '#4c8b56', fontSize: 10, fontWeight: '800' }}>
+                  {membership.cancel_at_period_end ? `ACTIVE · ends ${renewsOn || ''}` : `ACTIVE · renews ${renewsOn || ''}`}
+                </Text>
+              </View>
+            ) : (
+              <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: '#8b643722' }}>
+                <Text style={{ color: '#8b6437', fontSize: 10, fontWeight: '800' }}>
+                  {membership.status === 'past_due' ? 'PAYMENT ISSUE' : (membership.status || 'INACTIVE').toUpperCase()}
+                </Text>
+              </View>
+            )}
+            {membership.status === 'past_due' && (
+              <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: '#b0453d22' }}>
+                <Text style={{ color: '#b0453d', fontSize: 10, fontWeight: '800' }}>UPDATE PAYMENT METHOD</Text>
+              </View>
+            )}
           </View>
         )}
+
         <View style={{ marginTop: 12, gap: 6 }}>
           {[
             'Secure bank & account syncing',
@@ -4790,10 +4931,62 @@ const MembershipScreen = ({ back }: any) => {
           ))}
         </View>
       </View>
-      <View style={{ marginTop: 14, alignItems: 'center' }}>
-        <Text style={{ fontSize: 13, fontWeight: '700', color: t.dark ? D.text : C.ink, textAlign: 'center' }}>Join for $90 / year</Text>
+
+      {/* Action buttons — different set depending on membership state. */}
+      <View style={{ marginTop: 14, gap: 10 }}>
+        {!membership?.active && (
+          <Pressable
+            onPress={startSubscribe}
+            disabled={busy === 'subscribe' || confirming}
+            style={{
+              backgroundColor: '#9a6d32', paddingVertical: 14, borderRadius: 12, alignItems: 'center',
+              opacity: (busy === 'subscribe' || confirming) ? 0.6 : 1,
+            }}
+            testID="membership-subscribe"
+          >
+            {busy === 'subscribe'
+              ? <ActivityIndicator color="#fff" />
+              : <Text style={{ color: '#fff', fontWeight: '800', fontSize: 14 }}>Start membership — $90 / year</Text>}
+          </Pressable>
+        )}
+        {membership?.active && !membership.cancel_at_period_end && (
+          <>
+            <Pressable
+              onPress={openPortal}
+              disabled={busy === 'portal'}
+              style={{ borderWidth: 1, borderColor: '#c9b98f', paddingVertical: 12, borderRadius: 12, alignItems: 'center' }}
+              testID="membership-manage"
+            >
+              {busy === 'portal' ? <ActivityIndicator color="#8b6437" /> : <Text style={{ color: '#8b6437', fontWeight: '800', fontSize: 13 }}>Manage subscription</Text>}
+            </Pressable>
+            <Pressable
+              onPress={cancelAtPeriodEnd}
+              disabled={busy === 'cancel'}
+              style={{ paddingVertical: 12, borderRadius: 12, alignItems: 'center' }}
+              testID="membership-cancel"
+            >
+              {busy === 'cancel'
+                ? <ActivityIndicator color="#b0453d" />
+                : <Text style={{ color: '#b0453d', fontWeight: '600', fontSize: 12 }}>Cancel at period end</Text>}
+            </Pressable>
+          </>
+        )}
+        {membership?.active && membership.cancel_at_period_end && (
+          <Pressable
+            onPress={resume}
+            disabled={busy === 'resume'}
+            style={{ backgroundColor: '#4c8b56', paddingVertical: 14, borderRadius: 12, alignItems: 'center' }}
+            testID="membership-resume"
+          >
+            {busy === 'resume'
+              ? <ActivityIndicator color="#fff" />
+              : <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Resume subscription</Text>}
+          </Pressable>
+        )}
       </View>
-      <BillingWebsiteNotice target="membership" />
+      <Text style={{ fontSize: 10, color: t.dark ? D.textMuted : '#8d867d', textAlign: 'center', marginTop: 12, lineHeight: 14 }}>
+        Membership is billed by Stripe. You can cancel, update your card, or download invoices any time from Manage subscription.
+      </Text>
     </ScrollView>
   );
 };

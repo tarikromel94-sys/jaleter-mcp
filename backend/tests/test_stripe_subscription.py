@@ -18,6 +18,15 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import requests
 
+# Ensure the same .env the backend uses is available to the tests too
+# (MONGO_URL / JWT_SECRET / STRIPE_WEBHOOK_SECRET etc.). load_dotenv is a
+# no-op if the vars are already set in the process environment.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+except Exception:
+    pass
+
 # Local uvicorn — avoids ingress rate-limits and matches what supervisor runs.
 BASE_URL = "http://localhost:8001"
 WEBHOOK_SECRET = os.environ.get(

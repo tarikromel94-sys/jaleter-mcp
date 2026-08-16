@@ -2232,6 +2232,46 @@ async def admin_retention_status(current_user: dict = Depends(get_current_user))
     return {'runs': await cursor.to_list(length=10)}
 
 
+# ---- Admin: subscription lookup ------------------------------------------
+@api_router.get('/admin/subscription/{user_ref}')
+async def admin_subscription_lookup(user_ref: str, current_user: dict = Depends(get_current_user)):
+    """Admin-only: read-only view of a specific user's subscription state.
+
+    `user_ref` may be either the internal `user_id` or the user's email
+    (case-insensitive). Returns the fields Support & Ops need to answer
+    "why don't I have access?" — never returns Stripe secrets or card
+    numbers.
+    """
+    if not current_user.get('is_admin'):
+        raise HTTPException(status_code=403, detail='Admin access required')
+    ref = (user_ref or '').strip()
+    query = {'$or': [{'user_id': ref}, {'email': ref.lower()}]}
+    u = await db.users.find_one(query, {'_id': 0, 'password_hash': 0})
+    if not u:
+        raise HTTPException(status_code=404, detail='User not found')
+    import stripe_service as _stripe
+    def _iso(d):
+        return d.isoformat() if isinstance(d, datetime) else None
+    return {
+        'user_id': u.get('user_id'),
+        'email': u.get('email'),
+        'name': u.get('name'),
+        'is_admin': bool(u.get('is_admin')),
+        'active': _stripe.has_active_membership(u),
+        'subscription_status': u.get('subscription_status'),
+        'subscription_stripe_status': u.get('subscription_stripe_status'),
+        'stripe_customer_id': u.get('stripe_customer_id'),
+        'stripe_subscription_id': u.get('stripe_subscription_id'),
+        'subscription_current_period_start': _iso(u.get('subscription_current_period_start')),
+        'subscription_current_period_end': _iso(u.get('subscription_current_period_end')),
+        'subscription_cancel_at_period_end': bool(u.get('subscription_cancel_at_period_end')),
+        'premium_since': _iso(u.get('premium_since')),
+        'premium_expires_at': _iso(u.get('premium_expires_at')),
+        'created_at': _iso(u.get('created_at')),
+    }
+
+
+
 # ---- Reclassify TRANSFER_IN backfill (admin + auto once at startup) --------
 async def _reclassify_transfer_in_backfill(*, user_id: Optional[str] = None) -> dict:
     """Undo the historical over-classification of Plaid TRANSFER_IN.
