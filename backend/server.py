@@ -2477,6 +2477,10 @@ async def coach_reset(request: Request, current_user: dict = Depends(require_act
 
 app.include_router(api_router)
 
+# Emergent Managed Push Notifications — /api/register-push
+from push_service import router as push_router  # noqa: E402
+app.include_router(push_router)
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,

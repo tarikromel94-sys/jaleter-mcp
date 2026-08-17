@@ -12,6 +12,7 @@ import { WebView } from 'react-native-webview';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { storage } from '@/src/utils/storage';
 import { AuthProvider, useAuth, apiCall } from '@/src/AuthContext';
+import { usePushRegistration } from '@/src/hooks/usePushRegistration';
 import { C, D, F } from '@/src/jaleterTheme';
 import { dailyQuote, MONEY, EXACT, QuoteType } from '@/src/quoteLibrary';
 import { WELCOME_HTML } from '@/src/welcomeHtml';
@@ -5572,6 +5573,7 @@ export default function App() {
 
 function MainApp() {
   const auth = useAuth();
+  usePushRegistration({ userId: auth.user?.user_id, token: auth.token });
   const [hydrated, setHydrated] = useState(false);
   const [appLock, setAppLock] = useState<{ enabled: boolean; pin: string; biometricsEnabled: boolean; biometricsAvailable: boolean; openConfigure?: boolean; locked: boolean }>({ enabled: false, pin: '', biometricsEnabled: false, biometricsAvailable: false, locked: false });
   useEffect(() => {
