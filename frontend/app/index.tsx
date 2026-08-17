@@ -13,6 +13,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { storage } from '@/src/utils/storage';
 import { AuthProvider, useAuth, apiCall } from '@/src/AuthContext';
 import { usePushRegistration } from '@/src/hooks/usePushRegistration';
+import { getPrefs, putPrefs, evaluateBudget, evaluateTransaction, currentPeriod as npCurrentPeriod, type CategoryTotal } from '@/src/utils/notifications';
 import { C, D, F } from '@/src/jaleterTheme';
 import { dailyQuote, MONEY, EXACT, QuoteType } from '@/src/quoteLibrary';
 import { WELCOME_HTML } from '@/src/welcomeHtml';
@@ -5702,6 +5703,51 @@ function MainApp() {
     storage.setItem(STORAGE_KEY, JSON.stringify({ experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyHypoFrequency, legacyHypoDuration, legacyCumulative, legacyReturnRate, budgetYear, categoriesByYear, finalizedBudgetMonths, currentAge, retirementAge })).catch(() => {});
   }, [hydrated, experience, appearance, transactions, linkedAccounts, alerts, categories, incomeSources, restrictedBuckets, assets, liabilities, legacyTimeframe, legacyContribution, legacyHypothetical, legacyHypoFrequency, legacyHypoDuration, legacyCumulative, legacyReturnRate, budgetYear, categoriesByYear, finalizedBudgetMonths, currentAge, retirementAge]);
 
+  // -------------------------------------------------------------------
+  // BUDGET ALERTS — server-side evaluation via Emergent Managed Push.
+  // -------------------------------------------------------------------
+  // On login: pull the server-side alert prefs blob and reconcile with
+  // the locally-hydrated `alerts` state. The server is the source of
+  // truth for the version that other devices see; the local copy remains
+  // for offline UX. Reconcile only once per token so we never overwrite
+  // the user's in-flight edits.
+  const [alertsSynced, setAlertsSynced] = useState(false);
+  useEffect(() => {
+    if (!auth.token || !hydrated || alertsSynced) return;
+    (async () => {
+      const server = await getPrefs(auth.token!);
+      if (server) {
+        // Merge server → local. `singleExpense` on server is authoritative.
+        setAlerts((prev) => ({
+          enabled: !!server.enabled,
+          threshold: (prev as any)?.threshold ?? 80,
+          perCategory: { ...(prev.perCategory || {}), ...(server.perCategory || {}) },
+          singleExpense: server.singleExpense || prev.singleExpense || { enabled: false, threshold: 200 },
+        }));
+      }
+      setAlertsSynced(true);
+    })();
+  }, [auth.token, hydrated, alertsSynced]);
+
+  // Debounced push of `alerts` → server. Only after we've reconciled once
+  // (prevents overwriting the server with local defaults on first mount).
+  useEffect(() => {
+    if (!auth.token || !alertsSynced) return;
+    const t = setTimeout(() => {
+      const blob = {
+        enabled: !!alerts.enabled,
+        perCategory: alerts.perCategory || {},
+        singleExpense: alerts.singleExpense || { enabled: false, threshold: 200 },
+      };
+      putPrefs(auth.token!, blob).catch(() => {});
+    }, 800);
+    return () => clearTimeout(t);
+  }, [alerts, auth.token, alertsSynced]);
+
+  // Debounced budget-threshold evaluator + large-transaction evaluator are
+  // declared after `mergedTransactions` (below) so we can reference it in
+  // the deps array without a Temporal Dead Zone error.
+
   // Listen for SnapTrade OAuth callback deep link (jaleter://snaptrade-callback).
   useEffect(() => {
     if (!auth.token) return;
@@ -5914,6 +5960,80 @@ function MainApp() {
     });
     return [...reconciled, ...linkedOnly].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   }, [transactions, linkedTransactions]);
+
+  // -------------------------------------------------------------------
+  // BUDGET ALERTS — evaluators (declared here so we can reference the
+  // just-defined `mergedTransactions` without a TDZ error).
+  // -------------------------------------------------------------------
+  // Debounced budget-threshold evaluator. Runs whenever the user's budget
+  // or transactions change. Computes per-subcategory {spent, budget} for
+  // the CURRENT calendar month within the active budget year and posts
+  // them to /api/notifications/evaluate-budget. Server dedupes so the
+  // same month/threshold only fires once.
+  const budgetEvalPayloadRef = React.useRef<string>('');
+  useEffect(() => {
+    if (!auth.token || !alertsSynced || !alerts.enabled) return;
+    const now = new Date();
+    const monthIdx = now.getMonth();
+    // Only evaluate when the ACTIVE budgetYear equals the current calendar
+    // year — future/past-year budgets shouldn't emit "this month" alerts.
+    if (budgetYear !== now.getFullYear()) return;
+    const totals: CategoryTotal[] = [];
+    for (const c of categories as any[]) {
+      for (const sub of (c.subcategories || []) as any[]) {
+        const budget = Number(monthlyAmount(sub, monthIdx) || 0);
+        if (budget <= 0) continue;
+        const spent = Math.max(0, spentForSubInMonth(mergedTransactions, sub.id, monthIdx, budgetYear));
+        totals.push({
+          sub_id: sub.id,
+          name: sub.name,
+          parent_name: c.name,
+          budget,
+          spent,
+        });
+      }
+    }
+    if (totals.length === 0) return;
+    // Payload fingerprint dedupes back-to-back state churn.
+    const fingerprint = JSON.stringify({
+      p: npCurrentPeriod(),
+      totals: totals.map((x) => [x.sub_id, x.budget, Math.round(x.spent * 100)]),
+    });
+    if (fingerprint === budgetEvalPayloadRef.current) return;
+    const timer = setTimeout(() => {
+      budgetEvalPayloadRef.current = fingerprint;
+      evaluateBudget(auth.token!, npCurrentPeriod(), totals).catch(() => {});
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [auth.token, alertsSynced, alerts.enabled, categories, mergedTransactions, budgetYear]);
+
+  // Fire the large-transaction evaluator once per newly-seen transaction.
+  // Server-side dedupe (alert_state) keeps us safe across restarts.
+  const seenTxIdsRef = React.useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!auth.token || !alertsSynced || !alerts.enabled) return;
+    if (!alerts.singleExpense?.enabled) return;
+    const threshold = Number(alerts.singleExpense.threshold || 0);
+    if (threshold <= 0) return;
+    const list = (transactions as any[]) || [];
+    for (const tx of list) {
+      if (!tx?.id) continue;
+      if (seenTxIdsRef.current.has(tx.id)) continue;
+      seenTxIdsRef.current.add(tx.id);
+      if (tx.type !== 'expense') continue;
+      if (tx.is_transfer) continue;
+      if (tx.system_category === 'transfer') continue;
+      const amt = Math.abs(Number(tx.amount || 0));
+      if (amt <= threshold) continue;
+      evaluateTransaction(auth.token!, {
+        id: String(tx.id),
+        amount: amt,
+        name: tx.name,
+        merchant_name: tx.merchant_name || tx.name,
+        account_name: tx.account_name,
+      }).catch(() => {});
+    }
+  }, [auth.token, alertsSynced, alerts.enabled, alerts.singleExpense?.enabled, alerts.singleExpense?.threshold, transactions]);
   // Group linked accounts by their Jaleter category so every downstream
   // calculation is grounded in the same classification (see #1 / #2 / #27).
   // Balances for liability accounts are already sent as positive magnitudes

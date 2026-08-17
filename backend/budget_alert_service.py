@@ -29,15 +29,36 @@ def current_period() -> str:
 
 
 async def get_user_alert_prefs(db, user_id: str) -> dict:
+    """Return the raw alerts blob stored on the user record.
+
+    Blob shape (matches the frontend):
+      { enabled: bool,
+        perCategory: { [sub_id]: {p50: bool, p80: bool, exceeded: bool} },
+        singleExpense: { enabled: bool, threshold: number } }
+
+    Sensible defaults if missing: enabled=True, no per-sub overrides
+    (server evaluator falls back to defaults p50=off/p80=on/100=on),
+    singleExpense disabled at $200.
+    """
     u = await db.users.find_one({'user_id': user_id}, {'_id': 0, 'alert_prefs': 1}) or {}
     p = u.get('alert_prefs') or {}
     return {
-        'master': bool(p.get('budget_alerts_enabled', True)),
-        'p80': bool(p.get('budget_80_enabled', True)),
-        'p100': bool(p.get('budget_100_enabled', True)),
-        'large_enabled': bool(p.get('large_transaction_enabled', True)),
-        # threshold stored as integer cents server-side, min $1
-        'large_cents': max(100, int(p.get('large_transaction_cents', 50000) or 50000)),
+        'enabled': bool(p.get('enabled', True)),
+        'perCategory': dict(p.get('perCategory') or {}),
+        'singleExpense': {
+            'enabled': bool((p.get('singleExpense') or {}).get('enabled', False)),
+            'threshold': float((p.get('singleExpense') or {}).get('threshold') or 200),
+        },
+    }
+
+
+def _sub_prefs(prefs: dict, sub_id: str) -> dict:
+    """Per-subcategory alert config with new-user defaults (p50=off, p80=on, 100=on)."""
+    conf = (prefs.get('perCategory') or {}).get(sub_id) or {}
+    return {
+        'p50': bool(conf.get('p50', False)),
+        'p80': bool(conf.get('p80', True)),
+        'exceeded': bool(conf.get('exceeded', True)),
     }
 
 
@@ -106,43 +127,63 @@ async def _emit(db, *, user_id: str, key: str, title: str, body: str,
 
 # ---- Category threshold evaluation --------------------------------------
 async def evaluate_budget_alerts_for_user(db, user_id: str, *,
-                                          category_totals: Optional[dict[str, dict]] = None) -> list[dict]:
-    """category_totals is `{ category_id: {'name','spent','budget'} }`.
-    Caller supplies pre-computed totals (from existing budget code) so we
-    never re-implement categorization. Returns list of created notifications."""
+                                          category_totals: Optional[dict[str, dict]] = None,
+                                          period: Optional[str] = None) -> list[dict]:
+    """Evaluate 50 / 80 / 100 threshold alerts for a set of subcategories.
+
+    `category_totals` shape:
+      { <sub_id>: {'name': str, 'spent': float, 'budget': float,
+                    'parent_name'?: str} }
+    Only subcategories with `budget > 0` trigger. Uses per-sub prefs (with
+    defaults p50=off, p80=on, 100=on). 100%+ takes precedence over 80%,
+    which takes precedence over 50% within a single evaluation call.
+    """
     prefs = await get_user_alert_prefs(db, user_id)
-    if not prefs['master'] or not category_totals:
+    if not prefs['enabled'] or not category_totals:
         return []
-    period = current_period()
+    period = period or current_period()
     out: list[dict] = []
-    for cat_id, row in category_totals.items():
+    for sub_id, row in category_totals.items():
         budget = float(row.get('budget') or 0)
         spent = float(row.get('spent') or 0)
-        name = row.get('name') or 'Category'
         if budget <= 0:
             continue
+        name = row.get('name') or 'Category'
+        parent = row.get('parent_name')
+        display = f"{parent} · {name}" if parent else name
+        conf = _sub_prefs(prefs, sub_id)
         pct = spent / budget
-        # 100%+ wins over 80% when both cross in one event.
-        if pct >= 1.0 and prefs['p100']:
+        # 100%+ wins over 80% wins over 50% in a single tick.
+        if pct >= 1.0 and conf['exceeded']:
             over = spent - budget
             n = await _emit(
                 db, user_id=user_id,
-                key=f"u/{user_id}/{period}/{cat_id}/category_100",
+                key=f"u/{user_id}/{period}/{sub_id}/category_100",
                 title="Budget exceeded",
-                body=f"{name} is ${over:,.2f} over budget. You've spent ${spent:,.2f} of your ${budget:,.2f} monthly budget.",
-                ntype='category_100', category_id=cat_id, transaction_id=None, period=period,
-                metadata={'spent': spent, 'budget': budget, 'pct': pct},
+                body=f"{display} is ${over:,.2f} over budget. You've spent ${spent:,.2f} of your ${budget:,.2f} monthly budget.",
+                ntype='category_100', category_id=sub_id, transaction_id=None, period=period,
+                metadata={'spent': spent, 'budget': budget, 'pct': pct, 'name': display},
             )
             if n: out.append(n)
-        elif pct >= 0.80 and prefs['p80']:
+        elif pct >= 0.80 and conf['p80']:
             remaining = budget - spent
             n = await _emit(
                 db, user_id=user_id,
-                key=f"u/{user_id}/{period}/{cat_id}/category_80",
+                key=f"u/{user_id}/{period}/{sub_id}/category_80",
                 title="Budget warning",
-                body=f"You've used {int(pct*100)}% of your {name} budget — ${spent:,.2f} of ${budget:,.2f}. ${remaining:,.2f} remaining.",
-                ntype='category_80', category_id=cat_id, transaction_id=None, period=period,
-                metadata={'spent': spent, 'budget': budget, 'pct': pct},
+                body=f"You've used {int(pct*100)}% of your {display} budget — ${spent:,.2f} of ${budget:,.2f}. ${remaining:,.2f} remaining.",
+                ntype='category_80', category_id=sub_id, transaction_id=None, period=period,
+                metadata={'spent': spent, 'budget': budget, 'pct': pct, 'name': display},
+            )
+            if n: out.append(n)
+        elif pct >= 0.50 and conf['p50']:
+            n = await _emit(
+                db, user_id=user_id,
+                key=f"u/{user_id}/{period}/{sub_id}/category_50",
+                title="Budget check-in",
+                body=f"You've used {int(pct*100)}% of your {display} budget — ${spent:,.2f} of ${budget:,.2f}.",
+                ntype='category_50', category_id=sub_id, transaction_id=None, period=period,
+                metadata={'spent': spent, 'budget': budget, 'pct': pct, 'name': display},
             )
             if n: out.append(n)
     return out
@@ -152,11 +193,16 @@ async def evaluate_budget_alerts_for_user(db, user_id: str, *,
 async def evaluate_transaction_alert(db, user_id: str, tx: dict) -> Optional[dict]:
     """Fires the large-transaction alert if applicable + not already sent.
 
-    `tx` shape (minimal): {id or transaction_id, amount, description|name, merchant_name?, account_name?, date}
-    Money uses positive spend amounts. Refunds/deposits (amount < 0) are ignored.
+    `tx` shape (minimal): {id or transaction_id, amount, description|name, merchant_name?, account_name?}
+    Amount must be a positive spend value. Refunds/deposits (amount<=0) are
+    filtered by callers before invoking this (never re-classify here).
     """
     prefs = await get_user_alert_prefs(db, user_id)
-    if not (prefs['master'] and prefs['large_enabled']):
+    single = prefs.get('singleExpense') or {}
+    if not (prefs['enabled'] and single.get('enabled')):
+        return None
+    threshold = float(single.get('threshold') or 0)
+    if threshold <= 0:
         return None
     tx_id = tx.get('id') or tx.get('transaction_id')
     if not tx_id:
@@ -164,8 +210,7 @@ async def evaluate_transaction_alert(db, user_id: str, tx: dict) -> Optional[dic
     amt = float(tx.get('amount') or 0)
     if amt <= 0:
         return None  # only outgoing spend triggers large-transaction alerts
-    amt_cents = int(round(amt * 100))
-    if amt_cents < prefs['large_cents']:
+    if amt <= threshold:
         return None
     merchant = tx.get('merchant_name') or tx.get('description') or tx.get('name') or 'Merchant'
     acct = tx.get('account_name') or 'your account'
@@ -176,7 +221,7 @@ async def evaluate_transaction_alert(db, user_id: str, tx: dict) -> Optional[dic
         title="Large transaction detected",
         body=body,
         ntype='large_transaction', category_id=None, transaction_id=str(tx_id), period=None,
-        metadata={'amount': amt, 'merchant': merchant},
+        metadata={'amount': amt, 'merchant': merchant, 'threshold': threshold},
     )
 
 

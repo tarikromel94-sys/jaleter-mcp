@@ -318,6 +318,9 @@ async def _startup():
     await db.manual_accounts.create_index([('user_id', 1), ('category', 1)])
     # Net Worth history — one snapshot per user per UTC day
     await db.net_worth_snapshots.create_index([('user_id', 1), ('date_key', 1)], unique=True)
+    # Notification inbox + alert deduplication (alert_state uses _id — implicit unique).
+    await db.notifications.create_index([('user_id', 1), ('created_at', -1)])
+    await db.notifications.create_index([('user_id', 1), ('read_at', 1)])
     await db.net_worth_snapshots.create_index([('user_id', 1), ('taken_at', -1)])
     # Support tickets
     await db.support_tickets.create_index('ticket_id', unique=True)
@@ -1969,6 +1972,7 @@ async def _plaid_sync_item(user_id: str, item: dict) -> dict:
     org_name = item.get('institution_name') or 'Bank'
     item_id = item['item_id']
     added = 0
+    new_txns_for_alerts: list[dict] = []
     for txn in (result['added'] or []) + (result['modified'] or []):
         mapped = plaid_service.map_plaid_transaction(user_id, item_id, txn.get('account_id') or '', org_name, txn)
         # If the user has manually overridden system_category (e.g. marked
@@ -1979,8 +1983,10 @@ async def _plaid_sync_item(user_id: str, item: dict) -> dict:
         auto_system = mapped.pop('system_category_auto', mapped.get('system_category'))
         set_on_insert = {'system_category_auto': auto_system}
         # Don't $set system_category over an existing row; only set on insert.
-        insert_only_system = {'system_category': mapped.pop('system_category', None)}
-        insert_only_is_transfer = {'is_transfer': mapped.pop('is_transfer', False)}
+        sys_cat = mapped.pop('system_category', None)
+        is_transfer = mapped.pop('is_transfer', False)
+        insert_only_system = {'system_category': sys_cat}
+        insert_only_is_transfer = {'is_transfer': is_transfer}
         try:
             up = await db.bank_transactions.update_one(
                 {'user_id': mapped['user_id'], 'account_id': mapped['account_id'], 'external_id': mapped['external_id']},
@@ -1992,6 +1998,17 @@ async def _plaid_sync_item(user_id: str, item: dict) -> dict:
             )
             if up.upserted_id:
                 added += 1
+                # Only newly-inserted, non-transfer, positive-spend txns are
+                # eligible for the large-transaction alert.
+                amt = float(mapped.get('amount') or 0)
+                if sys_cat != 'transfer' and not is_transfer and amt > 0:
+                    new_txns_for_alerts.append({
+                        'id': mapped.get('external_id'),
+                        'amount': amt,
+                        'name': mapped.get('name') or mapped.get('description'),
+                        'merchant_name': mapped.get('merchant_name'),
+                        'account_name': org_name,
+                    })
             else:
                 # Row existed — refresh the auto-detected value so we can
                 # show it in the UI if the user later "reverts to auto",
@@ -2014,6 +2031,19 @@ async def _plaid_sync_item(user_id: str, item: dict) -> dict:
         {'item_id': item_id},
         {'$set': {'cursor': result['cursor'], 'last_sync_at': datetime.now(timezone.utc), 'updated_at': datetime.now(timezone.utc)}},
     )
+    # Fire large-transaction alerts for newly-inserted, positive-spend,
+    # non-transfer txns. Server-side dedupe (alert_state) prevents dup fires
+    # across sync attempts. Push failures never block sync.
+    if new_txns_for_alerts:
+        try:
+            from budget_alert_service import evaluate_transaction_alert
+            for tx in new_txns_for_alerts:
+                try:
+                    await evaluate_transaction_alert(db, user_id, tx)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning('large-tx alert eval failed: %s', e)
+        except Exception as e:  # noqa: BLE001
+            logger.warning('large-tx alert import failed: %s', e)
     return {'item_id': item_id, 'synced': added}
 
 
@@ -2480,6 +2510,10 @@ app.include_router(api_router)
 # Emergent Managed Push Notifications — /api/register-push
 from push_service import router as push_router  # noqa: E402
 app.include_router(push_router)
+
+# Budget alerts + notification inbox — /api/notifications/*
+from notifications_router import router as notifications_router  # noqa: E402
+app.include_router(notifications_router)
 
 app.add_middleware(
     CORSMiddleware,
