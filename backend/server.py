@@ -321,6 +321,12 @@ async def _startup():
     # Notification inbox + alert deduplication (alert_state uses _id — implicit unique).
     await db.notifications.create_index([('user_id', 1), ('created_at', -1)])
     await db.notifications.create_index([('user_id', 1), ('read_at', 1)])
+    # Weekly digest scheduler + dedup collection
+    try:
+        from weekly_digest_service import start_scheduler as _start_wd
+        _start_wd(db)
+    except Exception as e:  # noqa: BLE001
+        logger.warning('weekly digest scheduler failed to start: %s', e)
     await db.net_worth_snapshots.create_index([('user_id', 1), ('taken_at', -1)])
     # Support tickets
     await db.support_tickets.create_index('ticket_id', unique=True)
@@ -414,6 +420,11 @@ async def _startup():
 
 @app.on_event('shutdown')
 async def _shutdown():
+    try:
+        from weekly_digest_service import stop_scheduler as _stop_wd
+        _stop_wd()
+    except Exception:  # noqa: BLE001
+        pass
     try:
         sched = getattr(app.state, 'scheduler', None)
         if sched is not None:

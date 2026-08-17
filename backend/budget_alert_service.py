@@ -49,6 +49,7 @@ async def get_user_alert_prefs(db, user_id: str) -> dict:
             'enabled': bool((p.get('singleExpense') or {}).get('enabled', False)),
             'threshold': float((p.get('singleExpense') or {}).get('threshold') or 200),
         },
+        'weeklyDigest': bool(p.get('weeklyDigest', True)),
     }
 
 

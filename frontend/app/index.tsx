@@ -5249,6 +5249,27 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
             </Text>
           </View>
         )}
+        {/* Weekly Summary (Premium) — Sunday 6PM local. On-by-default; toggle
+            hides only the Sunday recap push. Individual budget & large-txn
+            alerts continue firing regardless. */}
+        {alerts.enabled && (
+          <View style={{ marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: t.dark ? D.border : '#ece5d5' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Ionicons name="calendar-outline" size={14} color="#c49450" />
+              <Text style={[{ flex: 1, fontSize: 11, fontWeight: '700' }, t.textInk]}>Weekly summary (Sun 6PM)</Text>
+              <Pressable
+                onPress={() => setAlerts({ ...(alerts as any), weeklyDigest: !((alerts as any).weeklyDigest !== false) })}
+                style={[s.toggle, (alerts as any).weeklyDigest !== false && s.toggleOn]}
+                testID="alert-weekly-digest-toggle"
+              >
+                <View style={[s.toggleKnob, (alerts as any).weeklyDigest !== false && { transform: [{ translateX: 14 }] }]} />
+              </Pressable>
+            </View>
+            <Text style={[{ fontSize: 9, marginTop: 6 }, t.textMuted]}>
+              Premium subscribers get a Sunday 6PM local recap: total spent this week vs last, top merchant, budget hits, and large-transaction count.
+            </Text>
+          </View>
+        )}
       </View>
       <View style={[s.settingsSection, t.cardBg]}>
         <Text style={[s.settingsH3, t.textInk]}>App Lock</Text>
@@ -5616,7 +5637,8 @@ function MainApp() {
     threshold: number;
     perCategory: Record<string, { p50: boolean; p80: boolean; exceeded: boolean }>;
     singleExpense?: { enabled: boolean; threshold: number };
-  }>({ enabled: true, threshold: 80, perCategory: {}, singleExpense: { enabled: false, threshold: 200 } });
+    weeklyDigest?: boolean;
+  }>({ enabled: true, threshold: 80, perCategory: {}, singleExpense: { enabled: false, threshold: 200 }, weeklyDigest: true });
   // Legacy screen state — hoisted here so timeframe, contribution, and hypothetical
   // amount survive navigation and app reloads (previously reset on every visit).
   const [legacyTimeframe, setLegacyTimeframe] = useState<string>('Retirement');
@@ -5723,7 +5745,8 @@ function MainApp() {
           threshold: (prev as any)?.threshold ?? 80,
           perCategory: { ...(prev.perCategory || {}), ...(server.perCategory || {}) },
           singleExpense: server.singleExpense || prev.singleExpense || { enabled: false, threshold: 200 },
-        }));
+          weeklyDigest: (server as any).weeklyDigest !== false,
+        } as any));
       }
       setAlertsSynced(true);
     })();
@@ -5734,12 +5757,16 @@ function MainApp() {
   useEffect(() => {
     if (!auth.token || !alertsSynced) return;
     const t = setTimeout(() => {
+      let tz: string | undefined;
+      try { tz = Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone || undefined; } catch { tz = undefined; }
       const blob = {
         enabled: !!alerts.enabled,
         perCategory: alerts.perCategory || {},
         singleExpense: alerts.singleExpense || { enabled: false, threshold: 200 },
+        weeklyDigest: (alerts as any)?.weeklyDigest !== false, // default ON
+        timezone: tz,
       };
-      putPrefs(auth.token!, blob).catch(() => {});
+      putPrefs(auth.token!, blob as any).catch(() => {});
     }, 800);
     return () => clearTimeout(t);
   }, [alerts, auth.token, alertsSynced]);

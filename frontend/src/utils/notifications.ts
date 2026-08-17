@@ -10,6 +10,7 @@ export type AlertPrefs = {
   enabled: boolean;
   perCategory: Record<string, { p50: boolean; p80: boolean; exceeded: boolean }>;
   singleExpense: { enabled: boolean; threshold: number };
+  weeklyDigest?: boolean;
 };
 
 export type NotificationItem = {
@@ -47,13 +48,19 @@ export async function getPrefs(token: string): Promise<AlertPrefs | null> {
   } catch (e) { warn('getPrefs', e); return null; }
 }
 
-export async function putPrefs(token: string, prefs: AlertPrefs): Promise<AlertPrefs | null> {
+export async function putPrefs(token: string, prefs: AlertPrefs & { timezone?: string }): Promise<AlertPrefs | null> {
   try {
     return await apiCall('/api/notifications/prefs', {
       method: 'PUT',
       body: JSON.stringify(prefs),
     }, token);
   } catch (e) { warn('putPrefs', e); return null; }
+}
+
+export async function runWeeklyDigestNow(token: string): Promise<{ notification_id?: string; skipped?: string; push_status?: string; title?: string; body?: string } | null> {
+  try {
+    return await apiCall('/api/notifications/weekly-digest/run-now', { method: 'POST' }, token);
+  } catch (e) { warn('runWeeklyDigestNow', e); return null; }
 }
 
 export async function evaluateBudget(

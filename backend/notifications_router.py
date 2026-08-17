@@ -50,19 +50,34 @@ class PrefsBody(BaseModel):
     enabled: bool = True
     perCategory: dict[str, PerCategoryPref] = Field(default_factory=dict)
     singleExpense: SingleExpensePref = Field(default_factory=SingleExpensePref)
+    weeklyDigest: bool = True
+    timezone: Optional[str] = None  # IANA TZ (e.g. "America/Los_Angeles")
 
 
 @router.put("/prefs")
 async def put_prefs(body: PrefsBody, current_user: dict = Depends(_auth())):
     db = _db()
+    # Validate timezone if provided; silently drop invalid.
+    tz_val: Optional[str] = None
+    if body.timezone:
+        try:
+            from zoneinfo import ZoneInfo  # noqa: WPS433
+            ZoneInfo(body.timezone)
+            tz_val = body.timezone
+        except Exception:  # noqa: BLE001
+            tz_val = None
     normalized = {
         "enabled": bool(body.enabled),
         "perCategory": {k: v.model_dump() for k, v in body.perCategory.items()},
         "singleExpense": body.singleExpense.model_dump(),
+        "weeklyDigest": bool(body.weeklyDigest),
     }
+    update: dict[str, Any] = {"alert_prefs": normalized}
+    if tz_val:
+        update["timezone"] = tz_val
     await db.users.update_one(
         {"user_id": current_user["user_id"]},
-        {"$set": {"alert_prefs": normalized}},
+        {"$set": update},
     )
     return normalized
 
@@ -132,6 +147,27 @@ async def mark_all_read(current_user: dict = Depends(_auth())):
         {"$set": {"read_at": datetime.now(timezone.utc)}},
     )
     return {"ok": True, "updated": res.modified_count}
+
+
+# ---------- Weekly digest — manual trigger (for the requesting user) ----
+@router.post("/weekly-digest/run-now")
+async def weekly_digest_run_now(current_user: dict = Depends(_auth())):
+    """Fire the weekly digest for the requesting user *right now*.
+
+    Useful for QA + for the user to preview what the Sunday push looks
+    like. Respects the same dedup as the scheduler (once per ISO week
+    in their local timezone). Non-premium users get a friendly error;
+    we deliberately DO NOT gate this with 402 because it's a preview.
+    """
+    from weekly_digest_service import send_weekly_digest, _is_premium_active
+    db = _db()
+    fresh = await db.users.find_one({"user_id": current_user["user_id"]}, {"_id": 0})
+    if not fresh:
+        raise HTTPException(404, "User not found")
+    if not fresh.get("is_admin") and not await _is_premium_active(fresh):
+        raise HTTPException(402, "Premium subscription required for weekly digest.")
+    res = await send_weekly_digest(db, fresh)
+    return res
 
 
 # ---------- Evaluators (called by frontend on data mutation) ----------

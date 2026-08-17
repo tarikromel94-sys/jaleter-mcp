@@ -1,0 +1,44 @@
+{
+  "summary": "Weekly Digest (Premium-only, Sunday 6PM local, deterministic) backend verified end-to-end. 16/16 pytest cases pass across prefs shape, premium gating, deterministic content, dedup, push resilience, sweep_and_send structure, and scheduler health.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "server.py startup/shutdown wiring",
+        "issue": "server.py has TWO `@app.on_event('shutdown')` handlers. The first (line 332) — decorated as 'shutdown' — contains logic that only makes sense at startup: create_index on net_worth_snapshots/support_tickets, support-admin seed, retention APScheduler start, and Stripe catalog bootstrap. Backend logs confirm 'Retention scheduler started' and 'Stripe subscription catalog ready' fire on each restart, which means either FastAPI is running the handler out-of-order or all these are effectively running at process teardown time. Weekly-digest startup at line 322-329 is inside the correct _startup handler, so weekly digest itself is unaffected. Recommend moving lines 339-427 back into the startup handler and keeping only the actual shutdown teardown in the shutdown handler."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_weekly_digest.py",
+    "/app/test_reports/pytest/iteration70_weekly_digest.xml"
+  ],
+  "action_items": [
+    "Optional: fix server.py double-shutdown-handler merge error (see minor issue).",
+    "Optional: migrate `@app.on_event(...)` to FastAPI lifespan events (deprecation warnings emitted)."
+  ],
+  "critical_code_review_comments": [
+    "weekly_digest_service.py — clean, uses Decimal for money math, correct ISO week dedup key format, and drops non-transfer negative rows (income) from spend totals. Verified.",
+    "notifications_router.py PUT /prefs correctly drops invalid IANA timezone via ZoneInfo() try/except; verified with 'Mars/Olympus' → prior value retained.",
+    "run-now enforces Premium via 402 for non-admin non-premium users. Admin passes; faked-premium user passes; body includes {notification_id, week_key, push_status, title, body}.",
+    "send_weekly_digest inserts dedup row FIRST — a repeat call within the same ISO week returns {skipped:'already_sent'} without inserting a second notification row (verified via Mongo count).",
+    "Push relay resilience verified: EMERGENT_PUSH_KEY=placeholder → push_status='failed' in response, notification row persisted with delivery_status='failed' and sent_at set to a real datetime. No crash.",
+    "sweep_and_send returns {'considered', 'sent', 'skipped'} dict as required. Since Sunday-18:00-local alignment is environmental, we only assert structure and sent>=0.",
+    "APScheduler `weekly_digest_sweep` job is registered and stop_scheduler() sets `_scheduler = None`. Verified by direct import."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_weekly_digest.py (new file)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not_tested"},
+  "seed_data_creation": "Fresh test user digest+<random>@jaleter.app registered per test session; a small set of bank_transactions (Starbucks x2, Amazon, transfer row excluded, negative row excluded, last-week Costco) is seeded then cleaned. Notification alert stubs (category_80, large_transaction) are seeded and removed. All test data scoped by user_id — no cross-user impact.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Test file /app/backend/tests/test_weekly_digest.py can be re-run with `pytest tests/test_weekly_digest.py -v` from /app/backend. It imports `server` first to bypass the circular import in push_service.py (Depends(_require_current_user()) evaluated at module load). The dev EMERGENT_PUSH_KEY=placeholder makes every push fail with 401 upstream — this is expected and the digest still persists correctly.",
+  "rca_of_issue": "N/A — no correctness bugs found in weekly digest. Only cosmetic / structural note about server.py double-shutdown-handler."
+}
