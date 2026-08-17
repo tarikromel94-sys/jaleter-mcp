@@ -22,7 +22,8 @@
         "backgroundColor": "#000000"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.emergent.nochangesmobile.fl0fmc"
+      "package": "com.emergent.nochangesmobile.fl0fmc",
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "bundler": "metro",
