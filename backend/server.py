@@ -91,10 +91,14 @@ DB_NAME = os.environ['DB_NAME']
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = 'HS256'
 JWT_EXPIRE_MIN = int(os.environ.get('ACCESS_TOKEN_EXPIRE_MINUTES', '10080'))
-EMERGENT_SESSION_URL = os.environ.get(
-    'EMERGENT_SESSION_URL',
-    'https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data',
-)
+EMERGENT_SESSION_URL = os.environ.get('EMERGENT_SESSION_URL')
+if not EMERGENT_SESSION_URL:
+    # Fail fast — Emergent Google Auth session exchange cannot proceed without it.
+    logger_name = 'server.bootstrap'
+    logging.getLogger(logger_name).error(
+        'EMERGENT_SESSION_URL is not set. Set it in the deploy environment.'
+    )
+    raise RuntimeError('EMERGENT_SESSION_URL is required and not set in the environment')
 
 # `tz_aware=True` ensures every datetime returned by Motor carries UTC
 # tzinfo. Without this, ISO strings serialized to the frontend lack the
@@ -357,27 +361,14 @@ async def _startup():
     except Exception as e:  # noqa: BLE001
         logger.warning('Support admin seed skipped: %s', e)
     # ---- Retention scheduler --------------------------------------------
-    # APScheduler in-process daily job at 03:00 UTC. Job report is
-    # written to the `retention_runs` audit collection so admins can
-    # verify cadence via `GET /api/admin/retention/status`.
-    try:
-        from apscheduler.schedulers.asyncio import AsyncIOScheduler
-        from apscheduler.triggers.cron import CronTrigger
-
-        async def _retention_job():
-            report = await retention_service.run_retention(db)
-            try:
-                await db.retention_runs.insert_one(report)
-            except Exception as e:  # noqa: BLE001
-                logger.warning('retention_runs audit write failed: %s', e)
-
-        scheduler = AsyncIOScheduler(timezone='UTC')
-        scheduler.add_job(_retention_job, CronTrigger(hour=3, minute=0), id='retention_daily', replace_existing=True)
-        scheduler.start()
-        app.state.scheduler = scheduler
-        logger.info('Retention scheduler started (daily 03:00 UTC)')
-    except Exception as e:  # noqa: BLE001
-        logger.warning('Retention scheduler skipped: %s', e)
+    # Deliberately NOT auto-scheduled at startup. The retention pipeline
+    # performs hard `delete_many()` operations, and the deployment health
+    # check blocks any startup path that runs destructive DB work.
+    # Retention is now an explicit, admin-triggered action only — invoked
+    # via `/api/admin/retention/*` endpoints. If a background cadence is
+    # ever needed, it should live in a separate, opt-in process (not in
+    # the FastAPI startup hook).
+    logger.info('Retention auto-scheduler disabled. Use admin endpoints for on-demand retention runs.')
 
     # ---- One-shot: reclassify Plaid TRANSFER_IN false-positives ---------
     # Historical bug: Plaid tags ACH deposits / paychecks / interest as

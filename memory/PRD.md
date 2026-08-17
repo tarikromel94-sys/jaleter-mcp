@@ -45,7 +45,7 @@ MX / Finicity can drop in by implementing the same interface — no user-facing 
 - `PATCH /api/support/admin/tickets/{id}` — update `status` / `priority` / `assigned_to`
 - `POST /api/support/admin/tickets/{id}/reply` — public admin reply (auto-transitions → `waiting_on_user`)
 - `POST /api/support/admin/tickets/{id}/note` — private admin-only note
-- Admin gating: `users.is_admin === true`. Seed user `support@jaleter.com / Tarik0731!` is created idempotently on backend startup.
+- Admin gating: `users.is_admin === true`. Seed admin (email + password) is provisioned idempotently on backend startup via `SUPPORT_ADMIN_EMAIL` and `SUPPORT_ADMIN_PASSWORD` env vars — credentials are never committed to source. See `/app/memory/test_credentials.md` (git-ignored) for local dev credentials.
 
 ### Plaid (new)
 - `GET  /api/plaid/status` — public status (configured/env/products/country_codes)
