@@ -91,7 +91,10 @@ DB_NAME = os.environ['DB_NAME']
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = 'HS256'
 JWT_EXPIRE_MIN = int(os.environ.get('ACCESS_TOKEN_EXPIRE_MINUTES', '10080'))
-EMERGENT_SESSION_URL = 'https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data'
+EMERGENT_SESSION_URL = os.environ.get(
+    'EMERGENT_SESSION_URL',
+    'https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data',
+)
 
 # `tz_aware=True` ensures every datetime returned by Motor carries UTC
 # tzinfo. Without this, ISO strings serialized to the frontend lack the
@@ -321,15 +324,27 @@ async def _startup():
     await db.support_tickets.create_index([('user_id', 1), ('created_at', -1)])
     await db.support_tickets.create_index([('status', 1), ('created_at', -1)])
     # Seed the primary admin account (idempotent)
+    # ---- Support admin seed --------------------------------------------
+    # Never ship a hardcoded fallback admin password to production. If
+    # SUPPORT_ADMIN_PASSWORD is unset we skip the seed entirely and log
+    # a warning — the operator must set it in the deploy environment.
     try:
-        await support_service.ensure_admin_seed(
-            db,
-            hash_password=hash_password,
-            new_user_id=new_user_id,
-            email='support@jaleter.com',
-            password='Tarik0731!',
-            name='Jaleter Support',
-        )
+        _support_email = os.environ.get('SUPPORT_ADMIN_EMAIL', '').strip()
+        _support_pw = os.environ.get('SUPPORT_ADMIN_PASSWORD', '').strip()
+        if not _support_email or not _support_pw:
+            logger.warning(
+                'Support admin seed skipped: set SUPPORT_ADMIN_EMAIL and '
+                'SUPPORT_ADMIN_PASSWORD in the environment to auto-seed.'
+            )
+        else:
+            await support_service.ensure_admin_seed(
+                db,
+                hash_password=hash_password,
+                new_user_id=new_user_id,
+                email=_support_email,
+                password=_support_pw,
+                name='Jaleter Support',
+            )
     except Exception as e:  # noqa: BLE001
         logger.warning('Support admin seed skipped: %s', e)
     # ---- Retention scheduler --------------------------------------------

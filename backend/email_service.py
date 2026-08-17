@@ -23,7 +23,9 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # Constant — never read from env so it survives deployment.
-EMAIL_BASE_URL = "https://integrations.emergentagent.com"
+EMAIL_BASE_URL = os.environ.get(
+    "EMERGENT_EMAIL_BASE_URL", "https://integrations.emergentagent.com"
+)
 _BRAND = "Jaleter"
 
 
