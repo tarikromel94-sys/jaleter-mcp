@@ -1,9 +1,12 @@
-"""File-import provider. Accepts CSV, OFX, QFX, QBO. Parses to normalized
-transactions, upserts into `bank_transactions` with duplicate detection.
+"""File-import provider. Accepts CSV, XLSX/XLS, OFX, QFX, QBO. Parses to
+normalized transactions, upserts into `bank_transactions` with duplicate
+detection. Supports two-step preview → commit + explicit column mapping
+overrides + per-user saved mappings for reuse across future files.
 """
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import logging
 import uuid
@@ -157,54 +160,93 @@ def _resolve_direction(amount: float, type_hint: str) -> float:
     return amount
 
 
-def _parse_csv(content: str) -> tuple[dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
+def _parse_csv(content: str) -> tuple[list[str], dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
     """Parse a CSV into normalized transactions.
 
-    Returns `(detected_columns, parsed_rows, skipped_rows)`. Skipped rows
-    include the reason and the original row so the caller can surface them
-    to the user (spec #12 — "Do not reject the entire file"). Valid rows are
-    imported even when a subset is malformed.
+    Returns `(header, detected_columns, parsed_rows, skipped_rows)`. Does NOT
+    raise on unrecognised columns — the caller can inspect `detected_columns`
+    to decide whether to prompt the user for a manual mapping. Valid rows
+    are still returned so a partial mapping can preview correctly.
     """
-    reader = csv.reader(io.StringIO(content))
-    rows = list(reader)
+    try:
+        reader = csv.reader(io.StringIO(content))
+        rows = list(reader)
+    except csv.Error as e:
+        # Malformed CSV — e.g., binary bytes decoded to text, unterminated
+        # quotes, or lone newlines inside unquoted fields. Surface a plain
+        # message instead of leaking the raw csv module error.
+        raise ProviderError(
+            "This doesn't look like a valid CSV file. "
+            "Please export it again from your bank or try a different file."
+        ) from e
     if not rows:
-        raise ProviderError('CSV appears to be empty')
+        raise ProviderError('The file appears to be empty.')
     header, *data_rows = rows
     mapping = _detect_columns(header)
-    # A parseable file needs a date column AND either an Amount OR a
-    # (Debit + Credit) pair. Anything else → surface a clear error so the UI
-    # can offer the manual column-mapping flow.
-    has_amount = 'amount' in mapping
-    has_debit_credit = 'debit' in mapping or 'credit' in mapping
-    if not mapping.get('date') or not (has_amount or has_debit_credit):
-        raise ProviderError(
-            'Could not identify the Date and Amount (or Debit + Credit) columns. '
-            'You can either rename your CSV headers to include "Date" and "Amount", '
-            'or export in a different format. Detected headers: ' + ', '.join(header)
-        )
-    idx = {k: header.index(v) for k, v in mapping.items()}
+    return header, mapping, *_extract_rows(header, data_rows, mapping)
+
+
+def _parse_xlsx(raw: bytes) -> tuple[list[str], dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Parse an XLSX / XLS file. Reads the first sheet, first row as headers."""
+    try:
+        from openpyxl import load_workbook
+    except Exception as e:  # noqa: BLE001
+        raise ProviderError('Excel support unavailable on this server.') from e
+    try:
+        wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    except Exception as e:  # noqa: BLE001
+        raise ProviderError(f'Could not read the Excel file: {e}') from e
+    ws = wb.active
+    if ws is None:
+        raise ProviderError('Excel workbook has no active sheet.')
+    all_rows = [[('' if c is None else c) for c in row] for row in ws.iter_rows(values_only=True)]
+    if not all_rows:
+        raise ProviderError('The spreadsheet appears to be empty.')
+    header = [str(h).strip() for h in all_rows[0]]
+    data_rows = all_rows[1:]
+    mapping = _detect_columns(header)
+    return header, mapping, *_extract_rows(header, data_rows, mapping)
+
+
+def _extract_rows(header: list[str], data_rows: list[list[Any]], mapping: dict[str, str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Shared row-extraction pass used by both CSV + XLSX parsers.
+
+    If `mapping` doesn't contain the minimum (date + amount OR debit/credit),
+    we return an empty parsed list and skip nothing — the caller will surface
+    the file's `header` so the client can request a manual mapping.
+    """
     parsed: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
-    for row_num, row in enumerate(data_rows, start=2):  # start=2 → header is row 1
-        if not row or all(not (c or '').strip() for c in row):
+    has_amount = 'amount' in mapping
+    has_dc = 'debit' in mapping or 'credit' in mapping
+    if not mapping.get('date') or not (has_amount or has_dc):
+        return parsed, skipped
+    idx: dict[str, int] = {}
+    for k, colname in mapping.items():
+        try:
+            idx[k] = header.index(colname)
+        except ValueError:
+            continue
+    if 'date' not in idx or not ('amount' in idx or 'debit' in idx or 'credit' in idx):
+        return parsed, skipped
+    for row_num, row in enumerate(data_rows, start=2):
+        row = list(row)
+        if not row or all((c is None or str(c).strip() == '') for c in row):
             continue
         try:
             date_val = _parse_date(row[idx['date']])
-            # Amount handling — single column OR debit/credit pair. If we have
-            # BOTH (rare), the single Amount column wins; the parser is
-            # generous but never sums the same value twice.
             if 'amount' in idx:
                 amount = _parse_amount(row[idx['amount']])
             else:
-                debit_raw = row[idx['debit']] if 'debit' in idx else ''
-                credit_raw = row[idx['credit']] if 'credit' in idx else ''
-                amount = _combine_debit_credit(debit_raw, credit_raw)
-            if 'type' in idx:
-                amount = _resolve_direction(amount, row[idx['type']])
-            description = (row[idx['description']] if 'description' in idx else '').strip()
-            category_hint = (row[idx['category']] if 'category' in idx else '').strip() or None
+                d_raw = row[idx['debit']] if 'debit' in idx else ''
+                c_raw = row[idx['credit']] if 'credit' in idx else ''
+                amount = _combine_debit_credit(d_raw, c_raw)
+            if 'type' in idx and idx['type'] < len(row):
+                amount = _resolve_direction(amount, str(row[idx['type']]))
+            description = str(row[idx['description']]).strip() if 'description' in idx and idx['description'] < len(row) else ''
+            category_hint = (str(row[idx['category']]).strip() or None) if 'category' in idx and idx['category'] < len(row) else None
             if amount == 0 and not description:
-                skipped.append({'row_num': row_num, 'reason': 'blank / zero amount', 'raw': row})
+                skipped.append({'row_num': row_num, 'reason': 'blank / zero amount'})
                 continue
             parsed.append({
                 'date': date_val,
@@ -213,9 +255,9 @@ def _parse_csv(content: str) -> tuple[dict[str, str], list[dict[str, Any]], list
                 'category_hint': category_hint,
             })
         except (IndexError, ValueError, TypeError) as e:
-            skipped.append({'row_num': row_num, 'reason': f'unreadable ({type(e).__name__})', 'raw': row})
+            skipped.append({'row_num': row_num, 'reason': f'unreadable ({type(e).__name__})'})
             continue
-    return mapping, parsed, skipped
+    return parsed, skipped
 
 
 def _parse_ofx(content: bytes) -> list[dict[str, Any]]:
@@ -240,9 +282,58 @@ def _parse_ofx(content: bytes) -> list[dict[str, Any]]:
     return txns
 
 
+def _fingerprint(header: list[str]) -> str:
+    """Stable hash of sorted normalized headers — used to key `saved_mappings`
+    so a repeat upload from the same bank format reuses the user's mapping."""
+    norm = sorted(h.strip().lower() for h in header if h and str(h).strip())
+    return hashlib.sha256('|'.join(norm).encode('utf-8')).hexdigest()[:24]
+
+
+def _preview_payload(fmt: str, filename: str, header: list[str] | None, mapping: dict[str, str],
+                     rows: list[dict[str, Any]], skipped: list[dict[str, Any]],
+                     sample_size: int = 8) -> dict[str, Any]:
+    dates = sorted(r['date'] for r in rows) if rows else []
+    total_debits = sum(-r['amount'] for r in rows if r['amount'] < 0)
+    total_credits = sum(r['amount'] for r in rows if r['amount'] > 0)
+    needed = ['date']
+    if not ('amount' in mapping or 'debit' in mapping or 'credit' in mapping):
+        needed.append('amount')
+    if not mapping.get('date'):
+        needed.append('date')
+    needs_mapping = bool(needed) and (
+        not mapping.get('date')
+        or not ('amount' in mapping or 'debit' in mapping or 'credit' in mapping)
+    )
+    return {
+        'format': fmt,
+        'filename': filename,
+        'headers': header or [],
+        'detected_mapping': mapping,
+        'transaction_count': len(rows),
+        'date_range': {
+            'start': dates[0].strftime('%Y-%m-%d') if dates else None,
+            'end': dates[-1].strftime('%Y-%m-%d') if dates else None,
+        },
+        'total_debits': round(total_debits, 2),
+        'total_credits': round(total_credits, 2),
+        'sample': [
+            {
+                'date': r['date'].strftime('%Y-%m-%d'),
+                'description': r['description'],
+                'amount': round(r['amount'], 2),
+                'category_hint': r.get('category_hint'),
+            } for r in rows[:sample_size]
+        ],
+        'skipped_count': len(skipped),
+        'skipped_sample': skipped[:5],
+        'needs_mapping': needs_mapping,
+        'fingerprint': _fingerprint(header) if header else None,
+    }
+
+
 class FileProvider(Provider):
     id = 'file'
-    label = 'CSV / OFX / QFX / QBO upload'
+    label = 'CSV / XLSX / OFX / QFX / QBO upload'
 
     def __init__(self, db: AsyncIOMotorDatabase) -> None:
         self.db = db
@@ -250,26 +341,102 @@ class FileProvider(Provider):
     def is_configured(self) -> bool:
         return True  # Always available.
 
-    async def import_file(
-        self, user_id: str, filename: str, mime: str | None, raw: bytes, account_name: str | None,
-    ) -> dict[str, Any]:
-        lower_name = (filename or '').lower()
-        is_ofx_like = any(lower_name.endswith(ext) for ext in ('.ofx', '.qfx', '.qbo')) or (mime or '').lower().startswith('application/x-ofx')
-        rows: list[dict[str, Any]]
-        detected_columns: dict[str, str] | None = None
-        skipped: list[dict[str, Any]] = []
-        if is_ofx_like:
+    async def _parse(self, user_id: str, filename: str, mime: str | None, raw: bytes,
+                     override_mapping: dict[str, str] | None) -> tuple[str, list[str] | None, dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
+        """Sniff format and parse. Returns (fmt, header, mapping, rows, skipped).
+
+        For CSV/XLSX, if `override_mapping` is provided it takes precedence over
+        auto-detection AND over any saved mapping. Otherwise: try auto-detect;
+        if that misses, try to look up a previously-saved mapping keyed by the
+        file's header fingerprint.
+        """
+        lower = (filename or '').lower()
+        is_ofx = any(lower.endswith(x) for x in ('.ofx', '.qfx', '.qbo')) or (mime or '').lower().startswith('application/x-ofx')
+        is_xlsx = lower.endswith('.xlsx') or lower.endswith('.xls') or (mime or '') in (
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-excel',
+        )
+        if is_ofx:
             rows = _parse_ofx(raw)
-            fmt = 'ofx'
+            if not rows:
+                raise ProviderError('The OFX file contained no transactions.')
+            return 'ofx', None, {}, rows, []
+        if is_xlsx:
+            header, mapping, rows, skipped = _parse_xlsx(raw)
+            fmt = 'xlsx'
         else:
             try:
                 text = raw.decode('utf-8-sig', errors='replace')
             except Exception as e:  # noqa: BLE001
-                raise ProviderError(f'Could not read CSV file: {e}')
-            detected_columns, rows, skipped = _parse_csv(text)
+                raise ProviderError('Unsupported file type or corrupt CSV.') from e
+            header, mapping, rows, skipped = _parse_csv(text)
             fmt = 'csv'
+        # Apply override or saved mapping when auto-detect isn't sufficient.
+        if override_mapping:
+            mapping = {k: v for k, v in override_mapping.items() if v and v in header}
+            rows, skipped = _extract_rows(header, [r for r in (self._load_data_rows(fmt, raw))], mapping)
+        elif not (mapping.get('date') and ('amount' in mapping or 'debit' in mapping or 'credit' in mapping)):
+            saved = await self.db.saved_mappings.find_one({
+                'user_id': user_id, 'fingerprint': _fingerprint(header),
+            })
+            if saved and isinstance(saved.get('mapping'), dict):
+                clean = {k: v for k, v in saved['mapping'].items() if v in header}
+                if clean.get('date') and ('amount' in clean or 'debit' in clean or 'credit' in clean):
+                    mapping = clean
+                    rows, skipped = _extract_rows(header, list(self._load_data_rows(fmt, raw)), mapping)
+        return fmt, header, mapping, rows, skipped
+
+    def _load_data_rows(self, fmt: str, raw: bytes) -> list[list[Any]]:
+        """Re-read raw file into an in-memory rows-of-cells list. Used when we
+        need to re-run `_extract_rows` with a different mapping."""
+        if fmt == 'xlsx':
+            from openpyxl import load_workbook
+            wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+            ws = wb.active
+            rows = [[('' if c is None else c) for c in r] for r in ws.iter_rows(values_only=True)]
+            return rows[1:] if rows else []
+        try:
+            text = raw.decode('utf-8-sig', errors='replace')
+        except Exception:  # noqa: BLE001
+            return []
+        rr = list(csv.reader(io.StringIO(text)))
+        return rr[1:] if rr else []
+
+    async def preview(self, user_id: str, filename: str, mime: str | None, raw: bytes,
+                      override_mapping: dict[str, str] | None = None) -> dict[str, Any]:
+        """Parse-only endpoint: returns detected mapping + first N rows +
+        totals + date range without writing anything to the database."""
+        fmt, header, mapping, rows, skipped = await self._parse(user_id, filename, mime, raw, override_mapping)
+        return _preview_payload(fmt, filename, header, mapping, rows, skipped)
+
+    async def import_file(
+        self, user_id: str, filename: str, mime: str | None, raw: bytes, account_name: str | None,
+        override_mapping: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        fmt, header, detected_columns, rows, skipped = await self._parse(user_id, filename, mime, raw, override_mapping)
         if not rows:
-            raise ProviderError('No transactions found in the file.')
+            if header and (not detected_columns.get('date') or not ('amount' in detected_columns or 'debit' in detected_columns or 'credit' in detected_columns)):
+                raise ProviderError(
+                    'Could not identify a Date column and an Amount (or Debit + Credit) column. '
+                    'Preview the file first and choose the correct columns to complete the import.'
+                )
+            raise ProviderError('No transactions were found in the file.')
+        # Persist the mapping so the next file with the same header fingerprint
+        # imports without prompting.
+        if header and detected_columns and fmt in ('csv', 'xlsx'):
+            try:
+                fp = _fingerprint(header)
+                await self.db.saved_mappings.update_one(
+                    {'user_id': user_id, 'fingerprint': fp},
+                    {'$set': {
+                        'user_id': user_id, 'fingerprint': fp, 'format': fmt,
+                        'header_sample': header, 'mapping': detected_columns,
+                        'updated_at': datetime.now(timezone.utc),
+                    }},
+                    upsert=True,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning('saved_mappings upsert failed: %s', e)
 
         # Lazy import to avoid a hard dep during module boot.
         from transaction_classifier import classify_from_text

@@ -1,0 +1,40 @@
+{
+  "summary": "Backend-only regression for expanded Statement Import (CSV/XLSX/OFX/QFX with flexible column mapping, preview + commit split, saved-mapping reuse, plain-language errors). 17/17 tests passing after fixing 1 backend bug (garbage CSV bytes returning 500) and 1 test assertion. Chase, BoA (parens/$/commas), Wells Fargo (Debit+Credit), UK (Money Out/In), unknown-headers + override_mapping fallback, XLSX + OFX parsing, preview vs. commit isolation, saved_mappings reuse across sessions, and legacy /api/accounts/import compatibility all verified against the public preview URL.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/statements/preview",
+        "issue": "Garbage binary bytes with a .csv extension surfaced a raw csv.Error 500 (traceback: 'new-line character seen in unquoted field'). Fixed in /app/backend/providers/file_provider.py::_parse_csv by wrapping csv.reader(...) in try/except csv.Error and raising ProviderError with a plain-language message (400)."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_statement_import.py",
+    "/app/test_reports/pytest/iteration71_statement_import.xml"
+  ],
+  "action_items": [
+    "None blocking. Optional hardening: consider also wrapping _load_data_rows() csv.reader in try/except for defense-in-depth (currently unreachable because _parse_csv runs first)."
+  ],
+  "critical_code_review_comments": [
+    "file_provider._parse_csv originally invoked csv.reader without a try/except — any malformed CSV (binary bytes, unterminated quote, etc.) escaped as 500. Now wrapped with a friendly ProviderError.",
+    "server.statements_preview + accounts/import both enforce the 5 MB cap and the empty-file guard consistently; auth gate returns 401 for missing Bearer.",
+    "saved_mappings upsert is keyed by (user_id, fingerprint) with header_sample stored — safe against different-user collisions and re-usable across sessions."
+  ],
+  "updated_files": [
+    "/app/backend/providers/file_provider.py (wrapped csv.reader in try/except csv.Error)",
+    "/app/backend/tests/test_statement_import.py (new — 17 tests)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "N/A (backend-only request)"},
+  "seed_data_creation": "Registered a fresh TEST_stmt+<uuid>@jaleter.app user per pytest module; teardown deletes saved_mappings, bank_transactions, linked_accounts, and users rows for that user_id.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Statement Import backend is green end-to-end. Legacy /api/accounts/import still accepts uploads without override_mapping (Chase CSV inserted=2). saved_mappings collection is populated on every successful import and consulted on next preview when the fingerprint matches. Test file at /app/backend/tests/test_statement_import.py is safe to re-run — it self-cleans and uses a fresh user per module.",
+  "rca_of_issue": "Bug: POST /api/statements/preview -> 500 on binary/garbage bytes with .csv extension. Root cause: _parse_csv called csv.reader(io.StringIO(content)) and list(reader) without exception handling; csv.Error propagated past the FastAPI handler which only caught ProviderError. Reproduction: POST bytes(range(256))*4 as 'garbage.csv' with a Bearer token. Fix: wrap the csv.reader/list in try/except csv.Error -> raise ProviderError('This doesn\\'t look like a valid CSV file...') so the endpoint returns 400 with a plain-language detail. Verified by TestErrors.test_garbage_bytes_csv now passing."
+}

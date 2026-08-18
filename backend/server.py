@@ -1204,17 +1204,57 @@ async def provider_link(payload: ProviderLinkRequest, request: Request, current_
 async def import_transactions(
     file: UploadFile = File(...),
     account_name: Optional[str] = Form(default=None),
+    override_mapping: Optional[str] = Form(default=None),
     current_user: dict = Depends(get_current_user),
 ):
     raw = await file.read()
     if not raw:
-        raise HTTPException(status_code=400, detail='Uploaded file is empty')
+        raise HTTPException(status_code=400, detail='The uploaded file is empty.')
     if len(raw) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail='File larger than 5MB')
+        raise HTTPException(status_code=413, detail='File is larger than 5 MB. Please split it before importing.')
     provider = _provider_registry['file']
+    om: Optional[dict] = None
+    if override_mapping:
+        try:
+            om = json.loads(override_mapping)
+            if not isinstance(om, dict):
+                raise ValueError('override_mapping must be an object')
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail='override_mapping must be valid JSON.')
     try:
-        result = await provider.import_file(current_user['user_id'], file.filename or 'upload', file.content_type, raw, account_name)  # type: ignore[attr-defined]
+        result = await provider.import_file(  # type: ignore[attr-defined]
+            current_user['user_id'], file.filename or 'upload', file.content_type, raw, account_name, om,
+        )
         return result
+    except ProviderError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@api_router.post('/statements/preview')
+async def statements_preview(
+    file: UploadFile = File(...),
+    override_mapping: Optional[str] = Form(default=None),
+    current_user: dict = Depends(get_current_user),
+):
+    """Parse a statement file WITHOUT committing. Returns detected column
+    mapping, sample rows, date range, totals, and any unparseable rows so the
+    client can render a confirmation / manual-mapping screen."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail='The uploaded file is empty.')
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail='File is larger than 5 MB. Please split it before importing.')
+    provider = _provider_registry['file']
+    om: Optional[dict] = None
+    if override_mapping:
+        try:
+            om = json.loads(override_mapping)
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail='override_mapping must be valid JSON.')
+    try:
+        return await provider.preview(  # type: ignore[attr-defined]
+            current_user['user_id'], file.filename or 'upload', file.content_type, raw, om,
+        )
     except ProviderError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -14,6 +14,7 @@ import { storage } from '@/src/utils/storage';
 import { AuthProvider, useAuth, apiCall } from '@/src/AuthContext';
 import { usePushRegistration } from '@/src/hooks/usePushRegistration';
 import { getPrefs, putPrefs, evaluateBudget, evaluateTransaction, currentPeriod as npCurrentPeriod, type CategoryTotal } from '@/src/utils/notifications';
+import StatementImportSheet from '@/src/StatementImportSheet';
 import { C, D, F } from '@/src/jaleterTheme';
 import { dailyQuote, MONEY, EXACT, QuoteType } from '@/src/quoteLibrary';
 import { WELCOME_HTML } from '@/src/welcomeHtml';
@@ -2984,7 +2985,8 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
     }
   };
   const remove = (id: string) => { setTransactions((xs: Tx[]) => xs.filter(x => x.id !== id)); setEditing(null); setToast('Transaction deleted.'); };
-  const importFile = () => pickAndImport(token, (msg) => setToast(msg), (err) => setToast(err), setImporting);
+  const [importSheetOpen, setImportSheetOpen] = useState(false);
+  const importFile = () => setImportSheetOpen(true);
 
   // Sync banner state — reflects the ACTUAL backend state, never fakes
   const okLinks = linkedRows.filter((r: any) => !r.error);
@@ -3192,6 +3194,13 @@ const TransactionsScreen = ({ transactions, setTransactions, categories, incomeS
         {editing && <TxForm item={editing} categories={categories} incomeSources={incomeSources} save={save} remove={editing.id ? remove : null} />}
       </Sheet>
       {toast ? <SharedToast message={toast} onHide={() => setToast('')} /> : null}
+      <StatementImportSheet
+        visible={importSheetOpen}
+        token={token}
+        dark={!!t.dark}
+        onClose={() => setImportSheetOpen(false)}
+        onDone={async (msg) => { setToast(msg); await onRefresh?.(); }}
+      />
     </ScrollView>
   );
 };
