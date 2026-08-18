@@ -77,7 +77,7 @@ async function saveAppLockPin(pin: string) { await storage.secureSet(APP_LOCK_KE
 async function saveAppLockBio(enabled: boolean) { await storage.secureSet(APP_LOCK_BIO_KEY, enabled ? '1' : '0'); }
 async function clearAppLock() { await storage.secureRemove(APP_LOCK_KEY); await storage.secureRemove(APP_LOCK_BIO_KEY); }
 
-const AppLockGate = ({ storedPin, biometricsEnabled, biometricsAvailable, onUnlock }: any) => {
+const AppLockGate = ({ storedPin, biometricsEnabled, biometricsAvailable, onUnlock, onForgotPin }: any) => {
   const [entered, setEntered] = useState('');
   const [error, setError] = useState('');
   const [tryingBio, setTryingBio] = useState(false);
@@ -128,7 +128,99 @@ const AppLockGate = ({ storedPin, biometricsEnabled, biometricsAvailable, onUnlo
           <Text style={{ color: '#e2b96f', fontSize: 12, fontWeight: '700', marginLeft: 8 }}>{tryingBio ? 'Waiting for biometrics…' : 'Use Face ID / Touch ID'}</Text>
         </Pressable>
       )}
+      {onForgotPin ? (
+        <Pressable onPress={onForgotPin} style={{ marginTop: 22, paddingVertical: 8, paddingHorizontal: 12 }} testID="pin-forgot">
+          <Text style={{ color: '#e2b96f', fontSize: 12, fontWeight: '700', letterSpacing: 0.4 }}>Forgot PIN?</Text>
+        </Pressable>
+      ) : null}
     </View>
+  );
+};
+
+/* ---------------- Forgot PIN Modal (verify account password to reset PIN) ---------------- */
+const ForgotPinModal = ({ visible, close, onReset }: { visible: boolean; close: () => void; onReset: () => void }) => {
+  const { user, login } = useAuth();
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    if (!visible) {
+      // Reset local state whenever the modal closes so a re-open starts clean.
+      setPassword('');
+      setError('');
+      setBusy(false);
+      setDone(false);
+    }
+  }, [visible]);
+  const onSubmit = async () => {
+    if (!user?.email) { setError('Not signed in.'); return; }
+    if (password.length < 1) { setError('Enter your password.'); return; }
+    setBusy(true);
+    setError('');
+    try {
+      // Verifies the account by re-authenticating; the returned token replaces
+      // the current session token (safe — same user), and we then wipe the
+      // device PIN so the caller can prompt for a new one.
+      await login(user.email, password);
+      await clearAppLock();
+      setDone(true);
+      // Give the user a beat to read the success state before we close.
+      setTimeout(() => { onReset(); }, 700);
+    } catch (e: any) {
+      setError(e?.message || 'Verification failed. Check your password and try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!visible) return null;
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={close}>
+      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', padding: 24 }}>
+        <View style={{ backgroundColor: '#1a1a1a', borderRadius: 20, padding: 22, borderWidth: 1, borderColor: 'rgba(226,185,111,0.15)' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+            <Ionicons name="lock-open-outline" size={22} color="#e2b96f" />
+            <Text style={{ color: '#e2b96f', fontSize: 12, fontWeight: '800', letterSpacing: 1.4, marginLeft: 8 }}>RESET APP PIN</Text>
+          </View>
+          <Text style={{ color: '#fff', fontSize: 22, fontWeight: '700', marginTop: 6 }}>Verify your account</Text>
+          <Text style={{ color: '#c7c1b6', fontSize: 12, marginTop: 8, lineHeight: 18 }}>
+            Enter the password for {user?.email || 'your account'} to reset your device PIN. Face ID / Touch ID will also be reset — you can re-enable both from Settings.
+          </Text>
+          <View style={{ marginTop: 18 }}>
+            <Text style={{ color: '#c7c1b6', fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 6 }}>PASSWORD</Text>
+            <TextInput
+              testID="forgot-pin-password"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              placeholder="Your account password"
+              placeholderTextColor="#7a7166"
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!busy && !done}
+              style={{ backgroundColor: '#0f0f0f', color: '#fff', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(226,185,111,0.2)', paddingHorizontal: 14, paddingVertical: Platform.OS === 'ios' ? 14 : 10, fontSize: 15 }}
+            />
+          </View>
+          {error ? <Text style={{ color: '#e08a7a', fontSize: 12, marginTop: 12, fontWeight: '600' }}>{error}</Text> : null}
+          {done ? <Text style={{ color: '#9ecf9a', fontSize: 12, marginTop: 12, fontWeight: '700' }}>PIN reset. You can set up a new PIN in Settings → App Lock.</Text> : null}
+          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
+            <Pressable onPress={close} disabled={busy} style={{ paddingVertical: 12, paddingHorizontal: 18, borderRadius: 12 }} testID="forgot-pin-cancel">
+              <Text style={{ color: '#c7c1b6', fontSize: 13, fontWeight: '700' }}>Cancel</Text>
+            </Pressable>
+            <Pressable
+              onPress={onSubmit}
+              disabled={busy || done || password.length < 1}
+              style={{ paddingVertical: 12, paddingHorizontal: 18, borderRadius: 12, backgroundColor: (busy || done || password.length < 1) ? 'rgba(226,185,111,0.4)' : '#e2b96f' }}
+              testID="forgot-pin-submit"
+            >
+              {busy ? <ActivityIndicator size="small" color="#000" /> : (
+                <Text style={{ color: '#000', fontSize: 13, fontWeight: '800' }}>{done ? 'Done' : 'Verify & Reset PIN'}</Text>
+              )}
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 };
 
@@ -5557,6 +5649,7 @@ function MainApp() {
   usePushRegistration({ userId: auth.user?.user_id, token: auth.token });
   const [hydrated, setHydrated] = useState(false);
   const [appLock, setAppLock] = useState<{ enabled: boolean; pin: string; biometricsEnabled: boolean; biometricsAvailable: boolean; openConfigure?: boolean; locked: boolean }>({ enabled: false, pin: '', biometricsEnabled: false, biometricsAvailable: false, locked: false });
+  const [forgotPinOpen, setForgotPinOpen] = useState(false);
   useEffect(() => {
     (async () => {
       const l = await loadAppLock();
@@ -6378,8 +6471,20 @@ function MainApp() {
           biometricsEnabled={appLock.biometricsEnabled}
           biometricsAvailable={appLock.biometricsAvailable}
           onUnlock={() => setAppLock((a) => ({ ...a, locked: false }))}
+          onForgotPin={() => setForgotPinOpen(true)}
         />
       )}
+      <ForgotPinModal
+        visible={forgotPinOpen}
+        close={() => setForgotPinOpen(false)}
+        onReset={() => {
+          // PIN + biometrics were wiped from SecureStore by the modal on
+          // successful password re-verification. Unlock the app now and
+          // clear local App Lock state so the gate does not re-appear.
+          setForgotPinOpen(false);
+          setAppLock({ enabled: false, pin: '', biometricsEnabled: false, biometricsAvailable: appLock.biometricsAvailable, locked: false });
+        }}
+      />
       {auth.user && stage === 'app' && !(appLock.enabled && appLock.locked) && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
           <EmailVerificationBanner isDark={isDark} />

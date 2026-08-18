@@ -50,9 +50,19 @@ const WINDOWS: { label: string; months: number }[] = [
 const INITIAL_LIST_SIZE = 10;
 
 function parseDate(v: string): Date {
+  // Timezone-safe parsing: JS treats "YYYY-MM-DD" as UTC midnight, which in
+  // westward timezones shifts the local calendar day back by one — the very
+  // day-boundary bug that made Reports occasionally drop a transaction into
+  // the wrong month bucket. Detect the ISO date pattern and construct with
+  // local Y/M/D so charts always attribute a transaction to the day the
+  // user actually entered it.
+  if (typeof v === 'string') {
+    const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  }
   const d = new Date(v);
   if (!isNaN(d.getTime())) return d;
-  const parts = v.split('-');
+  const parts = (v || '').split('-');
   if (parts.length >= 3) return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
   return new Date();
 }
@@ -282,10 +292,14 @@ export function ReportsScreen({ transactions, categories, incomeSources = [], ba
         catMap.set(catKey, (catMap.get(catKey) || 0) + a.amount);
       }
     });
-    return Array.from(catMap.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
-      .map(([label, value], i) => ({ label, value, color: PIE_COLORS[i % PIE_COLORS.length] }));
+    const entries = Array.from(catMap.entries()).sort((a, b) => b[1] - a[1]);
+    // Top-10 view + explicit "Other" wedge so the pie always sums to the
+    // Expense total (was previously silently truncated, causing the pie and
+    // the Expense total card to disagree when >10 categories were active).
+    const top = entries.slice(0, 10).map(([label, value], i) => ({ label, value, color: PIE_COLORS[i % PIE_COLORS.length] }));
+    const otherTotal = entries.slice(10).reduce((sum, [, v]) => sum + v, 0);
+    if (otherTotal > 0) top.push({ label: 'Other', value: otherTotal, color: '#7a7166' });
+    return top;
   }, [filtered, categories, allocations]);
 
   // Income sources — attributes each income transaction to its income source
@@ -306,10 +320,11 @@ export function ReportsScreen({ transactions, categories, incomeSources = [], ba
         map.set(key, (map.get(key) || 0) + a.amount);
       }
     });
-    return Array.from(map.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
-      .map(([label, value], i) => ({ label, value, color: PIE_COLORS[i % PIE_COLORS.length] }));
+    const entries = Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
+    const top = entries.slice(0, 10).map(([label, value], i) => ({ label, value, color: PIE_COLORS[i % PIE_COLORS.length] }));
+    const otherTotal = entries.slice(10).reduce((sum, [, v]) => sum + v, 0);
+    if (otherTotal > 0) top.push({ label: 'Other', value: otherTotal, color: '#7a7166' });
+    return top;
   }, [filtered, incomeSources, allocations]);
 
   const subcategoryBars = useMemo(() => {
@@ -339,11 +354,21 @@ export function ReportsScreen({ transactions, categories, incomeSources = [], ba
       else if ((t as any).type === 'expense') bucket.expense += amt;
       map.set(key, bucket);
     });
-    return Array.from(map.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .slice(-12)
-      .map(([key, v]) => ({ key, ...v }));
+    // Sort chronologically and cap at the most recent 12 months so the bar
+    // chart is still legible. `monthlyTruncated` (below) drives a hint so
+    // the user knows earlier months exist when the window is 'All'.
+    const sorted = Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
+    return sorted.slice(-12).map(([key, v]) => ({ key, ...v }));
   }, [filtered]);
+
+  // Count of months represented in `filtered` before the 12-month cap — used
+  // purely as a UI hint (chart still renders the last 12 for legibility).
+  const monthlyTotalMonths = useMemo(() => {
+    const set = new Set<string>();
+    filtered.forEach((t) => set.add(monthKey(parseDate((t as any).date))));
+    return set.size;
+  }, [filtered]);
+  const monthlyTruncated = monthlyTotalMonths > monthly.length;
 
   const merchants = useMemo(() => {
     const map = new Map<string, { count: number; total: number }>();
@@ -465,6 +490,11 @@ export function ReportsScreen({ transactions, categories, incomeSources = [], ba
               <View style={styles.legendRowInline}><View style={[styles.legendDot, { backgroundColor: '#4c8b56' }]} /><Text style={styles.legendLabel}>Income</Text></View>
               <View style={styles.legendRowInline}><View style={[styles.legendDot, { backgroundColor: '#b0453d' }]} /><Text style={styles.legendLabel}>Expense</Text></View>
             </View>
+            {monthlyTruncated ? (
+              <Text style={[styles.legendLabel, { marginTop: 8, fontStyle: 'italic', color: '#8a7f6b' }]}>
+                Showing the most recent 12 months of {monthlyTotalMonths} — totals above still reflect the full selected range.
+              </Text>
+            ) : null}
           </>
         )}
       </Section>

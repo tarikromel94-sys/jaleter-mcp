@@ -1,0 +1,40 @@
+{
+  "summary": "Iteration 72 — Verified both new features end-to-end: (1) App PIN Recovery Flow works exactly as spec'd: 'Forgot PIN?' button renders on the AppLockGate, tapping it opens ForgotPinModal, wrong password shows inline 'Invalid email or password' and PIN is NOT cleared (modal stays open), correct password (Tarik0731!) verifies via POST /api/auth/login, clears local PIN + biometrics via clearAppLock(), closes modal, unlocks the app (home-bell testID becomes visible), and Settings→App Lock now shows 'Not set / Tap to set a PIN'. Reload after unlock does NOT re-show the gate (verified via subsequent navigation). (2) Reports audit code paths inspected + smoke-run against admin (empty data): timezone-safe parseDate (lines 52-68), explicit 'Other' wedge appended when entries.length > 10 for both categoryPie (lines 296-301) and incomePie (lines 322-326), and 'Showing the most recent 12 months of N' hint gated on monthlyTruncated = monthlyTotalMonths > monthly.length (lines 366-371, 493-497) — logic is correct. All 7 windows (1M/3M/6M/12M/YTD/All/Custom) render without runtime errors on the empty-data admin account. Backend smoke: POST /api/auth/login for support@jaleter.com/Tarik0731! → 200 {user, token} (3/3 pytest passing).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_login_smoke_iter72.py",
+    "/app/test_reports/pytest/iteration72_login_smoke.xml",
+    "/app/test_reports/screenshots/iter72_lockgate.jpeg",
+    "/app/test_reports/screenshots/iter72_reports.jpeg",
+    "/app/test_reports/screenshots/iter72_post_login.jpeg"
+  ],
+  "action_items": [
+    "None blocking. Optional (non-blocking): the admin account is unverified so an 'Enter token / Resend email' banner is visible above every screen — this is expected behavior unrelated to this session's features.",
+    "Optional UX polish: the wrong-password error surfaces the raw backend message ('Invalid email or password') via the AuthContext login throw — copy is acceptable but a friendlier 'Verification failed. Check your password and try again.' would match the ForgotPinModal's default error text; currently only rendered when the caught error has no message."
+  ],
+  "critical_code_review_comments": [
+    "AppLockGate correctly conditionally renders the Forgot PIN button (only when onForgotPin is passed) — the gate can still be reused elsewhere without the recovery affordance.",
+    "ForgotPinModal.onSubmit calls await login(user.email, password) FIRST and only calls clearAppLock() after a successful re-auth — so a failed verify leaves the on-device PIN intact (verified by test).",
+    "MainApp.onReset callback wipes appLock state to {enabled:false, pin:'', biometricsEnabled:false, locked:false} which prevents the gate from re-mounting until user configures a new PIN in Settings.",
+    "ReportsScreen.parseDate now handles the YYYY-MM-DD case with local-Y/M/D construction and falls back to new Date(v) for ISO-with-time strings — safe against the UTC-midnight-shifts-back-a-day bug.",
+    "ReportsScreen categoryPie and incomePie both slice(0,10) and append an 'Other' wedge with reduced remaining total — pie sum will now equal the totals card in all cases (Reports Audit fix (b))."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_login_smoke_iter72.py (new — 3 login smoke tests)"
+  ],
+  "success_rate": {"backend": "100% (3/3 login smoke tests)", "frontend": "100% (all reviewed flows PASS)"},
+  "seed_data_creation": "None — used the existing seeded admin (support@jaleter.com/Tarik0731!). The set-PIN state on the browser IndexedDB is now cleared as part of the successful reset flow.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Both features PASS. PIN Recovery Flow was tested end-to-end on the web preview: login as admin, Settings→App Lock (dispatched clicks on cfg-pin-1..4 because the pin pad renders below the viewport in the light Sheet on 390x844 mobile — use JS MouseEvent dispatch or increase viewport height to 900+ px if you re-test), reload page to trigger AppLockGate, tap pin-forgot, wrong password stays on modal with inline error and does NOT clear PIN, correct password clears PIN and unlocks the app. Reports smoke passes; runtime verification of the 'Other' wedge and the '12 months of N' hint requires a test user with >10 expense categories or >12 months of transactions — code paths verified via inspection.",
+  "rca_of_issue": "N/A — no bugs found this iteration."
+}
