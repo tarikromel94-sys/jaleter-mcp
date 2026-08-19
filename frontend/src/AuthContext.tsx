@@ -7,6 +7,18 @@ import { storage } from '@/src/utils/storage';
 const TOKEN_KEY = 'jaleter_auth_token';
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
+// Production sanity check — logs to the device / EAS build console when the
+// shipped build somehow ended up pointing at a preview URL. This never
+// surfaces UI to the user and is safe in reviewers' hands. We deliberately
+// use console.warn so it shows in Xcode / Android Studio device logs.
+if (!__DEV__ && (/(\.preview\.|localhost|127\.0\.0\.1)/i.test(BASE) || BASE === '')) {
+  console.warn(
+    '[Jaleter] EXPO_PUBLIC_BACKEND_URL looks non-production in a release build:',
+    BASE || '(empty)',
+    '— rotate the deploy env var before shipping.',
+  );
+}
+
 export type AuthUser = {
   user_id: string;
   name: string;

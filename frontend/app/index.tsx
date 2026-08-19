@@ -5093,7 +5093,7 @@ const MembershipScreen = ({ back }: any) => {
         )}
       </View>
       <Text style={{ fontSize: 10, color: t.dark ? D.textMuted : '#8d867d', textAlign: 'center', marginTop: 12, lineHeight: 14 }}>
-        Membership is billed by Stripe. You can cancel, update your card, or download invoices any time from Manage subscription.
+        Membership is $90.00 USD per year, billed by Stripe. Your subscription renews automatically each year at $90.00 USD unless you cancel at least 24 hours before the renewal date. You can cancel, update your card, or download invoices any time from Manage subscription or at jaleter.com/billing.
       </Text>
     </ScrollView>
   );
