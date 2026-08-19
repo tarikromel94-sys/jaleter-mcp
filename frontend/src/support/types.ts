@@ -59,7 +59,7 @@ export const STATUS_COLORS: Record<string, string> = {
 
 export const FAQS: { q: string; a: string }[] = [
   { q: 'How do I link a bank account?', a: 'Settings → Linked Accounts → tap "Connect a bank (Plaid)" for real-time sync, or "Import statement" to upload a CSV/OFX.' },
-  { q: 'Where is billing managed?', a: 'All payments and subscriptions are handled at jaleter.com to keep prices honest and avoid App Store fees.' },
+  { q: 'Where is billing managed?', a: 'All payments and subscriptions are handled on our secure website at jaleter.com.' },
   { q: 'How do I export my budget?', a: 'Budget screen → tap Export → choose Excel (.xlsx). You get a 4-tab workbook: Summary, Monthly, Annual Grid, and Transactions.' },
   { q: 'Is my bank data safe?', a: 'Yes. Access tokens are Fernet-encrypted at rest and never returned to the app. Only short-lived link tokens ever reach the frontend.' },
   { q: 'How do I delete my account?', a: 'Open a support ticket with category "Delete account". Our team confirms your identity, then wipes your data within 30 days.' },

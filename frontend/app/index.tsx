@@ -592,8 +592,8 @@ const Sparkle = ({ size = 20, color = C.goldGlow, style }: any) => (
 );
 
 /* ---------------- Billing Website Notice (external web billing) ---------------- */
-// All Stripe checkout has moved to jaleter.com to bypass App Store fees.
-// Tapping opens jaleter.com/billing in the platform's best browser.
+// Stripe checkout is hosted at jaleter.com; this component links to the
+// hosted billing/coaching/membership page.
 const BillingWebsiteNotice = ({ compact = false, target = 'billing' as 'billing' | 'coaching' | 'membership' }: { compact?: boolean; target?: 'billing' | 'coaching' | 'membership' }) => {
   const t = useThemed();
   const label = target === 'coaching' ? 'Book & pay at jaleter.com' : target === 'membership' ? 'Manage membership at jaleter.com' : 'Billing lives at jaleter.com';
@@ -611,7 +611,7 @@ const BillingWebsiteNotice = ({ compact = false, target = 'billing' as 'billing'
         <Text style={[billingNoticeStyles.body, t.textMuted]}>
           {compact
             ? 'Tap to open on our website.'
-            : 'To keep prices honest and avoid App Store fees, all payments and subscription management happen on our secure website. Tap here to open jaleter.com in your browser.'}
+            : 'Billing and subscription management is handled on our secure website. Tap here to open jaleter.com in your browser.'}
         </Text>
       </View>
       <Ionicons name="open-outline" size={16} color={C.goldEyebrow} />

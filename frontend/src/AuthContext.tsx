@@ -24,7 +24,6 @@ type AuthState = {
   register: (name: string, email: string, password: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
-  loginWithApple: (payload: { identity_token: string; name?: string | null; email?: string | null }) => Promise<void>;
   logout: () => Promise<void>;
   requestPasswordReset: (email: string) => Promise<{ delivered: boolean; reset_token?: string }>;
   resetPassword: (token: string, newPassword: string) => Promise<void>;
@@ -169,14 +168,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await persist(data.token, data.user);
   }, [persist]);
 
-  const loginWithApple = useCallback(async (payload: { identity_token: string; name?: string | null; email?: string | null }) => {
-    const data = await callApi('/api/auth/apple', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-    await persist(data.token, data.user);
-  }, [persist]);
-
   const logout = useCallback(async () => {
     try {
       if (token) await callApi('/api/auth/logout', { method: 'POST' }, token);
@@ -236,7 +227,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {}
   }, [token]);
 
-  return <Ctx.Provider value={{ loading, user, token, register, login, loginWithGoogle, loginWithApple, logout, requestPasswordReset, resetPassword, deleteAccount, resendVerification, verifyEmail, refreshUser }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ loading, user, token, register, login, loginWithGoogle, logout, requestPasswordReset, resetPassword, deleteAccount, resendVerification, verifyEmail, refreshUser }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth(): AuthState {
