@@ -38,6 +38,7 @@ import {
   Sheet,
   Toast as SharedToast,
   GoldButton,
+  isInvestmentAccount,
   type Asset,
 } from '@/src/utils/appShared';
 import { NetWorthScreen } from '@/src/screens/NetWorthScreen';
@@ -5409,6 +5410,10 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
           </Pressable>
         ))}
       </View>
+      <View style={{ marginTop: 20, paddingHorizontal: 6 }}>
+        <Text style={[{ fontSize: 10, fontWeight: '800', letterSpacing: 1.4, color: C.danger }, t.textMuted && { color: '#c07a6f' }]}>DANGER ZONE</Text>
+        <Text style={[{ fontSize: 10, color: C.muted3, marginTop: 4, lineHeight: 14 }, t.textMuted]}>Reset your budgets, transactions, categories, and goals. Your Jaleter account, membership, and connected banks stay linked.</Text>
+      </View>
       <Pressable onPress={() => setConfirmReset(true)} style={[s.logoutBtn, { marginTop: 10, borderColor: '#b28a4c' }]} testID="settings-reset">
         <Ionicons name="refresh-outline" size={17} color="#b28a4c" />
         <Text style={{ color: '#b28a4c', fontSize: 12, fontWeight: '700' }}>Reset App Data</Text>
@@ -5440,7 +5445,18 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
         visible={confirmReset}
         isDark={t.dark}
         onCancel={() => setConfirmReset(false)}
-        onConfirm={async () => { setConfirmReset(false); await onResetAppData?.(); setToast('App data reset. Fresh start.'); }}
+        onConfirm={async () => {
+          try {
+            await onResetAppData?.();
+            setConfirmReset(false);
+            setToast('App data reset. Fresh start.');
+          } catch (e: any) {
+            // Modal stays open so the user sees the error. ResetAppDataModal
+            // owns its own busy state; we just re-throw so it clears.
+            setToast(e?.message || 'Reset failed. Nothing was changed.');
+            throw e;
+          }
+        }}
       />
       <LegalSheet visible={sheet === 'terms'} close={() => setSheet(null)} type="Terms of Use" />
       <LegalSheet visible={sheet === 'privacy'} close={() => setSheet(null)} type="Privacy Policy" />
@@ -6348,7 +6364,7 @@ function MainApp() {
   //         • 12+                       → average of the most recent 12
   //      The run rate includes surpluses AND deficits — a negative
   //      run-rate is applied as-is (projection can decline).
-  const legacyPerMonthNet = React.useCallback((totalMonths: number) => {
+  const _computeLegacyPerMonthNet = React.useCallback((totalMonths: number) => {
     const rows: { month: number; net: number; source: 'budgeted' | 'estimated'; ym: string; label: string; year: number; monthIdx: number }[] = [];
     const now = new Date();
     const startY = now.getFullYear();
@@ -6474,6 +6490,25 @@ function MainApp() {
     (rows as any).finalizedBudgetMonthCount = merged.length;
     return rows as any;
   }, [categoriesByYear, categories, incomeSources, finalizedBudgetMonths]);
+
+  const legacyPerMonthNet = React.useCallback((totalMonths: number) => {
+    // Defensive wrapper — any crash inside the monthly projection would
+    // previously bubble to the app root and show the Redbox. We now return
+    // an empty projection with the error attached as metadata so the
+    // Legacy screen renders "no projection yet" instead of the whole app
+    // crashing (e.g. mid-statement-import when linked accounts churn).
+    try {
+      return _computeLegacyPerMonthNet(totalMonths);
+    } catch (e: any) {
+      const fallback: any[] = [];
+      (fallback as any).error = e?.message || 'Could not project monthly net';
+      (fallback as any).runRate = 0;
+      (fallback as any).currentBudgetNet = 0;
+      (fallback as any).finalizedBudgetMonthCount = 0;
+      console.warn('[Jaleter] legacyPerMonthNet crashed:', e);
+      return fallback as any;
+    }
+  }, [_computeLegacyPerMonthNet]);
   // Human-readable source period for the Legacy → Monthly Surplus drill-down.
   // Uses the currently-selected budget year + the real calendar month so the
   // label reads e.g. "August 2026 budget".
@@ -6588,10 +6623,20 @@ function MainApp() {
           {active === 'coaching' && <CoachingScreen back={() => nav('more')} />}
           {active === 'membership' && <MembershipScreen back={() => nav('more')} />}
           {active === 'settings' && <SettingsScreen initials={displayInitials} experience={experience} setExperience={setExperience} appearance={appearance} setAppearance={setAppearance} alerts={alerts} setAlerts={setAlerts} categories={categories} appLock={appLock} setAppLock={(next: any) => setAppLock({ ...appLock, ...next })} onLogout={async () => { await auth.logout(); setActive('home'); setStage('welcome'); }} back={() => nav('more')} linkedAccounts={linkedAccounts} linkedAccountCount={validLinked.length} addLinked={(a: any[]) => { setLinkedAccounts([...linkedAccounts, ...a]); refreshAccounts(); }} onResetAppData={async () => {
-            // Spec #18 — Reset App Data behavior confirmed by the user:
-            // KEEP Plaid connections, CLEAR synced data. Every locally-cached
-            // financial artefact goes; Plaid items in the backend stay so
-            // balances + transactions resync on the next `/accounts/all` call.
+            // Spec #18 — Reset App Data behavior: KEEP Plaid + subscription +
+            // login, CLEAR the user's financial content on BOTH the server AND
+            // local cache. The previous implementation only reset local state,
+            // so all budgets/transactions came back from the server on next
+            // login. We now call the backend first — if that succeeds, the
+            // local state reset below just mirrors what the server already
+            // did. If the backend call fails, we throw and the modal shows
+            // an error rather than half-resetting.
+            try {
+              await apiCall('/api/user/reset-data', { method: 'POST' }, auth.token || '');
+            } catch (e: any) {
+              // Bubble the error to the modal so the user sees why it failed.
+              throw new Error(e?.message || 'Could not reset your data. Please try again.');
+            }
             try { await storage.removeItem(STORAGE_KEY); } catch {}
             for (const k of LEGACY_STORAGE_KEYS) { try { await storage.removeItem(k); } catch {} }
             setTransactions([]);

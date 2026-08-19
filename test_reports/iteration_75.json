@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 75 — Backend fixes all VERIFIED (12/12 pytest pass: 4 new iter75 + 8 iter74 regression). isInvestmentAccount fix is confirmed (no such error on app root). HOWEVER a NEW frontend regression was introduced: ReferenceError 'Cannot access _computeLegacyPerMonthNet before initialization' crashes MainApp on load. Backend: (1) POST /api/user/reset-data returns ok:true with exact deleted_counts {transactions:3, budget_cells:2, notifications:1, import_mappings:1} and PRESERVES linked_accounts, plaid_items, and the user row. (2) DELETE /api/account alias works — user gone, billing_receipts unchanged for a user without stripe_customer_id. (3) DELETE /api/auth/delete-account with pre-seeded stripe_customer_id='cus_test_iter75' + stripe_subscription_id='sub_test_iter75' correctly inserts an anonymised billing_receipts row containing the two Stripe IDs + account_deleted_at, with NO user_id / email / name. (4) Rate limit on /api/user/reset-data is 5/hour and per-IP (slowapi default): within 6 back-to-back calls a 429 is returned monotonically (once 429 starts, no more 200s).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "MainApp / legacyPerMonthNet TDZ",
+        "issue": "ReferenceError: Cannot access '_computeLegacyPerMonthNet' before initialization. `legacyPerMonthNet` useCallback at /app/frontend/app/index.tsx:6363 references `_computeLegacyPerMonthNet` in its body AND in its deps array (line 6380), but `_computeLegacyPerMonthNet` is declared AFTER it at line 6382. React executes useCallback bodies top-down during render, so the closure captures the identifier in its temporal dead zone. Fix: move the definition of `_computeLegacyPerMonthNet` (lines 6382+) ABOVE `legacyPerMonthNet` (line 6363). Crashes the entire app root — the app cannot render past the LogBox error boundary.",
+        "testID": "app-root",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration75_reset_and_delete.py",
+    "/app/test_reports/pytest/iteration75_reset_and_delete.xml",
+    "/app/backend/tests/test_iteration74_final_audit.py",
+    "/app/test_reports/pytest/iteration74_final_audit.xml",
+    "/app/test_reports/screenshots/iter75_root.jpeg"
+  ],
+  "action_items": [
+    "CRITICAL — Fix the TDZ ordering bug in /app/frontend/app/index.tsx: move `_computeLegacyPerMonthNet` (declared at line 6382) ABOVE `legacyPerMonthNet` (declared at line 6363). The wrapper legacyPerMonthNet uses it inside its try{} body AND as a useCallback dep, so its definition must appear first. This crash was introduced in the same iter75 code drop that added the null-safe isInvestmentAccount guard.",
+    "OPTIONAL — the reset-data rate limit uses slowapi's default per-IP key. If per-user semantics are intended (so shared-IP corporate users aren't collectively rate-limited), pass `key_func=lambda r: (r.state.user or {}).get('user_id')` on this route only. Current behavior is still 'safe by default' — just something to consider before broad launch."
+  ],
+  "critical_code_review_comments": [
+    "server.py:759-793 POST /api/user/reset-data — implementation is clean: (a) explicit allow-list of collections preserves plaid_items/linked_accounts by omission, (b) returns per-collection deleted counts only when >0, (c) also $unsets three derived user-doc fields (finalized_budget_months, wealth_overrides, legacy_state). Rate-limit is 5/hour which matches the requested throttle intent.",
+    "server.py:732-735 DELETE /api/account alias correctly reuses the delete_account handler (not a duplicate implementation) — no risk of code drift between the two paths.",
+    "server.py:698-712 billing_receipts retention is anonymised as required: only stripe_customer_id, stripe_subscription_id, last_subscription_status, last_period_end, account_deleted_at are stored. user_id/email/name are explicitly omitted (verified in test 3).",
+    "appShared.tsx:98-107 isInvestmentAccount null-safe guard is correctly implemented: null/undefined/non-object returns false, then trusts backend `category` when present, then falls back to substring heuristic on lowercased name+type+subtype. Import at /app/frontend/app/index.tsx:41 is in place.",
+    "index.tsx:6363-6380 legacyPerMonthNet — declaration ordering bug (see frontend_issues)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration75_reset_and_delete.py (NEW — 4 pytest cases covering reset-data, /api/account alias, billing_receipts retention, rate-limit)"
+  ],
+  "success_rate": {"backend": "100% (12/12 = 4 new + 8 iter74 regression)", "frontend": "50% — isInvestmentAccount fix VERIFIED, but a separate TDZ crash blocks the app root"},
+  "seed_data_creation": "3 throwaway users created via /api/auth/register (iter75-reset-*, iter75-ratelim-*, iter75-alias-*, iter75-billing-*@jaletertest.com). All 3 of the delete-account users self-destruct via the endpoint under test. The reset-data user is manually purged by the test teardown (linked_accounts, plaid_items, users). One 'cus_test_iter75' billing_receipts row is inserted then explicitly deleted at teardown. No residual TEST_* data.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend reset-data + delete-account + billing_receipts are FULLY GREEN — re-run `cd /app/backend && python -m pytest tests/test_iteration75_reset_and_delete.py tests/test_iteration74_final_audit.py -v` to confirm (12/12 in ~8s). NOTE: the rate-limit test assumes it can consume up to 5 slots per hour per IP — if you re-run within an hour it may report the rate-limit-triggering call as an earlier index (still passes, since the assertion is 'at least one 429 in 6 calls, monotonic'). For frontend: after main agent swaps the useCallback ordering, load https://no-changes-mobile.preview.emergentagent.com/ in mobile viewport (375x667) and verify (a) no ReferenceError in console, (b) app renders past the login/welcome screen, (c) still no 'isInvestmentAccount' error.",
+  "rca_of_issue": "Frontend TDZ crash RCA: In /app/frontend/app/index.tsx the developer added a defensive wrapper `legacyPerMonthNet` (line 6363) around the original computation, then renamed the original to `_computeLegacyPerMonthNet` (line 6382). React's useCallback runs each callback creation eagerly during the MainApp function render, top-to-bottom. When `React.useCallback(..., [_computeLegacyPerMonthNet])` executes at line 6380, the `let`-bound `_computeLegacyPerMonthNet` identifier is still in its Temporal Dead Zone → ReferenceError. Mitigation: move lines 6382→6486 (definition of `_computeLegacyPerMonthNet`) to appear BEFORE line 6363 (definition of `legacyPerMonthNet`). No behavioral change — just declaration order. Reproduction: open the site root in any browser; the Uncaught Error appears immediately after the JS bundle evaluates (screenshot at /app/test_reports/screenshots/iter75_root.jpeg)."
+}

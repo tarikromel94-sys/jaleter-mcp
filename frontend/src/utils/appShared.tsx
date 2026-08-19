@@ -96,9 +96,12 @@ export const LIABILITY_CATEGORIES = new Set([
  * backend `wealth_service.classify_plaid()` sets by type + subtype.
  */
 export const isInvestmentAccount = (r: any) => {
-  if (r?.category === 'investments') return true;
-  if (r?.category) return false; // trust the backend classification
-  const hay = `${r.name || ''} ${r.account_name || ''} ${r.org_name || ''}`.toLowerCase();
+  // Null-safe: callers occasionally pass in a stale/undefined row (e.g. during
+  // an import-in-progress race) — never throw for that, just return false.
+  if (r == null || typeof r !== 'object') return false;
+  if (r.category === 'investments') return true;
+  if (r.category) return false; // trust the backend classification
+  const hay = `${r.name || ''} ${r.account_name || ''} ${r.org_name || ''} ${r.type || ''} ${r.subtype || ''}`.toLowerCase();
   if (r.provider === 'snaptrade') return true;
   return /(invest|brokerage|ira|401k|403b|roth|hsa|mutual|advisor|wealth|portfolio|etrade|schwab|fidelity|vanguard|robinhood)/.test(hay);
 };

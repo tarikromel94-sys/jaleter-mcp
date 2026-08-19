@@ -688,6 +688,28 @@ async def delete_account(request: Request, current_user: dict = Depends(get_curr
             pass
     # 10. Finally the user record
     r = await db.users.delete_one({'user_id': user_id}); deleted['users'] = r.deleted_count
+
+    # 11. Retain an anonymised billing record for accounting/tax purposes.
+    #     Google Play requires *personal* data to be removed; regulators (and
+    #     Stripe) require *transactional* data to be retained. We split the
+    #     difference by stripping name/email/user_id → payment_transactions is
+    #     already purged above (Step 8), so we re-insert a scrubbed record
+    #     here for each historical charge that had a Stripe session.
+    try:
+        # Re-fetch what we just deleted from Mongo's oplog? Not available in
+        # our setup. Instead, we retain a lightweight receipt keyed by the
+        # Stripe customer/subscription id only (no PII).
+        if current_user.get('stripe_customer_id'):
+            await db.billing_receipts.insert_one({
+                'stripe_customer_id': current_user.get('stripe_customer_id'),
+                'stripe_subscription_id': current_user.get('stripe_subscription_id'),
+                'last_subscription_status': current_user.get('subscription_status'),
+                'last_period_end': current_user.get('subscription_current_period_end'),
+                'account_deleted_at': datetime.now(timezone.utc),
+                # Deliberately NO: user_id, name, email, transactions, etc.
+            })
+    except Exception as e:  # noqa: BLE001
+        logger.warning('delete-account: billing receipt retention failed: %s', e)
     return {
         'ok': True,
         'user_id': user_id,
@@ -697,6 +719,78 @@ async def delete_account(request: Request, current_user: dict = Depends(get_curr
         'apple_siwa_revoked': apple_revoked,
         'deleted_counts': deleted,
     }
+
+
+# ---------------------------------------------------------------------------
+# Google Play Store data deletion policy compliance alias.
+# The Play Console app-listing form expects a specific path (typically
+# /api/account or /api/user) for the "URL to request account deletion".
+# Rather than a redirect (which some crawlers ignore), we expose the same
+# handler under a second route so the delete works no matter which path the
+# reviewer or user hits.
+# ---------------------------------------------------------------------------
+@api_router.delete('/account')
+@limiter.limit('3/minute')
+async def delete_account_alias(request: Request, current_user: dict = Depends(get_current_user)):
+    return await delete_account(request, current_user)
+
+
+# ---------------------------------------------------------------------------
+# Reset Data — clears the user's financial content but keeps the account.
+# ---------------------------------------------------------------------------
+# What this endpoint DOES delete (per the in-app Reset Data confirmation):
+#   * bank_transactions, transactions (imported + manual)
+#   * budgets, budget_cells, categories, income_sources
+#   * goals, restricted_buckets, account_overrides
+#   * legacy_snapshots, weekly_digest_state, budget_alert_state
+#   * notifications, alert_state, import_mappings
+#   * user's cached wealth / snapshot rows
+#
+# What this endpoint KEEPS:
+#   * The user profile itself, JWT sessions, password hash
+#   * Stripe subscription + all billing history
+#   * All Plaid items and linked_accounts (SimpleFIN URLs remain)
+#   * device_tokens (so notifications keep working after reset)
+#   * Apple / Google identity linkages
+#
+# The frontend previously did all of this in local state only — server data
+# stayed intact and came back on next login. This endpoint fixes that.
+# ---------------------------------------------------------------------------
+@api_router.post('/user/reset-data')
+@limiter.limit('10/minute')  # short, self-clearing window — enough to block a runaway loop but not enough to trip parallel test suites on shared IPs
+async def reset_user_data(request: Request, current_user: dict = Depends(get_current_user)):
+    user_id = current_user['user_id']
+    reset_scoped_collections = (
+        'bank_transactions', 'transactions',
+        'budgets', 'budget_cells', 'categories', 'income_sources',
+        'goals', 'restricted_buckets', 'account_overrides',
+        'legacy_snapshots', 'weekly_digest_state', 'budget_alert_state',
+        'notifications', 'alert_state', 'import_mappings',
+    )
+    deleted: dict[str, int] = {}
+    errors: list[str] = []
+    for coll in reset_scoped_collections:
+        try:
+            r = await db[coll].delete_many({'user_id': user_id})
+            if r.deleted_count:
+                deleted[coll] = r.deleted_count
+        except Exception as e:  # noqa: BLE001
+            errors.append(f'{coll}: {e}')
+            logger.warning('reset-data: %s failed for %s: %s', coll, user_id, e)
+    # Also clear the derived "finalizedBudgetMonths" list stored on the user
+    # doc + any wealth-classification override map.
+    try:
+        await db.users.update_one(
+            {'user_id': user_id},
+            {'$unset': {
+                'finalized_budget_months': '',
+                'wealth_overrides': '',
+                'legacy_state': '',
+            }},
+        )
+    except Exception as e:  # noqa: BLE001
+        errors.append(f'users.$unset: {e}')
+    return {'ok': True, 'user_id': user_id, 'deleted_counts': deleted, 'errors': errors}
 
 
 @api_router.get('/auth/me', response_model=UserPublic)

@@ -1,0 +1,55 @@
+{
+  "summary": "Iteration 76 — TDZ fix VERIFIED. `_computeLegacyPerMonthNet` is now declared BEFORE `legacyPerMonthNet`, `isInvestmentAccount` remains imported/null-safe. Frontend flow (splash-iframe → Log in → demo credentials → Home → Legacy tab → More → Settings) completes without a single console error, PAGEERROR, or ReferenceError. Backend iteration 74 = 8/8 pass. Backend iteration 75 = 3/4 pass — the one failure is an environmental rate-limit artifact (previous testing runs consumed the 5/hour slowapi bucket for this shared source IP: the first call in the new run already returned 429). No code regression. Two minor labeling nits worth reporting to main agent (see action_items).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/user/reset-data",
+        "issue": "iter75 test_reset_data_deletes_scoped_preserves_plaid_and_user returned 429 on the very first call of the new session. Root cause: rate-limit 5/hour is applied per-IP via slowapi's default key, and this preview environment shares an egress IP across all recent test runs — so consecutive re-runs within the same hour will contaminate each other. Not a code regression; the endpoint code + limiter are correct."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "SettingsScreen — Reset app data row labeling",
+        "issue": "The review request said the row should be labeled 'Reset app data' and live under a 'Danger Zone' section. In the actual UI (/app/frontend/app/index.tsx:5413-5416) the row exists and is functional (testID=`settings-reset`, opens ResetAppDataModal), but (a) it is labeled 'Reset App Data' (title-case), and (b) there is no visible 'Danger Zone' header — the row is just placed as a standalone gold-bordered Pressable directly above 'Log Out'. Functionally correct; verbiage differs from the spec.",
+        "testID": "settings-reset",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration75_reset_and_delete.py",
+    "/app/backend/tests/test_iteration74_final_audit.py",
+    "/app/test_reports/screenshots/iter76_root.jpeg",
+    "/app/test_reports/screenshots/iter76_login_form.jpeg",
+    "/app/test_reports/screenshots/iter76_home_final.jpeg",
+    "/app/test_reports/screenshots/iter76_legacy.jpeg",
+    "/app/test_reports/screenshots/iter76_settings1.jpeg",
+    "/app/test_reports/screenshots/iter76_settings_bottom.jpeg"
+  ],
+  "action_items": [
+    "LOW — Consider adding an explicit 'Danger Zone' section header (or grouping) above the Reset App Data + Log Out pressables in SettingsScreen (/app/frontend/app/index.tsx:5413-5420) if the product spec mandates it. Also decide whether to keep the label 'Reset App Data' (current) or use 'Reset app data' (as referenced in the review request).",
+    "LOW — Rate-limit test flakiness: /api/user/reset-data uses slowapi's default per-IP key. In shared-egress environments (like this preview), that bucket is exhausted across test runs. Recommend switching this route's key_func to `lambda r: (r.state.user or {}).get('user_id') or get_remote_address(r)` so tests running as different registered users each get their own 5/hour bucket. Purely a testability/DX improvement; production impact is nil for real users (who are single-user per IP)."
+  ],
+  "critical_code_review_comments": [
+    "index.tsx:6363 legacyPerMonthNet — declaration ordering fix VERIFIED. `_computeLegacyPerMonthNet` now precedes `legacyPerMonthNet`; the login → Legacy tab flow renders without TDZ ReferenceError and console remains clean.",
+    "index.tsx:41 + appShared.tsx:98-107 — `isInvestmentAccount` import and null-safe guard remain in place. No ReferenceError on app-root or on Legacy screen.",
+    "server.py POST /api/user/reset-data — code path is correct; sole issue is per-IP rate-limit strategy which makes back-to-back automated runs collide.",
+    "SettingsScreen (index.tsx:5232-5420) — Reset row is a standalone Pressable with testID='settings-reset'; there is no explicit 'Danger Zone' group container. Minor UX polish opportunity."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "91.7% (11/12 — iter74 8/8, iter75 3/4; the single 429 is rate-limit environmental, not a code bug)",
+    "frontend": "100% (splash → login → home → legacy → more → settings all pass; 0 console errors; 0 pageerrors; TDZ + isInvestmentAccount both resolved)"
+  },
+  "seed_data_creation": "3 ephemeral users created by iter75 pytest (iter75-reset-*, iter75-ratelim-*, iter75-alias-*, iter75-billing-*@jaletertest.com). All delete-account users self-purge; reset-data user is torn down via motor cleanup fixture. `stripe_customer_id='cus_test_iter75'` billing_receipt row is inserted and deleted in teardown. No residual data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "TDZ fix is CONFIRMED green. Only outstanding item is the flaky iter75 reset-data test caused by shared-IP rate-limit contamination — if you re-run iter75 after ~60 min of quiescence you should see 4/4 pass; or better, patch the endpoint's key_func to be per-user (see action_items). Reproduction script for the frontend flow that DOES work: (1) `page.goto(EXPO_PUBLIC_BACKEND_URL)`, (2) find frame with `url == 'about:srcdoc'` and click `#btnLogin` inside it (the splash is a static HTML page embedded as an iframe with srcdoc — plain Playwright text selectors on the main document do NOT see the 'Log in' button), (3) fill `[data-testid=\"login-email\"]` + `[data-testid=\"login-password\"]`, (4) click `[data-testid=\"login-submit\"]`, (5) after Home renders, tap `[data-testid=\"home-profile\"]` (the JR avatar) to reach the More menu, then tap `[data-testid=\"more-settings\"]` for the Settings screen. Reset row testID is `settings-reset`.",
+  "rca_of_issue": "Iter75 TDZ RCA update: main agent's swap of the useCallback declaration order in /app/frontend/app/index.tsx is EFFECTIVE. `_computeLegacyPerMonthNet` (previously line ~6382) is now declared before `legacyPerMonthNet` (previously line ~6363), so when the wrapping useCallback is created during MainApp render, the identifier is already initialised. Verified by (a) clean console during login + Home render, (b) full Legacy screen renders including Projected Investments $0 card / retirement projection ($0 at 7% return) / cumulative growth timeline — none of which would be reachable if the wrapper still crashed. Backend rate-limit RCA: slowapi's default `get_remote_address` keys the 5/hour bucket by request IP. In this preview environment all test agents originate from the same egress IP, so the bucket carries over between runs. Mitigation: either wait ~60m or switch the route to a user-scoped key_func."
+}
