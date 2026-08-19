@@ -458,3 +458,52 @@ async def resume_subscription(user: dict) -> dict:
         "current_period_end": sub.current_period_end,
         "status": sub.status,
     }
+
+
+
+async def purge_customer(user: dict) -> dict:
+    """Cancel-immediately + delete the Stripe customer for account deletion.
+
+    Called only from DELETE /api/auth/delete-account. Best-effort: each step
+    is caught individually so a Stripe outage cannot block local deletion.
+
+    Returns a summary dict:
+      {
+        'subscription_canceled': bool,   # True iff we called Subscription.cancel
+        'customer_deleted': bool,        # True iff Stripe returned deleted=True
+        'error': str | None,             # last error message (if any)
+      }
+    """
+    result = {'subscription_canceled': False, 'customer_deleted': False, 'error': None}
+    try:
+        _configure_stripe()
+    except Exception as e:  # noqa: BLE001
+        result['error'] = f'stripe not configured: {e}'
+        return result
+
+    sub_id = user.get('stripe_subscription_id')
+    customer_id = user.get('stripe_customer_id')
+
+    # 1. Cancel the subscription immediately (as opposed to at period end).
+    #    Apple 5.1.1(v) wants deletion to sever the billing relationship now.
+    if sub_id:
+        try:
+            stripe.Subscription.cancel(sub_id)  # type: ignore[attr-defined]
+            result['subscription_canceled'] = True
+        except Exception as e:  # noqa: BLE001
+            logger.warning('stripe.Subscription.cancel failed for %s: %s', sub_id, e)
+            result['error'] = str(e)
+
+    # 2. Delete the Stripe customer entirely — this also detaches every
+    #    saved card, purges billing history from the app's perspective,
+    #    and prevents future charges even if the user record is somehow
+    #    resurrected. Stripe retains it internally for tax/audit anyway.
+    if customer_id:
+        try:
+            stripe.Customer.delete(customer_id)  # type: ignore[attr-defined]
+            result['customer_deleted'] = True
+        except Exception as e:  # noqa: BLE001
+            logger.warning('stripe.Customer.delete failed for %s: %s', customer_id, e)
+            result['error'] = str(e)
+
+    return result

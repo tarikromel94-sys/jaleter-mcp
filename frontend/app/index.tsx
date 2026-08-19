@@ -3,6 +3,7 @@ import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Modal, Status
 import * as WebBrowser from 'expo-web-browser';
 import * as ExpoLinking from 'expo-linking';
 import * as LocalAuthentication from 'expo-local-authentication';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Defs, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -905,8 +906,62 @@ const Onboarding = ({ experience, setExperience, onContinue, back }: any) => {
   );
 };
 
-/* ---------------- Apple Sign-In removed (provisioning profile lacks the capability; users authenticate via Email/Google) ---------------- */
-const AppleSignInButton = (_props: { onError: (m: string) => void; onBusy: (v: boolean) => void }) => null;
+/* ---------------- Apple Sign-In button (iOS native) ---------------- */
+// Restored per Apple 5.1.1(v): apps offering Google Sign-In must also
+// offer Sign in with Apple on iOS. Requires the "Sign In with Apple"
+// capability to be enabled in the Apple Developer Portal for this
+// app's Bundle ID and the provisioning profile to include the
+// `com.apple.developer.applesignin` entitlement.
+const AppleSignInButton = ({ onError, onBusy }: { onError: (m: string) => void; onBusy: (v: boolean) => void }) => {
+  const { loginWithApple } = useAuth();
+  const [available, setAvailable] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const ok = await AppleAuthentication.isAvailableAsync();
+        if (alive) setAvailable(!!ok);
+      } catch { if (alive) setAvailable(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
+  // Apple only supports native iOS. Hide the button everywhere else.
+  if (Platform.OS !== 'ios' || !available) return null;
+  const onPress = async () => {
+    onBusy(true);
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+      if (!credential.identityToken) throw new Error('Apple did not return an identity token.');
+      const name = credential.fullName
+        ? [credential.fullName.givenName, credential.fullName.familyName].filter(Boolean).join(' ').trim() || null
+        : null;
+      await loginWithApple({
+        identity_token: credential.identityToken,
+        name,
+        email: credential.email || null,
+      });
+    } catch (e: any) {
+      if (e?.code === 'ERR_REQUEST_CANCELED') { /* user tapped Cancel — ignore */ }
+      else onError(e?.message || 'Apple sign-in failed.');
+    } finally {
+      onBusy(false);
+    }
+  };
+  return (
+    <AppleAuthentication.AppleAuthenticationButton
+      buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+      buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+      cornerRadius={12}
+      style={{ height: 46, marginTop: 10 }}
+      onPress={onPress}
+    />
+  );
+};
 
 /* ---------------- Signup (real register) ---------------- */
 const Signup = ({ back, onCreated, goLogin }: any) => {
@@ -995,7 +1050,7 @@ const Login = ({ back, goSignup, goForgot }: any) => {
         <View style={s.miniLogo}><Text style={s.miniLogoText}>J</Text></View>
         <Text style={s.eyebrow}>WELCOME BACK</Text>
         <Text style={s.onboardH1}>Log in to{'\n'}continue.</Text>
-        <Text style={s.onboardHint}>Sign in with your Jaleter email or Google account.</Text>
+        <Text style={s.onboardHint}>Sign in with your Jaleter email{Platform.OS === 'ios' ? ', Google, or Apple' : ' or Google'} account.</Text>
       </View>
       <View style={{ gap: 2 }}>
         <Text style={s.label}>Email</Text>

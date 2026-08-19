@@ -370,6 +370,46 @@ async def _startup():
     # the FastAPI startup hook).
     logger.info('Retention auto-scheduler disabled. Use admin endpoints for on-demand retention runs.')
 
+    # ---- Production secret sanity check ---------------------------------
+    # Warn loudly (never crash) when critical secrets look like unrotated
+    # placeholders. Prevents the silent "webhook signature failure" class
+    # of production bug where a real customer pays and Premium never
+    # activates because STRIPE_WEBHOOK_SECRET was still the test value.
+    _prod_env = (os.environ.get('APP_ENV') or '').lower() in ('production', 'prod')
+    _placeholder_hints = (
+        ('STRIPE_WEBHOOK_SECRET', ('test_local', 'placeholder', 'change_me', 'unit_test')),
+        ('JWT_SECRET', ('change_me', 'placeholder', 'devsecret', 'insecure')),
+        ('SIMPLEFIN_ENC_KEY', ('placeholder', 'change_me')),
+        ('EMERGENT_PUSH_KEY', ('placeholder',)),
+    )
+    for key, hints in _placeholder_hints:
+        val = (os.environ.get(key) or '').strip()
+        if not val:
+            logger.error('PROD-CHECK: %s is empty — related features are DISABLED.', key)
+            continue
+        low = val.lower()
+        if any(h in low for h in hints):
+            logger.error(
+                'PROD-CHECK: %s looks like a PLACEHOLDER (%s). Rotate this in the '
+                'production environment before shipping to end users.', key,
+                next(h for h in hints if h in low),
+            )
+    # Extra Stripe hardening: warn if we mix live API key with obviously
+    # non-live webhook secret (a common cause of silent entitlement gaps).
+    _stripe_key = (os.environ.get('STRIPE_API_KEY') or '').strip()
+    _stripe_whsec = (os.environ.get('STRIPE_WEBHOOK_SECRET') or '').strip()
+    if _stripe_key.startswith('sk_live_') and not _stripe_whsec.startswith('whsec_'):
+        logger.error(
+            'PROD-CHECK: STRIPE_API_KEY is LIVE but STRIPE_WEBHOOK_SECRET does not '
+            'start with "whsec_". Webhook signature verification will REJECT every '
+            'real payment event — Premium activation is BROKEN until this is fixed.',
+        )
+    # Admin password strength: reject a small set of famously-weak defaults.
+    _weak_admin_pws = {'password', 'admin', 'jaleter', 'test', 'changeme'}
+    _admin_pw = (os.environ.get('SUPPORT_ADMIN_PASSWORD') or '').strip()
+    if _admin_pw and (len(_admin_pw) < 10 or _admin_pw.lower() in _weak_admin_pws):
+        logger.error('PROD-CHECK: SUPPORT_ADMIN_PASSWORD is too weak — rotate immediately.')
+
     # ---- One-shot: reclassify Plaid TRANSFER_IN false-positives ---------
     # Historical bug: Plaid tags ACH deposits / paychecks / interest as
     # TRANSFER_IN, which we were treating as internal transfers — causing
@@ -547,11 +587,14 @@ async def delete_account(request: Request, current_user: dict = Depends(get_curr
     Steps (best-effort; nothing here should raise a 500 unless auth failed):
       1. Verify password (password-provider only)
       2. Send goodbye email (best-effort)
-      3. Revoke every Plaid item at Plaid (`/item/remove`), then delete local rows
-      4. Delete every cached bank transaction for the user
-      5. Delete linked_accounts, snaptrade_users/accounts, support tickets/replies, payments
-      6. Delete sessions, password_resets, email_verifications
-      7. Finally delete the user row itself
+      3. Cancel any active Stripe subscription immediately (Apple 5.1.1(v))
+      4. Delete the Stripe customer entirely (Apple 5.1.1(v) — no orphaned billing)
+      5. Revoke Apple Sign-In refresh token when configured (Apple 5.1.1(v))
+      6. Revoke every Plaid item at Plaid (`/item/remove`), then delete local rows
+      7. Unregister Expo push tokens with the relay so the user stops receiving pushes
+      8. Purge every user-scoped collection (transactions, budgets, notifications, ...)
+      9. Delete sessions, password_resets, email_verifications
+     10. Finally delete the user row itself
     """
     user_id = current_user['user_id']
     # 1. Password re-verification for password-provider accounts.
@@ -578,7 +621,28 @@ async def delete_account(request: Request, current_user: dict = Depends(get_curr
         logger.warning('delete-account: goodbye email failed: %s', e)
 
     deleted: dict[str, int] = {}
-    # 3. Plaid items — try to revoke each token remotely, then delete locally.
+    stripe_actions = {'subscription_canceled': False, 'customer_deleted': False, 'error': None}
+
+    # 3-4. Stripe: cancel subscription immediately + delete customer.
+    #      Apple 5.1.1(v) requires deletion to terminate billing relationships,
+    #      not leave orphaned Stripe customers hanging.
+    try:
+        import stripe_service as _stripe
+        stripe_actions.update(await _stripe.purge_customer(current_user))
+    except Exception as e:  # noqa: BLE001
+        stripe_actions['error'] = str(e)
+        logger.warning('delete-account: stripe purge failed: %s', e)
+
+    # 5. Apple Sign In revoke (requires APPLE_TEAM_ID/KEY_ID/PRIVATE_KEY to be set).
+    apple_revoked = False
+    apple_sub = current_user.get('apple_sub')
+    if apple_sub:
+        try:
+            apple_revoked = await _apple_revoke_user(apple_sub)
+        except Exception as e:  # noqa: BLE001
+            logger.warning('delete-account: apple SIWA revoke failed: %s', e)
+
+    # 6. Plaid items — try to revoke each token remotely, then delete locally.
     items = await db.plaid_items.find({'user_id': user_id}).to_list(length=100)
     plaid_revoked = 0
     plaid_revoke_errors = 0
@@ -591,29 +655,46 @@ async def delete_account(request: Request, current_user: dict = Depends(get_curr
             plaid_revoke_errors += 1
             logger.warning('plaid revoke failed during delete-account: %s', e)
     r = await db.plaid_items.delete_many({'user_id': user_id}); deleted['plaid_items'] = r.deleted_count
-    # 4. Cached transactions
-    r = await db.bank_transactions.delete_many({'user_id': user_id}); deleted['bank_transactions'] = r.deleted_count
-    # 5. Other linked-financial-data collections
-    for coll in ('linked_accounts', 'snaptrade_accounts', 'snaptrade_users',
-                 'support_tickets', 'support_requests', 'coaching_bookings',
-                 'payment_transactions', 'coach_messages', 'account_overrides'):
+
+    # 7. Unregister Expo push tokens with the Emergent relay (best-effort).
+    try:
+        import push_service as _push
+        await _push.unregister_all_tokens_for_user(db, user_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning('delete-account: push unregister failed: %s', e)
+
+    # 8. Purge every user-scoped collection. Any new collection with `user_id`
+    #    that stores PII MUST be added to this list.
+    user_scoped_collections = (
+        'bank_transactions', 'linked_accounts', 'snaptrade_accounts', 'snaptrade_users',
+        'support_tickets', 'support_requests', 'coaching_bookings',
+        'payment_transactions', 'coach_messages', 'account_overrides',
+        'notifications', 'alert_state', 'device_tokens',
+        'import_mappings', 'weekly_digest_state', 'budget_alert_state',
+        'push_history', 'legacy_snapshots', 'budget_cells', 'goals',
+        'transactions', 'categories', 'income_sources', 'accounts',
+    )
+    for coll in user_scoped_collections:
         try:
             r = await db[coll].delete_many({'user_id': user_id}); deleted[coll] = r.deleted_count
         except Exception as e:  # noqa: BLE001
             logger.warning('delete-account: failed on %s: %s', coll, e)
-    # 6. Sessions + tokens
+
+    # 9. Sessions + tokens
     for coll in ('user_sessions', 'password_resets', 'email_verifications'):
         try:
             r = await db[coll].delete_many({'user_id': user_id}); deleted[coll] = r.deleted_count
         except Exception:
             pass
-    # 7. Finally the user record
+    # 10. Finally the user record
     r = await db.users.delete_one({'user_id': user_id}); deleted['users'] = r.deleted_count
     return {
         'ok': True,
         'user_id': user_id,
         'plaid_items_revoked': plaid_revoked,
         'plaid_revoke_errors': plaid_revoke_errors,
+        'stripe': stripe_actions,
+        'apple_siwa_revoked': apple_revoked,
         'deleted_counts': deleted,
     }
 
@@ -685,7 +766,65 @@ async def emergent_session(payload: EmergentSessionRequest):
 APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys'
 APPLE_ISSUER = 'https://appleid.apple.com'
 APPLE_AUDIENCES = [a.strip() for a in os.environ.get('APPLE_AUDIENCES', '').split(',') if a.strip()]
+APPLE_TEAM_ID = os.environ.get('APPLE_TEAM_ID', '').strip()
+APPLE_KEY_ID = os.environ.get('APPLE_KEY_ID', '').strip()
+APPLE_PRIVATE_KEY = os.environ.get('APPLE_PRIVATE_KEY', '').strip()
 _apple_jwks_cache: dict = {'fetched_at': 0.0, 'keys': None}
+
+
+def _apple_client_secret() -> str:
+    """Sign a short-lived Apple `client_secret` JWT using the .p8 private key.
+
+    Used to authenticate the /auth/token and /auth/revoke calls to Apple.
+    Returns an empty string when Apple SIWA server credentials are not
+    configured (in that case callers should skip revocation gracefully).
+    """
+    if not (APPLE_TEAM_ID and APPLE_KEY_ID and APPLE_PRIVATE_KEY and APPLE_AUDIENCES):
+        return ''
+    now = int(datetime.now(timezone.utc).timestamp())
+    payload = {
+        'iss': APPLE_TEAM_ID,
+        'iat': now,
+        'exp': now + 15 * 60,  # 15 minutes max per Apple
+        'aud': APPLE_ISSUER,
+        'sub': APPLE_AUDIENCES[0],  # first audience is the primary Bundle ID
+    }
+    return jwt.encode(payload, APPLE_PRIVATE_KEY, algorithm='ES256', headers={'kid': APPLE_KEY_ID})
+
+
+async def _apple_revoke_user(apple_sub: str) -> bool:
+    """Revoke this user's Apple Sign-In refresh token, per Apple 5.1.1(v).
+
+    Requires APPLE_TEAM_ID, APPLE_KEY_ID, APPLE_PRIVATE_KEY env vars. If any
+    are missing, we return False and let the account deletion proceed anyway
+    — Apple's guideline requires "best effort" revocation, and the local
+    account record is still fully destroyed. Never raises: any exception is
+    logged and swallowed so a transient Apple outage cannot block deletion.
+    """
+    secret = _apple_client_secret()
+    if not secret:
+        return False
+    stored = await db.users.find_one({'apple_sub': apple_sub}, {'apple_refresh_token': 1, '_id': 0})
+    if not stored or not stored.get('apple_refresh_token'):
+        # No stored refresh token — the token-exchange step never ran or the
+        # user never granted server-side access. Nothing to revoke.
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as hx:
+            r = await hx.post(
+                'https://appleid.apple.com/auth/revoke',
+                data={
+                    'client_id': APPLE_AUDIENCES[0],
+                    'client_secret': secret,
+                    'token': stored['apple_refresh_token'],
+                    'token_type_hint': 'refresh_token',
+                },
+                headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            )
+        return r.status_code == 200
+    except Exception as e:  # noqa: BLE001
+        logger.warning('apple SIWA revoke request failed: %s', e)
+        return False
 
 
 async def _apple_jwks() -> list[dict]:

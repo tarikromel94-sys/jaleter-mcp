@@ -123,3 +123,39 @@ async def send_push(
         return resp.json() or {"status": "ok"}
     except Exception:  # noqa: BLE001
         return {"status": "ok"}
+
+
+
+async def unregister_all_tokens_for_user(db, user_id: str) -> dict:
+    """Unregister every Expo device token for a user (called on delete-account).
+
+    Best-effort: we ALWAYS purge the local `device_tokens` collection so the
+    same tokens are not reused. The Emergent relay call is fire-and-forget —
+    on failure the tokens will simply age out on their next 30-day rotation.
+    """
+    tokens = await db.device_tokens.find({"user_id": user_id}).to_list(length=100)
+    upstream_ok = 0
+    upstream_err = 0
+    for row in tokens:
+        tok = row.get("expo_push_token") or row.get("device_token")
+        if not tok:
+            continue
+        try:
+            resp = await _client.post(
+                "/api/v1/push/unregister",
+                json={"user_id": user_id, "device_token": tok},
+            )
+            if resp.status_code < 400:
+                upstream_ok += 1
+            else:
+                upstream_err += 1
+        except Exception as e:  # noqa: BLE001
+            upstream_err += 1
+            logger.warning("Push unregister failed for %s: %s", user_id, e)
+    # Local purge unconditional — caller also nukes the collection but this
+    # keeps the function safe to call from other flows (device rotation, etc.)
+    try:
+        await db.device_tokens.delete_many({"user_id": user_id})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Local device_tokens purge failed for %s: %s", user_id, e)
+    return {"upstream_ok": upstream_ok, "upstream_err": upstream_err, "count": len(tokens)}

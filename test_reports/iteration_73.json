@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 73 — Final production readiness backend regression PASSES 8/8. Verified: (1) Login smoke — POST /api/auth/login for support@jaleter.com/Tarik0731! → 200 with valid token, /auth/me confirms round-trip. (2) Stripe subscription checkout — POST /api/payments/checkout {product:'jaleter_premium', platform:'mobile'} returns a real https://checkout.stripe.com/... url + session_id, payment_transactions row is persisted with kind='subscription', and user.subscription_status remains 'inactive' (no entitlement leak before webhook). (3) Stripe webhook signature enforcement — POST /api/payments/webhook with a forged Stripe-Signature header returns 400 and does NOT mutate any user's subscription_status. (4) Enhanced DELETE /api/auth/delete-account cascade — seeded rows in bank_transactions (3), notifications (1), alert_state (1), device_tokens (1) all purged; response contains 'stripe' block with subscription_canceled + customer_deleted fields; user row itself is deleted; the returned JWT is instantly invalid on /auth/me. (5) Apple SIWA — POST /api/auth/apple with a malformed identity_token returns 401 and creates zero user rows; APPLE_AUDIENCES env is exactly 'com.emergent.nochangesmobile.fl0fmc,host.exp.Exponent'. (6) Cross-user data isolation — User A can NOT see User B's bank_transactions in GET /api/accounts/transactions, can NOT see B's notifications in GET /api/notifications, PATCH /api/accounts/transactions/{B.external_id}/classify with A's token → 404 (and B's row is unchanged), PATCH /api/notifications/{B.notification_id}/read with A's token → 404 (and B's row still unread). (7) PROD-CHECK startup logs — /var/log/supervisor/backend.err.log contains ERROR lines flagging STRIPE_WEBHOOK_SECRET (test_local) and EMERGENT_PUSH_KEY (placeholder) as PLACEHOLDERs. NOTE: /api/wealth endpoint doesn't exist in server.py — the wealth surrogate exercised is GET /api/accounts (accounts array is empty for both A and B since no linked banks); the real cross-user protection is proven via the bank_transactions PATCH 404 and notifications PATCH 404 paths.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration73_prod_readiness.py",
+    "/app/test_reports/pytest/iteration73_prod_readiness.xml"
+  ],
+  "action_items": [
+    "None blocking for App Store submission. All 4 highest-risk items requested (Stripe entitlement gap, webhook signature enforcement, delete-account cascade completeness, cross-user data isolation on GET+PATCH) pass.",
+    "As expected and called out in the review request context: STRIPE_WEBHOOK_SECRET is still 'whsec_test_local_secret_for_unit_tests_only' and EMERGENT_PUSH_KEY is 'placeholder' in /app/backend/.env — the PROD-CHECK now logs LOUD errors for both on every boot so the operator can't miss it. Rotate both in the production environment before release. If the webhook secret is left as-is in prod, /api/payments/webhook will 400 every real Stripe delivery and Premium activation will silently break for paying customers.",
+    "Optional: /api/wealth is referenced in the review request but doesn't exist as a discrete endpoint — wealth data is surfaced via GET /api/accounts and GET /api/accounts/all. Not a bug, just a note so future testing agents don't hunt for a missing route."
+  ],
+  "critical_code_review_comments": [
+    "server.py:1804 /api/payments/webhook correctly reads the RAW request body (never .json()), then verify_and_parse_event → SignatureVerificationError branch → 400. RuntimeError branch (whsec missing) → 503. No path allows bypass.",
+    "server.py:578 /api/auth/delete-account has the correct ordering: goodbye email FIRST (still have address), then Stripe purge, Apple SIWA revoke, Plaid /item/remove, Emergent push unregister, then wipe every user-scoped collection incl. bank_transactions/notifications/alert_state/device_tokens, then sessions, then finally the user row. All steps are wrapped in try/except so a failure in one step doesn't abort the cascade — verified by inspection and by the passing test.",
+    "server.py:1180 PATCH /api/accounts/transactions/{external_id}/classify filters by both user_id AND external_id in the find_one, so cross-user attempts return 404 (not 200) — this is the App Store-critical guarantee.",
+    "notifications_router.py:124 PATCH /api/notifications/{id}/read also filters by both _id AND user_id in the update_one and 404s when matched_count==0 — safe.",
+    "server.py:378 PROD-CHECK sanity block flags STRIPE_WEBHOOK_SECRET/JWT_SECRET/SIMPLEFIN_ENC_KEY/EMERGENT_PUSH_KEY placeholders as ERROR-level, plus the special-case guard that catches 'sk_live_ + non-whsec_' mismatches — good defense against silent Stripe entitlement gaps.",
+    "server.py:849 /api/auth/apple correctly validates Apple JWT header before any DB touch, so malformed tokens 401 before any user row can be created; APPLE_AUDIENCES accepts both the release bundle-id AND host.exp.Exponent so Expo Go dev testing still works."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration73_prod_readiness.py (new — 8 pytest cases covering all 7 review items)"
+  ],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "N/A (backend only)"},
+  "seed_data_creation": "Ephemeral: each test that needs a user calls POST /api/auth/register, seeds any required rows (bank_transactions, notifications, alert_state, device_tokens) via direct pymongo insert, then calls DELETE /api/auth/delete-account in the finally block. No lingering test users after the suite runs. Existing seeded admin (support@jaleter.com) is only READ, never mutated.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend is production-ready on every axis the review asked about. Two intentional placeholders remain in /app/backend/.env (STRIPE_WEBHOOK_SECRET, EMERGENT_PUSH_KEY) — those will be rotated in the production environment per the review request context and are correctly surfaced by PROD-CHECK. Do NOT try to 'fix' them here. If you re-run the suite: pytest /app/backend/tests/test_iteration73_prod_readiness.py -v — expect 8/8 pass in ~7s. If Stripe checkout suddenly starts failing, first check that STRIPE_API_KEY is still valid live and that ensure_annual_price() bootstrapped successfully at startup (grep 'Stripe subscription catalog ready' in backend.err.log).",
+  "rca_of_issue": "N/A — no bugs found. Only nit: initial test registration used '.test' TLD which pydantic's email validator rejects; switched to '.app' and all 8 pass. This is a test-only fix, not a product fix."
+}

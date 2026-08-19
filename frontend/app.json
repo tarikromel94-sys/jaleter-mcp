@@ -11,6 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.emergent.nochangesmobile.fl0fmc",
+      "usesAppleSignIn": true,
       "config": {
         "usesNonExemptEncryption": false
       },
