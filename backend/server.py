@@ -119,6 +119,16 @@ app = FastAPI()
 app.state.limiter = limiter
 
 
+# Root-level health probe. The Kubernetes deploy platform sends `GET /health`
+# WITHOUT the /api ingress prefix, so it never reaches api_router. Return a
+# tiny 200 so probes succeed. `HEAD /health` is also supported implicitly by
+# FastAPI's GET handler.
+@app.get('/health')
+@app.get('/api/health')  # dual-registered so `/api`-prefixed probes also work
+async def health_check() -> dict:
+    return {'status': 'ok', 'service': 'jaleter-api'}
+
+
 @app.exception_handler(RateLimitExceeded)
 async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(status_code=429, content={'detail': 'Too many attempts. Please try again in a minute.'})
