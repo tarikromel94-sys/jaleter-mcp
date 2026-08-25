@@ -34,7 +34,6 @@ export type SupportMode =
   | 'admin'
   | 'bug'
   | 'privacy'
-  | 'delete'
   | 'billing'
   | 'bank_help';
 
@@ -62,7 +61,7 @@ export const FAQS: { q: string; a: string }[] = [
   { q: 'Where is billing managed?', a: 'All payments and subscriptions are handled on our secure website at jaleter.com.' },
   { q: 'How do I export my budget?', a: 'Budget screen → tap Export → choose Excel (.xlsx). You get a 4-tab workbook: Summary, Monthly, Annual Grid, and Transactions.' },
   { q: 'Is my bank data safe?', a: 'Yes. Access tokens are Fernet-encrypted at rest and never returned to the app. Only short-lived link tokens ever reach the frontend.' },
-  { q: 'How do I delete my account?', a: 'Open a support ticket with category "Delete account". Our team confirms your identity, then wipes your data within 30 days.' },
+  { q: 'How do I delete my account?', a: 'Go to Settings → Danger Zone → Delete Account. Deletion is immediate and permanent: banks are disconnected, subscriptions cancelled, and all data is wiped.' },
 ];
 
 export const HELP_ACTIONS: { id: string; label: string; sub: string; icon: any }[] = [
@@ -70,7 +69,6 @@ export const HELP_ACTIONS: { id: string; label: string; sub: string; icon: any }
   { id: 'bug', label: 'Report a Bug', sub: "Something isn't working", icon: 'bug-outline' },
   { id: 'billing', label: 'Billing Help', sub: 'Payments and subscriptions', icon: 'wallet-outline' },
   { id: 'privacy', label: 'Privacy Request', sub: 'Export / correct / delete data', icon: 'shield-checkmark-outline' },
-  { id: 'delete', label: 'Delete Account', sub: 'Close your Jaleter account', icon: 'trash-outline' },
 ];
 
 export const PRIVACY_ACTIONS = [

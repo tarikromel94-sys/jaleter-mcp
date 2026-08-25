@@ -62,8 +62,9 @@ MX / Finicity can drop in by implementing the same interface — no user-facing 
 - Legacy: 8 timeframes (1/2/3/5/10/20/**30**yr + Retirement) + **cumulative year-by-year toggle**. State (timeframe/contribution/hypothetical/cumulative) is persisted via STORAGE_KEY.
 - **Reports** (new, from More): window pills (1M/3M/6M/12M/YTD/All) + INCOME/EXPENSE/NET tiles + 5 sections: Income vs Expense pie, Category pie, Top subcategories bars, Monthly trend chart, Top merchants list. Hand-rolled SVG charts via `react-native-svg` — zero extra deps.
 - Settings + **Help & Support** sheet — Phase 1-4 complete:
-  - Hub with GET-HELP grid (Bank Help Center / Report a Bug / Billing Help / Privacy Request / Delete Account) + general Contact Support + My Requests
-  - Structured forms: Bug (summary/steps/expected/actual + auto device+version), Privacy (4-option radio), Delete Account (typed DELETE confirmation → ticket with 30-day process disclosure), Billing (issue type + amount/ref + jaleter.com deep link), Bank Help Center (Plaid tip + CSV/OFX tip + 11 per-bank guides + open-ticket CTA)
+  - Hub with GET-HELP grid (Bank Help Center / Report a Bug / Billing Help / Privacy Request) + general Contact Support + My Requests
+  - Structured forms: Bug (summary/steps/expected/actual + auto device+version), Privacy (4-option radio), Billing (issue type + amount/ref + jaleter.com deep link), Bank Help Center (Plaid tip + CSV/OFX tip + 11 per-bank guides + open-ticket CTA)
+  - Delete Account moved OUT of Support (June 2026): now a prominent button in Settings → Danger Zone (below Log Out) that opens the DeleteAccountMode sheet (password re-auth + typed DELETE → immediate `DELETE /api/auth/delete-account` cascade). Support FAQ updated to point there.
   - Admin dashboard (list, filter by status, PATCH status/priority/assignee, public reply, private notes)
 
 ## MongoDB Collections

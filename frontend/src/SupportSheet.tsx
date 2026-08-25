@@ -28,7 +28,6 @@ import { DetailMode } from '@/src/support/DetailMode';
 import { AdminMode } from '@/src/support/AdminMode';
 import { BugReportMode } from '@/src/support/BugMode';
 import { PrivacyMode } from '@/src/support/PrivacyMode';
-import { DeleteAccountMode } from '@/src/support/DeleteMode';
 import { BillingMode } from '@/src/support/BillingMode';
 import { BankHelpMode } from '@/src/support/BankHelpMode';
 
@@ -69,7 +68,6 @@ export function SupportSheet({ visible, close }: { visible: boolean; close: () =
       case 'admin': return 'Admin Dashboard';
       case 'bug': return 'Report a Bug';
       case 'privacy': return 'Privacy Request';
-      case 'delete': return 'Delete Account';
       case 'billing': return 'Billing Help';
       case 'bank_help': return 'Bank Help Center';
       default: return 'Help & Support';
@@ -105,9 +103,6 @@ export function SupportSheet({ visible, close }: { visible: boolean; close: () =
             )}
             {mode === 'privacy' && (
               <PrivacyMode token={token} back={() => setMode('hub')} onCreated={onTicketCreated} />
-            )}
-            {mode === 'delete' && (
-              <DeleteAccountMode back={() => setMode('hub')} onDeleted={close} />
             )}
             {mode === 'billing' && (
               <BillingMode token={token} back={() => setMode('hub')} onCreated={onTicketCreated} />

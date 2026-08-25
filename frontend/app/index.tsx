@@ -19,6 +19,7 @@ import { dailyQuote, MONEY, EXACT, QuoteType } from '@/src/quoteLibrary';
 import { WELCOME_HTML } from '@/src/welcomeHtml';
 import { ConnectPlaidButton } from '@/src/PlaidLink';
 import { SupportSheet } from '@/src/SupportSheet';
+import { DeleteAccountMode } from '@/src/support/DeleteMode';
 import { ReportsScreen } from '@/src/ReportsScreen';
 import { BANK_IMPORT_GUIDES } from '@/src/bankGuides';
 import { openJaleter } from '@/src/jaleterLinks';
@@ -5381,6 +5382,10 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
         <Ionicons name="log-out-outline" size={17} color={C.danger} />
         <Text style={{ color: C.danger, fontSize: 12, fontWeight: '700' }}>Log Out</Text>
       </Pressable>
+      <Pressable onPress={() => setSheet('delete-account')} style={[s.logoutBtn, { borderColor: '#b0453d' }]} testID="settings-delete-account">
+        <Ionicons name="trash-outline" size={17} color="#b0453d" />
+        <Text style={{ color: '#b0453d', fontSize: 12, fontWeight: '700' }}>Delete Account</Text>
+      </Pressable>
       <Sheet visible={!!appLock?.openConfigure} close={() => setAppLock?.({ openConfigure: false })} title={appLock?.enabled ? 'Change App Lock' : 'Set up App Lock'} subtitle="Your PIN is stored securely on this device only.">
         <AppLockConfigure
           currentPin={appLock?.pin || ''}
@@ -5422,6 +5427,9 @@ const SettingsScreen = ({ experience, setExperience, appearance, setAppearance, 
       <NotificationsSheet visible={sheet === 'notifications'} close={() => setSheet(null)} onSave={(m: string) => { setSheet(null); setToast(m); }} />
       <AccountLinkSheet visible={sheet === 'accounts'} close={() => setSheet(null)} onConfirm={(accs: any[]) => { addLinked(accs); setSheet(null); setToast('Accounts connected and syncing.'); }} />
       <SupportSheet visible={sheet === 'support'} close={() => setSheet(null)} />
+      <Sheet visible={sheet === 'delete-account'} close={() => setSheet(null)} title="Delete Account" subtitle="Permanently close your Jaleter account.">
+        <DeleteAccountMode back={() => setSheet(null)} onDeleted={() => setSheet(null)} />
+      </Sheet>
       {toast ? <SharedToast message={toast} onHide={() => setToast('')} /> : null}
     </ScrollView>
   );
