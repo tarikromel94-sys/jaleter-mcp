@@ -13,11 +13,16 @@ import * as WebBrowser from 'expo-web-browser';
 
 export const JALETER_ORIGIN = 'https://jaleter.com';
 
+// Membership purchases happen on the web (Stripe-hosted). The exact page is
+// environment-configurable so preview/staging builds can point elsewhere.
+export const JALETER_SUBSCRIPTION_URL =
+  process.env.EXPO_PUBLIC_JALETER_SUBSCRIPTION_URL || `${JALETER_ORIGIN}/membership`;
+
 export const JALETER_LINKS = {
   home: `${JALETER_ORIGIN}/`,
   billing: `${JALETER_ORIGIN}/billing`,
   coaching: `${JALETER_ORIGIN}/coaching`,
-  membership: `${JALETER_ORIGIN}/membership`,
+  membership: JALETER_SUBSCRIPTION_URL,
   terms: `${JALETER_ORIGIN}/terms`,
   privacy: `${JALETER_ORIGIN}/privacy`,
   support: `${JALETER_ORIGIN}/support`,

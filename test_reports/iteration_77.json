@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 77 — Hard server-side membership paywall VERIFIED end-to-end. Backend: 28/28 pytest cases pass in /app/backend/tests/test_iteration77_paywall.py — all 13 gated routes (accounts, accounts/all, accounts/transactions, accounts/sync, accounts/manual, plaid/accounts, plaid/link-token, coach/chat, networth/history, notifications/evaluate-budget, statements/preview multipart, accounts/import multipart, accounts/transactions/match-transfers) return HTTP 402 with detail.error='payment_required' AND detail.subscription_status for the unpaid seed user (alex+test1@jaleter.app); the 6 non-gated routes (auth/me, user/membership, support/tickets, notifications/prefs, coaching/bookings, payments/checkout) return 200 for the same unpaid user, and payments/checkout returns a real https://checkout.stripe.com/… URL. Premium user demo@jaleter.com passes the gate (200) on accounts, accounts/all, accounts/transactions, networth/history and /user/membership returns active:true. Admin user support@jaleter.com bypasses the gate via is_admin (200 on /accounts). Stripe webhook rejects missing-signature and bad-signature payloads with 400. Frontend (Expo web preview, 390×844 mobile viewport): (a) unpaid login → 'Unlock Jaleter' paywall renders with all three required testIDs (paywall-checkout, paywall-refresh, paywall-signin); no dashboard exposure (home-profile absent); (b) 'Refresh Membership' tap keeps user on paywall and shows the exact friendly notice via testID='paywall-notice' (\"We couldn't find an active membership on this account yet…\"); (c) 'Already a member? Sign in' logs out and returns to Login screen (login-email input reappears, welcome iframe teardown observed); (d) premium login → dashboard directly (home-profile visible, paywall absent); (e) reload after premium login → still lands on dashboard (session + membership cache honored); (f) fresh signup (Welcome → Get Started → onboarding Continue → Create account, unique email + password 8+, terms checked) → lands on 'Unlock Jaleter' paywall with no FirstConnect/'Connect your accounts' screen anywhere. Zero PAGEERRORs, zero red screens; the only console errors are the expected 402s (which is the intended contract) and pre-existing 'shadow* deprecated' style warnings unrelated to this feature.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration77_paywall.py",
+    "/app/test_reports/pytest/iteration77_paywall.xml",
+    "/app/test_reports/screenshots/iter77/02_after_unpaid_login.jpeg",
+    "/app/test_reports/screenshots/iter77/03_after_refresh.jpeg",
+    "/app/test_reports/screenshots/iter77/04_after_signin.jpeg",
+    "/app/test_reports/screenshots/iter77/05_premium_home.jpeg",
+    "/app/test_reports/screenshots/iter77/06_after_reload.jpeg",
+    "/app/test_reports/screenshots/iter77/20_signup_form.jpeg",
+    "/app/test_reports/screenshots/iter77/21_after_signup.jpeg"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py:278 require_active_membership — correctly re-fetches the user, honors is_admin, and delegates active-check to stripe_service.has_active_membership (which now includes 'trialing' + 'past_due' + legacy premium_expires_at). 402 body always contains detail.error='payment_required' and subscription_status — client can distinguish membership issues from 401/403. Dependency is wired into all 18 sensitive routes confirmed via grep.",
+    "server.py:1796 /payments/checkout — deliberately uses get_current_user (NOT require_active_membership) so unpaid users can start Stripe Checkout. Correct.",
+    "server.py:1908 /payments/webhook — signature verified via stripe_service.verify_webhook_signature; missing/invalid signature returns 400. Idempotency + double-processing protection observed elsewhere in this file.",
+    "notifications_router.py:194 evaluate-budget — gated via _member_auth wrapper; returns 402 for unpaid user (verified).",
+    "index.tsx:1142 Paywall component — pure server-driven entitlement: local `checkMembership()` re-hits GET /api/user/membership on every mount + after Stripe return; there is no local bypass. The 402 hook in AuthContext (setPaymentRequiredHandler) + membership routing effect in MainApp force the paywall stage when active===false, so no code path leads into the dashboard for an unpaid user. Verified in browser."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (28/28 pytest cases in test_iteration77_paywall.py)",
+    "frontend": "100% (6/6 flows: unpaid→paywall, refresh notice, sign-in switch, premium→home, reload session restore, fresh signup→paywall; no red screen, no PAGEERROR)"
+  },
+  "seed_data_creation": "Ephemeral test user created only if alex+test1's membership had drifted to active: iter77-unpaid-<hex8>@jaletertest.com via /api/auth/register. In practice alex+test1 was still unpaid so no fresh user was needed. One fresh signup user iter77-signup-2a66db9e@jaletertest.com (and one earlier 4fe1b977) was created via the frontend flow to prove Welcome→Get Started→onboarding→Create account→Paywall. All are on the free tier with no Stripe subscription; they have no billing/PII impact and can be safely left in the DB or purged.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend regression suite: pytest /app/backend/tests/test_iteration77_paywall.py -v (28 tests, ~5s). Frontend regression recipe on the Expo web preview: (1) goto EXPO_PUBLIC_BACKEND_URL, (2) find the srcdoc iframe and click #btnLogin (login flow) or #btnStart (signup flow) — plain text selectors on the top document don't see the welcome buttons because they live inside an about:srcdoc iframe. (3) Login testIDs: login-email, login-password, login-submit. (4) Signup testIDs: signup-name, signup-email, signup-password, signup-terms (MUST be tapped or Create account stays disabled), signup-create. The onboarding step between Get Started and the signup form is a single 'Continue' press ('What keeps you moving forward?' selector). (5) Paywall testIDs: paywall-checkout, paywall-refresh, paywall-signin, paywall-notice. (6) Dashboard indicator: home-profile (JR avatar top-right). All 402 body assertions on gated routes must check both detail.error==='payment_required' AND 'subscription_status' key presence. Do NOT complete a real Stripe checkout — only verify /payments/checkout returns a URL. Admin (support@jaleter.com) MUST bypass via is_admin path in require_active_membership.",
+  "rca_of_issue": "No bug found this iteration. Feature (hard server-side membership paywall) is implemented correctly and matches the spec exactly. The 402 responses observed in the browser console during unpaid login are the intended contract, not errors — the client-side 402 hook (frontend/src/AuthContext.tsx setPaymentRequiredHandler) converts them into the Paywall state without leaking into the dashboard."
+}

@@ -204,6 +204,8 @@ async def create_subscription_checkout(
 def internal_status(stripe_status: Optional[str]) -> str:
     if stripe_status == "active":
         return "active"
+    if stripe_status == "trialing":
+        return "trialing"
     if stripe_status == "past_due":
         return "past_due"
     if stripe_status == "canceled":
@@ -212,12 +214,13 @@ def internal_status(stripe_status: Optional[str]) -> str:
         return "expired"
     if stripe_status in ("unpaid",):
         return "expired"
-    # trialing / paused / incomplete → treat as inactive for now.
+    # paused / incomplete → treat as inactive for now.
     return "inactive"
 
 
-ENTITLEMENT_STATES = {"active", "past_due"}
-# ^ Which internal states grant premium access. past_due keeps access
+ENTITLEMENT_STATES = {"active", "trialing", "past_due"}
+# ^ Which internal states grant premium access. trialing counts (a Stripe
+#   trial is a legitimately-provisioned subscription); past_due keeps access
 #   while Stripe retries; when Stripe finally marks canceled/unpaid we
 #   drop entitlement.
 

@@ -1122,7 +1122,7 @@ def _account_summary(linked_id: str, org_name: str, org_domain: Optional[str], a
 
 
 @api_router.post('/accounts/simplefin/link')
-async def simplefin_link(payload: SimpleFinLinkRequest, request: Request, current_user: dict = Depends(get_current_user)):
+async def simplefin_link(payload: SimpleFinLinkRequest, request: Request, current_user: dict = Depends(require_active_membership)):
     try:
         access_url = await claim_setup_token(payload.setup_token)
     except SimpleFinError as e:
@@ -1158,7 +1158,7 @@ async def simplefin_link(payload: SimpleFinLinkRequest, request: Request, curren
 
 
 @api_router.get('/accounts')
-async def list_accounts(current_user: dict = Depends(get_current_user)):
+async def list_accounts(current_user: dict = Depends(require_active_membership)):
     cursor = db.linked_accounts.find(
         {
             'user_id': current_user['user_id'],
@@ -1183,7 +1183,7 @@ async def list_accounts(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.post('/accounts/sync')
-async def sync_accounts(current_user: dict = Depends(get_current_user)):
+async def sync_accounts(current_user: dict = Depends(require_active_membership)):
     cursor = db.linked_accounts.find({
         'user_id': current_user['user_id'],
         '$or': [{'provider': {'$exists': False}}, {'provider': 'simplefin'}],
@@ -1193,7 +1193,7 @@ async def sync_accounts(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.post('/accounts/link/{link_id}/sync')
-async def sync_single(link_id: str, current_user: dict = Depends(get_current_user)):
+async def sync_single(link_id: str, current_user: dict = Depends(require_active_membership)):
     from bson import ObjectId
     try:
         oid = ObjectId(link_id)
@@ -1254,7 +1254,7 @@ async def unlink(link_id: str, current_user: dict = Depends(get_current_user)):
 
 
 @api_router.get('/accounts/transactions')
-async def list_bank_transactions(current_user: dict = Depends(get_current_user), limit: int = 50, include_transfers: bool = True):
+async def list_bank_transactions(current_user: dict = Depends(require_active_membership), limit: int = 50, include_transfers: bool = True):
     """List the user's bank transactions, newest first.
 
     `include_transfers` (default True) preserves the original behaviour used
@@ -1287,7 +1287,7 @@ async def classify_transaction(
     external_id: str,
     payload: TransactionClassifyPayload,
     request: Request,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_active_membership),
 ):
     """Manually mark or un-mark a transaction as transfer / cc-payment / loan-payment.
 
@@ -1332,7 +1332,7 @@ async def classify_transaction(
 
 @api_router.post('/accounts/transactions/match-transfers')
 @limiter.limit('6/minute')
-async def match_transfers(request: Request, current_user: dict = Depends(get_current_user)):
+async def match_transfers(request: Request, current_user: dict = Depends(require_active_membership)):
     """Best-effort transfer matching across the user's accounts.
 
     Scans the user's recent (last 180 days) transactions and marks any pair
@@ -1398,7 +1398,7 @@ async def match_transfers(request: Request, current_user: dict = Depends(get_cur
 
 # ------- SnapTrade OAuth Callback -------
 @api_router.post('/accounts/snaptrade/callback')
-async def snaptrade_callback(current_user: dict = Depends(get_current_user)):
+async def snaptrade_callback(current_user: dict = Depends(require_active_membership)):
     """Called by the app after the SnapTrade Connection Portal redirects back
     to `jaleter://snaptrade-callback`. We simply trigger a sync so the newly
     authorized brokerage account materializes in `/api/accounts/all`.
@@ -1424,7 +1424,7 @@ async def list_providers():
 
 @api_router.post('/accounts/link')
 @limiter.limit('10/minute')
-async def provider_link(payload: ProviderLinkRequest, request: Request, current_user: dict = Depends(get_current_user)):
+async def provider_link(payload: ProviderLinkRequest, request: Request, current_user: dict = Depends(require_active_membership)):
     """Modular link endpoint. Currently delegates SimpleFIN to its existing route.
     For 'snaptrade' returns a redirect_uri (or 503 if not configured)."""
     if payload.provider == 'simplefin':
@@ -1448,7 +1448,7 @@ async def import_transactions(
     file: UploadFile = File(...),
     account_name: Optional[str] = Form(default=None),
     override_mapping: Optional[str] = Form(default=None),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_active_membership),
 ):
     raw = await file.read()
     if not raw:
@@ -1477,7 +1477,7 @@ async def import_transactions(
 async def statements_preview(
     file: UploadFile = File(...),
     override_mapping: Optional[str] = Form(default=None),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_active_membership),
 ):
     """Parse a statement file WITHOUT committing. Returns detected column
     mapping, sample rows, date range, totals, and any unparseable rows so the
@@ -1503,7 +1503,7 @@ async def statements_preview(
 
 
 @api_router.get('/accounts/all')
-async def list_all_accounts(current_user: dict = Depends(get_current_user)):
+async def list_all_accounts(current_user: dict = Depends(require_active_membership)):
     """Combines SimpleFIN, SnapTrade, and File-import balances into one list.
     Never raises on provider failures — returns per-source error entries instead."""
     combined: list[dict] = []
@@ -1564,7 +1564,7 @@ class ManualAccountPatchPayload(BaseModel):
 
 
 @api_router.post('/accounts/manual')
-async def manual_accounts_create(payload: ManualAccountPayload, current_user: dict = Depends(get_current_user)):
+async def manual_accounts_create(payload: ManualAccountPayload, current_user: dict = Depends(require_active_membership)):
     try:
         row = await manual_accounts_service.create(db, current_user['user_id'], payload.model_dump())
     except ValueError as e:
@@ -1581,7 +1581,7 @@ async def manual_accounts_create(payload: ManualAccountPayload, current_user: di
 
 
 @api_router.patch('/accounts/manual/{account_id}')
-async def manual_accounts_update(account_id: str, payload: ManualAccountPatchPayload, current_user: dict = Depends(get_current_user)):
+async def manual_accounts_update(account_id: str, payload: ManualAccountPatchPayload, current_user: dict = Depends(require_active_membership)):
     try:
         row = await manual_accounts_service.update(db, current_user['user_id'], account_id, payload.model_dump(exclude_unset=True))
     except ValueError as e:
@@ -1598,7 +1598,7 @@ async def manual_accounts_update(account_id: str, payload: ManualAccountPatchPay
 
 
 @api_router.delete('/accounts/manual/{account_id}')
-async def manual_accounts_delete(account_id: str, current_user: dict = Depends(get_current_user)):
+async def manual_accounts_delete(account_id: str, current_user: dict = Depends(require_active_membership)):
     ok = await manual_accounts_service.delete(db, current_user['user_id'], account_id)
     if not ok:
         raise HTTPException(status_code=404, detail='Manual account not found')
@@ -1645,7 +1645,7 @@ async def update_account_override(
     account_id: str,
     payload: AccountOverridePayload,
     request: Request,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_active_membership),
 ):
     """Set (or clear) the user's rename + reclassification for a Plaid account.
 
@@ -1722,7 +1722,7 @@ async def update_account_override(
 
 
 @api_router.delete('/accounts/{account_id}/override')
-async def clear_account_override(account_id: str, current_user: dict = Depends(get_current_user)):
+async def clear_account_override(account_id: str, current_user: dict = Depends(require_active_membership)):
     """Reset both the rename + reclassification for an account (reverts to
     Plaid's automatic classification)."""
     await db.account_overrides.delete_one({
@@ -2240,7 +2240,7 @@ async def plaid_exchange(payload: PlaidExchangeRequest, current_user: dict = Dep
 
 
 @api_router.get('/plaid/accounts')
-async def plaid_accounts(current_user: dict = Depends(get_current_user)):
+async def plaid_accounts(current_user: dict = Depends(require_active_membership)):
     rows = await _plaid_list_accounts_for_user(current_user['user_id'])
     return {'accounts': rows}
 

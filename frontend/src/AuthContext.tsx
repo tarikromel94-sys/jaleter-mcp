@@ -68,12 +68,25 @@ async function callApi(path: string, options: RequestInit = {}, token?: string |
     const err = new Error(message) as any;
     err.status = res.status;
     err.detail = detail;
+    if (res.status === 402 && paymentRequiredHandler) {
+      try { paymentRequiredHandler(); } catch {}
+    }
     throw err;
   }
   return res.json();
 }
 
 export { callApi as apiCall };
+
+// ---- Global 402 (Payment Required) hook -----------------------------------
+// The backend returns HTTP 402 from every membership-protected route. MainApp
+// registers a handler so ANY 402 anywhere in the app kicks the user back to
+// the Membership Required screen — frontend state can never keep a lapsed
+// member inside the paid experience.
+let paymentRequiredHandler: (() => void) | null = null;
+export function setPaymentRequiredHandler(fn: (() => void) | null) {
+  paymentRequiredHandler = fn;
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);

@@ -90,7 +90,14 @@ MX / Finicity can drop in by implementing the same interface — no user-facing 
 - `/app/frontend/app/_layout.tsx` — Playfair Display + icon prewarm
 
 ### Screens
-Welcome → Onboarding → Signup / Login / Forgot / Reset → FirstConnect (SimpleFIN or skip) → Paywall → App (Home, Budget, Transactions, Net Worth, More → Legacy/Coaching/Membership/Settings)
+Welcome → Onboarding → Signup / Login / Forgot / Reset → Membership Required paywall → App (Home, Budget, Transactions, Net Worth, More → Legacy/Coaching/Membership/Settings)
+
+## Hard Server-Side Membership Paywall (June 2026)
+- Access model: app is free to download; ALL financial features require an active $90/yr Stripe membership (hard paywall for everyone, user-confirmed).
+- Backend is source of truth: `require_active_membership` (402) now protects ~18 financial routes (accounts, transactions, sync, statement import/preview, manual accounts, overrides, Plaid, net worth history, Coach AI, notification evaluators). Admin bypass retained. `trialing` now counts as entitled alongside `active`/`past_due`; cancel keeps access until period end.
+- Open routes (login only): auth, /user/membership, payments (checkout/webhook/portal/cancel/resume), support, notifications prefs/inbox, coaching bookings, reset-data, delete-account.
+- Frontend: "Unlock Jaleter" Membership Required screen (no bypass) — benefits list, "Continue to Jaleter.com" (backend-created user-linked Stripe Checkout; fallback opens EXPO_PUBLIC_JALETER_SUBSCRIPTION_URL), "Refresh Membership", "Already a member? Sign in" (switch account). FirstConnect onboarding screen removed.
+- Routing: every login/signup/session-restore calls GET /api/user/membership → active = dashboard, inactive = paywall. Cached verdict (`jaleter-membership-v1`) only speeds startup; server always re-validates. Any 402 anywhere kicks the app back to the paywall via a global handler in AuthContext.callApi.
 
 ### Settings → Linked Accounts (new)
 Three-option menu:

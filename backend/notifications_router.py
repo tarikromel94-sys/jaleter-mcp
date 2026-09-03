@@ -24,6 +24,13 @@ def _auth():
     return get_current_user
 
 
+def _member_auth():
+    """Membership-gated dependency — used on endpoints that evaluate budget
+    alerts / send pushes, which are paid Jaleter features."""
+    from server import require_active_membership  # noqa: WPS433
+    return require_active_membership
+
+
 def _db():
     from server import db  # noqa: WPS433
     return db
@@ -185,7 +192,7 @@ class EvaluateBudgetBody(BaseModel):
 
 
 @router.post("/evaluate-budget")
-async def evaluate_budget(body: EvaluateBudgetBody, current_user: dict = Depends(_auth())):
+async def evaluate_budget(body: EvaluateBudgetBody, current_user: dict = Depends(_member_auth())):
     """Evaluate 50/80/100 threshold alerts for the given subcategory totals.
 
     Server dedupes via `alert_state`: repeat evaluations with the same
@@ -219,7 +226,7 @@ class EvaluateTransactionBody(BaseModel):
 
 
 @router.post("/evaluate-transaction")
-async def evaluate_transaction(body: EvaluateTransactionBody, current_user: dict = Depends(_auth())):
+async def evaluate_transaction(body: EvaluateTransactionBody, current_user: dict = Depends(_member_auth())):
     tx = body.model_dump(exclude_none=True)
     n = await bas.evaluate_transaction_alert(_db(), current_user["user_id"], tx)
     return {"created": _serialize_notification(n) if n else None}

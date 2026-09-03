@@ -1566,3 +1566,37 @@ Add Apple Sign-In to Login + Signup screens.
 ### agent_communication:
   - agent: main
     message: "Phase 5 partial: 2 of 7 items done (#21 checkpoints + #26 tooltips). Remaining (#20 audit, #22 BUILD detail, #23 GROW verification, #24 Reports reconcile, #25 loading masking) queued for follow-up session. All heavy lifts (chart component rewrite, real-math checkpoints) done."
+
+---
+
+## Iteration 77 (Hard server-side membership paywall)
+
+### backend:
+  - task: "require_active_membership gate on ~18 financial routes; trialing entitled; notifications evaluators gated"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py, stripe_service.py, notifications_router.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "28/28 pytest pass (tests/test_iteration77_paywall.py). 13 gated routes 402 for unpaid; 6 open routes 200; premium 200; admin bypass works; webhook signature 400s."
+
+### frontend:
+  - task: "Unlock Jaleter Membership Required screen (no bypass), Refresh Membership, switch account, server-verified routing on login/signup/restore, global 402 handler"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/index.tsx, /app/frontend/src/AuthContext.tsx, jaleterLinks.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "6/6 flows pass: unpaid→paywall, refresh notice, sign-in switch, premium→dashboard, session restore→dashboard, fresh signup→paywall. No bypass, no FirstConnect."
+
+### agent_communication:
+  - agent: main
+    message: "Hard paywall shipped per user confirmation (option 1a+fallback, 2a). EXPO_PUBLIC_JALETER_SUBSCRIPTION_URL added to frontend/.env."
