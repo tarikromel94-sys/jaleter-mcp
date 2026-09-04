@@ -130,6 +130,10 @@ export function timeAgo(iso: string | null | undefined): string {
 // -----------------------------------------------------------------------
 // Shared UI atoms
 // -----------------------------------------------------------------------
+export const Sparkle = ({ size = 20, color = C.goldGlow, style }: any) => (
+  <Text style={[{ color, fontSize: size, fontWeight: '700' }, style]}>✦</Text>
+);
+
 export const GoldButton = ({ label, onPress, disabled, testID }: any) => (
   <Pressable testID={testID} disabled={disabled} onPress={onPress} style={{ opacity: disabled ? 0.45 : 1 }}>
     <LinearGradient colors={['#f2c779', '#ffe3a8', '#d09a4d']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.goldBtn}>

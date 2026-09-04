@@ -10,7 +10,7 @@
  * what App.tsx passes today.
  */
 import React, { useEffect, useState } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput } from 'react-native';
+import { View, Text, Pressable, ScrollView, TextInput, Platform, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { MONEY } from '@/src/quoteLibrary';
 import { useAuth, apiCall } from '@/src/AuthContext';

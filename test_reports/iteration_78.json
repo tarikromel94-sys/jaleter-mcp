@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 78 — Post-refactor regression + lapse email verified end-to-end. BACKEND: 9/9 pytest cases pass in /app/backend/tests/test_iteration78_refactor.py. Paywall sanity intact — GET /api/accounts returns 402 for alex+test1 (detail.error='payment_required', subscription_status present) and 200 for demo@jaleter.com (accounts list). GET /api/user/membership returns {active:false, status} for unpaid and {active:true} for premium. Lapse email unit-tested with mocked email_service.send_email + fake db.users: (a) sends on first invoice.payment_failed and records last_payment_failed_email_at, (b) throttled within 20h (0 sends when last_sent=5h ago), (c) resumes after throttle window (send when last_sent=21h ago), (d) no send for unresolvable user, (e) build_payment_failed_email includes name, amount, retry date, and 'still active' past_due grace copy. No real Stripe objects, no real emails. FRONTEND (390×844 mobile viewport on Expo web preview): (1) Unpaid login → Unlock Jaleter paywall renders with paywall-checkout, paywall-refresh, paywall-signin (home-profile NOT leaked). (2) Refresh Membership tap keeps user on paywall and shows paywall-notice. (3) 'Already a member? Sign in' returns to login screen. (4) Premium (demo) login → dashboard (home-profile visible, greeting 'Good evening, Jaleter.', Jaleter Focus quote, Jaleter Coach card, Right Now stats, Legacy card). (5) All 6 bottom-nav tabs (nav-home, nav-budget, nav-reports, nav-transactions, nav-networth, nav-legacy) navigate without red screen, without JS PAGEERROR, with visible content per screenshots. (6) Budget: budget-view-grid toggles to budget-view-cards, budget-period picker opens. (7) Activity: tx-add + tx-empty-add both open TxForm (tx-amount, tx-name, tx-category-open all visible). (8) More menu (home-profile JR avatar) → more-membership opens Membership screen (membership-manage + membership-cancel visible for premium demo — membership-subscribe correctly absent since already subscribed); more-coaching opens Coaching screen (coaching-book-pay visible); more-settings opens Settings. (9) Settings screen exposes settings-appear (Faith/Both/Motivation + Light/System/Dark), settings-applock (opens Set up App Lock sheet with cfg-pin-0), settings-reset (opens Reset app data modal with 'Type RESET to confirm' — cancelled), settings-delete-account (opens Delete Account sheet with password + DELETE confirm — cancelled), settings-logout. (10) settings-logout returns to Welcome iframe (#btnLogin available in iframe again). Zero PAGEERRORs. Only console errors are the expected 402s on gated routes for the unpaid user (intended contract). Refactor from 6733→1074 lines in app/index.tsx did NOT break any user-facing behavior; all extracted modules (BudgetScreen, TransactionsScreen, LegacyScreen, SettingsScreen, MoreScreens, AuthScreens, PaywallScreen, HomeScreen, AppLockScreens, BottomNav, BillingWebsiteNotice, usePayment, budgetModel, legacyMath) wire in correctly.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration78_refactor.py",
+    "/app/test_reports/pytest/iteration78.xml",
+    "/app/test_reports/screenshots/iter78/01_unpaid_paywall.jpeg",
+    "/app/test_reports/screenshots/iter78/02_premium_home.jpeg",
+    "/app/test_reports/screenshots/iter78/tab_budget.jpeg",
+    "/app/test_reports/screenshots/iter78/tab_transactions.jpeg",
+    "/app/test_reports/screenshots/iter78/tab_networth.jpeg",
+    "/app/test_reports/screenshots/iter78/tab_legacy.jpeg",
+    "/app/test_reports/screenshots/iter78/04_txform.jpeg",
+    "/app/test_reports/screenshots/iter78/09_membership.jpeg",
+    "/app/test_reports/screenshots/iter78/10_coaching.jpeg",
+    "/app/test_reports/screenshots/iter78/11_settings.jpeg",
+    "/app/test_reports/screenshots/iter78/12_reset_modal.jpeg",
+    "/app/test_reports/screenshots/iter78/13_delete_sheet.jpeg",
+    "/app/test_reports/screenshots/iter78/14_applock.jpeg",
+    "/app/test_reports/screenshots/iter78/15_after_logout.jpeg"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "stripe_service._send_payment_failed_email is correctly wired into handle_webhook_event for event_type == 'invoice.payment_failed' AFTER _apply_subscription runs (so past_due status is persisted first, then email is sent). Throttle uses last_payment_failed_email_at with 20h window comparing to timezone-aware now — handles naive DB timestamps by force-attaching UTC. Wrapped in try/except so an email failure never breaks the webhook contract. GOOD.",
+    "email_service.build_payment_failed_email tone is correct — friendly, mentions 'Your access is still active' matching the past_due grace behavior, and includes amount + retry date when Stripe supplies them, else falls back to generic 'over the next few days'.",
+    "Refactor discipline confirmed: app/index.tsx (1074 lines) is now just the App root + MainApp orchestrator; screens live in /app/frontend/src/screens/. All required testIDs still exist and are functional in the extracted modules (paywall-*, login-*, signup-*, nav-*, home-*, budget-*, tx-*, wealth-*, legacy-*, settings-*, more-*, membership-*, coaching-book-pay). No red screen, no missing imports.",
+    "MoreScreens.tsx Membership: 'membership-subscribe' is only rendered when there is no active sub — this correctly matches iter77 spec (unpaid users hit paywall, not the Membership screen; premium sees manage/cancel)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration78_refactor.py (new — 9 tests, 100% pass)"
+  ],
+  "success_rate": {
+    "backend": "100% (9/9 tests: 4 paywall/membership sanity + 5 lapse-email unit)",
+    "frontend": "100% (all 11 review-request flows verified: paywall+refresh+signin, premium dashboard, 6 tabs, budget grid/period, TxForm open, legacy pills, wealth screen, More→Membership/Coaching/Settings, Settings→appearance/applock/reset/delete sheets, logout→Welcome)"
+  },
+  "seed_data_creation": "None. Reused seeded demo (premium) and alex+test1 (unpaid). Lapse-email tests operate on an in-memory fake db.users — no real DB writes.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend regression: pytest /app/backend/tests/test_iteration78_refactor.py -v (9 tests, ~1.5s). Frontend regression flow: (1) goto EXPO_PUBLIC_BACKEND_URL. (2) Welcome buttons live inside an about:srcdoc iframe — iterate page.frames and click #btnLogin. (3) Login testIDs: login-email, login-password, login-submit. (4) Bottom-nav testIDs: nav-home, nav-budget, nav-reports, nav-transactions, nav-networth, nav-legacy. (5) More menu: tap home-profile → more-membership | more-coaching | more-settings. (6) Membership testIDs on Manage screen (premium): membership-manage, membership-cancel (membership-subscribe only appears for unpaid users on the paywall-adjacent state, NOT on the paywall itself — paywall uses paywall-checkout). (7) Settings testIDs: settings-appear, settings-applock, settings-reset, settings-delete-account, settings-logout. (8) App Lock sheet: cfg-pin-0..9, cfg-pin-continue, cfg-bio-toggle (bio toggle only on native, hidden on web). (9) Lapse email is verified only via mocked send_email — do NOT attempt to trigger a real invoice.payment_failed webhook, and don't send to real inboxes.",
+  "rca_of_issue": "N/A — no bugs found. Refactor is verbatim and behavior-preserving; lapse email wiring is correct with 20h throttle and past_due grace messaging."
+}

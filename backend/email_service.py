@@ -131,6 +131,42 @@ def build_verification_email(name: str, verify_token: str) -> Tuple[str, str, st
     return subject, _shell(inner, "EMAIL VERIFICATION"), text
 
 
+def build_payment_failed_email(name: str, amount_label: str | None, retry_date_label: str | None) -> Tuple[str, str, str]:
+    """Friendly billing-lapse notice sent when a membership renewal payment
+    fails. Access continues during Stripe's retry window (past_due grace),
+    so the tone is helpful — not alarming."""
+    subject = "Action needed: your Jaleter membership payment didn't go through"
+    friendly = name or "there"
+    amount_line = f" of {amount_label}" if amount_label else ""
+    retry_line = (
+        f"We'll automatically try again on {retry_date_label}."
+        if retry_date_label
+        else "We'll automatically retry over the next few days."
+    )
+    billing_url = "https://jaleter.com/billing"
+    text = (
+        f"Hi {friendly},\n\n"
+        f"We tried to renew your Jaleter membership, but the payment{amount_line} didn't go through. "
+        f"This usually happens when a card has expired or was replaced.\n\n"
+        f"Your access is still active — {retry_line}\n\n"
+        f"To keep everything running smoothly, please update your payment method:\n"
+        f"{billing_url}\n\n"
+        f"You can also update it in the app: More → Membership → Manage billing.\n\n"
+        f"If you have any questions, just reply or contact support@jaleter.com — we're happy to help.\n\n"
+        f"— The Jaleter team"
+    )
+    inner = f"""<p>Hi <strong>{friendly}</strong>,</p>
+      <p>We tried to renew your Jaleter membership, but the payment{amount_line} didn't go through. This usually happens when a card has expired or was replaced.</p>
+      <p><strong>Your access is still active.</strong> {retry_line}</p>
+      <p style="margin:22px 0">
+        <a href="{billing_url}" style="background:#c49450;color:#fffdf9;text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:600;display:inline-block">Update payment method</a>
+      </p>
+      <p style="color:#77726b;font-size:13px">You can also update it in the app: <em>More → Membership → Manage billing</em>.</p>
+      <p style="color:#928c83;font-size:12px">Questions? Contact <a href="mailto:support@jaleter.com" style="color:#b18245">support@jaleter.com</a> — we're happy to help.</p>
+      <p style="color:#928c83;font-size:12px">— The Jaleter team</p>"""
+    return subject, _shell(inner, "MEMBERSHIP BILLING"), text
+
+
 def build_delete_confirmation_email(name: str) -> Tuple[str, str, str]:
     subject = "Your Jaleter account has been deleted"
     friendly = name or "there"

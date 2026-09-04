@@ -1600,3 +1600,31 @@ Add Apple Sign-In to Login + Signup screens.
 ### agent_communication:
   - agent: main
     message: "Hard paywall shipped per user confirmation (option 1a+fallback, 2a). EXPO_PUBLIC_JALETER_SUBSCRIPTION_URL added to frontend/.env."
+
+---
+
+## Iteration 78 (Lapse emails + L2 frontend modularization)
+
+### backend:
+  - task: "Payment-failed lapse email on invoice.payment_failed (Resend, 20h throttle, past_due grace kept)"
+    implemented: true
+    working: true
+    file: "/app/backend/stripe_service.py, email_service.py"
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "9/9 pytest pass (tests/test_iteration78_refactor.py): email sent on fail + throttled + resumes after 21h; paywall 402/200 sanity intact."
+
+### frontend:
+  - task: "Split app/index.tsx 6733→1074 lines into src/screens/{AppLock,Auth,Paywall,Home,Budget,Transactions,Legacy,More,Settings}, src/components/{BottomNav,BillingWebsiteNotice}, src/hooks/usePayment, src/utils/{budgetModel,legacyMath}; deleted dead code (BackgroundArtwork, GoldRibbon, shortTermCash, upcomingCoachingSlots, CALENDLY_URL); fixed latent missing Platform/Alert imports in NetWorthScreen"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/index.tsx + new src modules"
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "11/11 flows pass, zero page errors: paywall, dashboard, all 6 tabs, budget grid, TxForm, membership/coaching/settings sheets, app lock, reset modal, delete account, logout."
+
+### agent_communication:
+  - agent: main
+    message: "Verbatim-move refactor; 6 pre-existing tsc type errors remain (hypoFrequency, expo-file-system typings, textInk) — predate refactor, runtime-safe."

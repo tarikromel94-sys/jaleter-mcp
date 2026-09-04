@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import stripe
@@ -326,6 +326,51 @@ async def _apply_subscription(db, sub: dict) -> Optional[str]:
     return user["user_id"]
 
 
+async def _send_payment_failed_email(db, user_id: str, invoice: dict) -> None:
+    """Send the billing-lapse email for a failed renewal.
+
+    Idempotency: webhook events are already deduped by event id; on top of
+    that we throttle to one email per 20h so Stripe's multi-invoice dunning
+    retries don't spam the member. Never raises — email is best-effort.
+    """
+    try:
+        import email_service
+
+        user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+        if not user or not user.get("email"):
+            return
+        now = datetime.now(timezone.utc)
+        last = user.get("last_payment_failed_email_at")
+        if last:
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            if (now - last) < timedelta(hours=20):
+                return
+        amount_label = None
+        if invoice.get("amount_due") is not None:
+            currency = str(invoice.get("currency") or "usd").upper()
+            amount_label = f"${invoice['amount_due'] / 100:,.2f} {currency}"
+        retry_ts = invoice.get("next_payment_attempt")
+        retry_label = (
+            datetime.fromtimestamp(retry_ts, tz=timezone.utc).strftime("%B %d, %Y")
+            if retry_ts else None
+        )
+        subject, html, text = email_service.build_payment_failed_email(
+            user.get("name") or "", amount_label, retry_label
+        )
+        sent, detail = await email_service.send_email(user["email"], subject, html, text)
+        if sent:
+            await db.users.update_one(
+                {"user_id": user_id},
+                {"$set": {"last_payment_failed_email_at": now}},
+            )
+            logger.info("Payment-failed email sent to user %s", user_id)
+        else:
+            logger.warning("Payment-failed email not sent for %s: %s", user_id, detail)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Payment-failed email error for %s: %s", user_id, exc)
+
+
 async def handle_webhook_event(db, event: dict) -> dict:
     """Dispatch a verified Stripe event. Idempotent — safe on replay.
 
@@ -393,6 +438,10 @@ async def handle_webhook_event(db, event: dict) -> dict:
                 _configure_stripe()
                 sub = stripe.Subscription.retrieve(sub_id)
                 resolved_user = await _apply_subscription(db, sub)
+            # Friendly lapse email so the member can fix billing before
+            # losing access (best-effort; throttled; never blocks the webhook).
+            if resolved_user:
+                await _send_payment_failed_email(db, resolved_user, obj)
         # Any other event type is acknowledged and stored but not acted on.
 
         await db.stripe_events.update_one(

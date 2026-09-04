@@ -92,8 +92,7 @@ MX / Finicity can drop in by implementing the same interface — no user-facing 
 ### Screens
 Welcome → Onboarding → Signup / Login / Forgot / Reset → Membership Required paywall → App (Home, Budget, Transactions, Net Worth, More → Legacy/Coaching/Membership/Settings)
 
-## Hard Server-Side Membership Paywall (June 2026)
-- Access model: app is free to download; ALL financial features require an active $90/yr Stripe membership (hard paywall for everyone, user-confirmed).
+## Hard Server-Side Membership Paywall (June 2026)- Access model: app is free to download; ALL financial features require an active $90/yr Stripe membership (hard paywall for everyone, user-confirmed).
 - Backend is source of truth: `require_active_membership` (402) now protects ~18 financial routes (accounts, transactions, sync, statement import/preview, manual accounts, overrides, Plaid, net worth history, Coach AI, notification evaluators). Admin bypass retained. `trialing` now counts as entitled alongside `active`/`past_due`; cancel keeps access until period end.
 - Open routes (login only): auth, /user/membership, payments (checkout/webhook/portal/cancel/resume), support, notifications prefs/inbox, coaching bookings, reset-data, delete-account.
 - Frontend: "Unlock Jaleter" Membership Required screen (no bypass) — benefits list, "Continue to Jaleter.com" (backend-created user-linked Stripe Checkout; fallback opens EXPO_PUBLIC_JALETER_SUBSCRIPTION_URL), "Refresh Membership", "Already a member? Sign in" (switch account). FirstConnect onboarding screen removed.
@@ -107,6 +106,15 @@ Three-option menu:
 
 ### Net Worth Assets
 Seeded sample rows (Cash, Investments, Real Estate, Vehicles) are now APPENDED with real linked-account balances from `GET /api/accounts/all`. Icons per provider (link / trending-up / document-attach). Total updates automatically.
+
+## Code Architecture (post L2 modularization, June 2026)
+- `frontend/app/index.tsx` reduced 6,733 → ~1,050 lines: only App root + MainApp orchestrator (state, persistence, membership routing, 402 handler).
+- Extracted verbatim: `src/screens/AppLockScreens.tsx` (AppLockGate/ForgotPinModal/AppLockConfigure/loadAppLock), `AuthScreens.tsx` (Welcome/Onboarding/Signup/Login/Forgot/Reset), `PaywallScreen.tsx` (Paywall), `HomeScreen.tsx`, `BudgetScreen.tsx` (BudgetScreen+BudgetGrid+xlsx/csv exports), `TransactionsScreen.tsx` (TransactionsScreen + exported TxForm), `LegacyScreen.tsx`, `MoreScreens.tsx` (Coaching/Membership/More), `SettingsScreen.tsx` (Settings+ResetAppDataModal+LegalSheet+NotificationsSheet+AccountLinkSheet+pickAndImport); `src/components/BottomNav.tsx`, `BillingWebsiteNotice.tsx`; `src/hooks/usePayment.ts` (usePayment+formatBookingDate); `src/utils/budgetModel.ts` (Tx/Category types + seed data + month/allocation math), `legacyMath.ts` (DEFAULT_LEGACY_RATE/hypoContributions/longTermInvestment). Sparkle moved into appShared.
+- Deleted dead code: BackgroundArtwork, GoldRibbon, shortTermCash, upcomingCoachingSlots, CALENDLY_URL. Fixed latent missing Platform/Alert imports in NetWorthScreen.
+- Known pre-existing tsc type errors (runtime-safe, predate refactor): hypoFrequency literal in index.tsx, expo-file-system cacheDirectory/EncodingType typings + t.textInk in BudgetScreen.
+
+## Billing Lapse Emails (June 2026)
+- `invoice.payment_failed` webhook → `_send_payment_failed_email` (stripe_service.py): friendly Resend email via `build_payment_failed_email` (email_service.py) with amount, retry date, jaleter.com/billing CTA; throttled to 1 per 20h via `users.last_payment_failed_email_at`; access retained during past_due grace.
 
 ## Docs
 - `/app/memory/test_credentials.md` — test credentials + endpoint reference
