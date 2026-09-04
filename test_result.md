@@ -1628,3 +1628,6 @@ Add Apple Sign-In to Login + Signup screens.
 ### agent_communication:
   - agent: main
     message: "Verbatim-move refactor; 6 pre-existing tsc type errors remain (hypoFrequency, expo-file-system typings, textInk) — predate refactor, runtime-safe."
+
+## Iteration 79 (Paywall auth-aware footer + foreground auto-recheck)
+- frontend: Paywall footer replaced ("Signed in as X" + "Not you? Sign out", testID paywall-signout; removed paywall-signin), AppState 'active' listener auto-calls checkMembership, MainApp splash guard (membership-routing) prevents Welcome/Login flash for signed-in users. Verified via playwright: unpaid login → paywall with new footer (old link absent), sign-out → login, premium login → dashboard, page reload → dashboard directly. tsc unchanged (6 pre-existing errors only).

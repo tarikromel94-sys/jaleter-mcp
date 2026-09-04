@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, Pressable, ScrollView, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, Pressable, ScrollView, ActivityIndicator, AppState } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { C } from '@/src/jaleterTheme';
 import { openJaleter, JALETER_SUBSCRIPTION_URL } from '@/src/jaleterLinks';
@@ -27,6 +27,22 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
   const pay = usePayment();
   const [busy, setBusy] = useState<null | 'checkout' | 'refresh'>(null);
   const [notice, setNotice] = useState('');
+  const busyRef = useRef(false);
+  useEffect(() => { busyRef.current = !!busy; }, [busy]);
+
+  // Auto-recheck whenever the app returns to the foreground (e.g. the user
+  // just paid on jaleter.com/Stripe in the browser and switched back). This
+  // makes "Refresh Membership" a backup, not a required step.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active' || busyRef.current) return;
+      (async () => {
+        try { if (await checkMembership()) onUnlocked(); } catch {}
+      })();
+    });
+    return () => sub.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // After Checkout returns (or the user paid on another device / the web),
   // poll the backend for up to ~30s. The Stripe webhook — never this client —
@@ -110,12 +126,18 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
       {notice ? (
         <Text testID="paywall-notice" style={{ marginTop: 14, fontSize: 11, color: '#8a6a2e', textAlign: 'center', lineHeight: 16 }}>{notice}</Text>
       ) : null}
-      <Pressable onPress={onSwitchAccount} style={{ marginTop: 22 }} testID="paywall-signin">
-        <Text style={[s.loginLink, { textAlign: 'center' }]}>Already a member? Sign in</Text>
-      </Pressable>
-      {email ? (
-        <Text style={{ marginTop: 8, fontSize: 9, color: '#a29a8e', textAlign: 'center' }}>Signed in as {email}</Text>
-      ) : null}
+      {/* This screen only renders for AUTHENTICATED users, so never ask them
+          to "sign in" again — show who they are and offer a way out. */}
+      <View style={{ marginTop: 22, alignItems: 'center' }}>
+        {email ? (
+          <Text testID="paywall-signed-in-as" style={{ fontSize: 11, color: '#77726b', textAlign: 'center' }}>
+            Signed in as <Text style={{ fontWeight: '700', color: '#615b52' }}>{email}</Text>
+          </Text>
+        ) : null}
+        <Pressable onPress={onSwitchAccount} hitSlop={8} testID="paywall-signout">
+          <Text style={[s.loginLink, { textAlign: 'center', marginTop: 6 }]}>Not you? Sign out</Text>
+        </Pressable>
+      </View>
       <Text style={{ marginTop: 16, fontSize: 9, color: '#a29a8e', textAlign: 'center', lineHeight: 13 }}>
         Payments are handled securely by Stripe on the web — Jaleter never sees your card. $90 USD billed annually; renews automatically until canceled. Cancel any time from Membership settings.
       </Text>

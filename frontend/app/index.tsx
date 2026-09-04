@@ -932,6 +932,11 @@ function MainApp() {
   };
 
   if (!hydrated || auth.loading) return <View style={{ flex: 1, backgroundColor: C.cream }} testID="auth-loading" />;
+  // Signed-in users never see Welcome/Login/Signup — hold a quiet splash for
+  // the moment the membership routing effect needs to pick dashboard vs paywall.
+  if (auth.user && stage !== 'app' && stage !== 'paywall') {
+    return <View style={{ flex: 1, backgroundColor: C.cream }} testID="membership-routing" />;
+  }
 
   const bg = isDark ? D.bg : C.cream;
   const displayName = (auth.user?.name || 'Friend').split(' ')[0];

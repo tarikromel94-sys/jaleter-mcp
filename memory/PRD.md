@@ -97,6 +97,7 @@ Welcome → Onboarding → Signup / Login / Forgot / Reset → Membership Requir
 - Open routes (login only): auth, /user/membership, payments (checkout/webhook/portal/cancel/resume), support, notifications prefs/inbox, coaching bookings, reset-data, delete-account.
 - Frontend: "Unlock Jaleter" Membership Required screen (no bypass) — benefits list, "Continue to Jaleter.com" (backend-created user-linked Stripe Checkout; fallback opens EXPO_PUBLIC_JALETER_SUBSCRIPTION_URL), "Refresh Membership", "Already a member? Sign in" (switch account). FirstConnect onboarding screen removed.
 - Routing: every login/signup/session-restore calls GET /api/user/membership → active = dashboard, inactive = paywall. Cached verdict (`jaleter-membership-v1`) only speeds startup; server always re-validates. Any 402 anywhere kicks the app back to the paywall via a global handler in AuthContext.callApi.
+- Paywall UX polish (June 2026, user-requested): footer shows "Signed in as {email}" + "Not you? Sign out" (testID paywall-signout) — never "Already a member? Sign in" since the screen only renders for authenticated users. AppState foreground listener auto-rechecks membership (pay on jaleter.com → return → auto-unlock; Refresh Membership is backup only). MainApp holds a splash (testID membership-routing) whenever a signed-in user is on any non-app/non-paywall stage so members never glimpse Welcome/Login.
 
 ### Settings → Linked Accounts (new)
 Three-option menu:
