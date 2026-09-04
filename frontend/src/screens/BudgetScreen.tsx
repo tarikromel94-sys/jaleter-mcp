@@ -993,7 +993,7 @@ export const BudgetScreen = ({ categories, setCategories, categoriesByYear, setC
               const actual = spentInGroup(c.id);
               const pct = total ? actual / total * 100 : 0;
               const open = expanded.includes(c.id);
-              const barColor = pct >= 100 ? C.red : pct >= 80 ? C.amber : C.green;
+              const barColor = pct > 100 ? C.red : pct >= 80 ? C.amber : C.green;
               return (
                 <View key={c.id} style={[s.budgetCategory, t.cardBg, open && { borderColor: '#ddc7a6' }]}>
                   <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -1030,13 +1030,15 @@ export const BudgetScreen = ({ categories, setCategories, categoriesByYear, setC
                         const remaining = b - a;
                         const spct = b > 0 ? a / b * 100 : 0;
                         const conf = (alerts?.perCategory && alerts.perCategory[sub.id]) || { p50: false, p80: true, exceeded: true };
-                        let alertLevel: 'p50' | 'p80' | 'exceeded' | null = null;
+                        let alertLevel: 'p50' | 'p80' | 'full' | 'exceeded' | null = null;
                         if (alerts?.enabled) {
-                          if (conf.exceeded && spct >= 100) alertLevel = 'exceeded';
+                          // Exact match is "fully used" — never OVER. Over only when actual > budget.
+                          if (conf.exceeded && spct > 100) alertLevel = 'exceeded';
+                          else if (conf.exceeded && spct >= 100) alertLevel = 'full';
                           else if (conf.p80 && spct >= 80) alertLevel = 'p80';
                           else if (conf.p50 && spct >= 50) alertLevel = 'p50';
                         }
-                        const alertColor = alertLevel === 'exceeded' ? C.red : alertLevel === 'p80' ? C.amber : alertLevel === 'p50' ? '#c9a56c' : null;
+                        const alertColor = alertLevel === 'exceeded' ? C.red : alertLevel === 'full' || alertLevel === 'p80' ? C.amber : alertLevel === 'p50' ? '#c9a56c' : null;
                         const leftColor = b > 0 ? (remaining < 0 ? C.red : remaining < b * 0.2 ? C.amber : '#5a7f60') : '#c1b9ac';
                         return (
                           <View key={sub.id} style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -1052,7 +1054,7 @@ export const BudgetScreen = ({ categories, setCategories, categoriesByYear, setC
                                 </View>
                                 {alertColor && (
                                   <View style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6, backgroundColor: alertColor + '22', borderWidth: 1, borderColor: alertColor }}>
-                                    <Text style={{ color: alertColor, fontSize: 8, fontWeight: '800' }}>{alertLevel === 'exceeded' ? 'OVER' : alertLevel === 'p80' ? '80%' : '50%'}</Text>
+                                    <Text style={{ color: alertColor, fontSize: 8, fontWeight: '800' }}>{alertLevel === 'exceeded' ? 'OVER' : alertLevel === 'full' ? '100%' : alertLevel === 'p80' ? '80%' : '50%'}</Text>
                                   </View>
                                 )}
                               </View>

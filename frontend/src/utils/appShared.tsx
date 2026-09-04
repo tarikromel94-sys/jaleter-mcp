@@ -27,6 +27,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { LinearGradient } from 'expo-linear-gradient';
 import { C, D, F } from '@/src/jaleterTheme';
 
@@ -241,7 +242,10 @@ export const Sheet = ({ visible, close, title, subtitle, children }: any) => (
         <Pressable testID="modal-close" onPress={close} style={s.modalClose}><Ionicons name="close" size={20} color={C.ink} /></Pressable>
         <Text style={s.sheetTitle}>{title}</Text>
         {subtitle ? <Text style={s.sheetSubtitle}>{subtitle}</Text> : null}
-        <ScrollView style={{ maxHeight: 520 }}>{children}</ScrollView>
+        {/* Keyboard-aware: bottom sheets sit right where the keyboard opens, so
+            the focused input is auto-scrolled to stay visible with a 24px gap.
+            The scroll returns to normal once the keyboard closes. */}
+        <KeyboardAwareScrollView style={{ maxHeight: 520 }} bottomOffset={24} keyboardShouldPersistTaps="handled">{children}</KeyboardAwareScrollView>
       </View>
     </View>
   </Modal>

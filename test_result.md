@@ -1631,3 +1631,7 @@ Add Apple Sign-In to Login + Signup screens.
 
 ## Iteration 79 (Paywall auth-aware footer + foreground auto-recheck)
 - frontend: Paywall footer replaced ("Signed in as X" + "Not you? Sign out", testID paywall-signout; removed paywall-signin), AppState 'active' listener auto-calls checkMembership, MainApp splash guard (membership-routing) prevents Welcome/Login flash for signed-in users. Verified via playwright: unpaid login → paywall with new footer (old link absent), sign-out → login, premium login → dashboard, page reload → dashboard directly. tsc unchanged (6 pre-existing errors only).
+
+## Iteration 79b (Budget exact-match + Legacy Available Cash + keyboard UX)
+- backend: budget_alert_service — spent==budget → "Budget fully used" (not exceeded); >budget → "Budget exceeded" w/ over-amount; 0.005 tolerance. 5/5 pytest (tests/test_iteration79_budget_wealth.py).
+- frontend: BudgetScreen — bar red only pct>100, new 'full' badge '100%' (amber) at exact match, 'OVER' only >100. Legacy/Home BUILD now start from availableCash (Total − Set Aside), chip renamed AVAILABLE CASH, drill-down row "Available Cash (Total − Set Aside)". Live bucket edits propagate Wealth→Legacy (verified). Keyboard: react-native-keyboard-controller@1.18.5 installed, KeyboardProvider in _layout, shared Sheet + LegacyScreen scroll now KeyboardAwareScrollView (bottomOffset 24/90). Keyboard avoidance NOT testable on web — user must validate on iPhone (Expo Go/TestFlight). All sheets/tabs regression-tested OK.

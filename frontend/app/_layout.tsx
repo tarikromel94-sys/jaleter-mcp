@@ -5,6 +5,7 @@ import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect } from "react";
 import { Alert, LogBox, Platform } from "react-native";
+import { KeyboardProvider } from "react-native-keyboard-controller";
 import { useFonts } from "expo-font";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
@@ -126,5 +127,9 @@ export default function RootLayout() {
   }, [router]);
 
   if (!iconsLoaded && !iconsError) return null;
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return (
+    <KeyboardProvider>
+      <Stack screenOptions={{ headerShown: false }} />
+    </KeyboardProvider>
+  );
 }

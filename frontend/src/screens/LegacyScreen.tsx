@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput } from 'react-native';
+import { View, Text, Pressable, TextInput } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import { C, D } from '@/src/jaleterTheme';
 import { MONEY } from '@/src/quoteLibrary';
@@ -90,10 +91,13 @@ export const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalR
     return rows;
   }, [perMonthNet, rawMonthlyNet]);
 
-  // BUILD spec (Jun 2026): Current Wealth = Total Cash + Total Investments,
-  // pulled directly from the Wealth tab. Investments are held flat — no 7%
-  // return applied. The 7% assumption is a GROW/Retirement concept only.
-  const buildStartingCash = (typeof totalCash === 'number' ? totalCash : 0) || 0;
+  // BUILD spec (Jun 2026): Current Wealth = AVAILABLE Cash + Total Investments,
+  // pulled directly from the Wealth tab. Available Cash = Total Cash − Set
+  // Aside Cash: money already reserved in buckets is never treated as
+  // deployable in the projection (and is never double-counted — buckets are
+  // a subset of Total Cash, not an extra asset). Investments are held flat —
+  // no 7% return applied. The 7% assumption is a GROW/Retirement concept only.
+  const buildStartingCash = (typeof availableCash === 'number' ? availableCash : (typeof totalCash === 'number' ? totalCash : 0)) || 0;
 
   // ---- ONE calculation engine for BUILD ------------------------------
   // Everything BUILD-related — the projected wealth headline, the chart
@@ -193,7 +197,7 @@ export const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalR
   const cumulativeRows = useMemo(() => {
     const rows: { year: number; value: number; delta: number }[] = [];
     let prev = isBuild
-      ? totalCash + investmentTotal + hypoValue
+      ? buildStartingCash + investmentTotal + hypoValue
       : investmentTotal + hypoValue;
     for (let y = 1; y <= years; y++) {
       const v = projectionAtYear(y);
@@ -202,7 +206,7 @@ export const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalR
     }
     return rows;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [years, isBuild, totalCash, investmentTotal, hypoValue, hypoFreq, hypoDur, rawMonthlyNet, perMonthNetFn, contribution, currentAge, retirementAge, RATE, MONTHLY_RATE]);
+  }, [years, isBuild, buildStartingCash, investmentTotal, hypoValue, hypoFreq, hypoDur, rawMonthlyNet, perMonthNetFn, contribution, currentAge, retirementAge, RATE, MONTHLY_RATE]);
 
   const commitHypo = () => {
     const clean = Math.max(0, Math.round(Number(hypoDraft.replace(/[^0-9.]/g, '')) || 0));
@@ -257,7 +261,7 @@ export const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalR
     : '+ Add';
 
   return (
-    <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
+    <KeyboardAwareScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }} bottomOffset={90} keyboardShouldPersistTaps="handled">
       <PageHeader title="Your Legacy" subtitle="See what consistent stewardship can become." />
       {/* Spec #21 — BUILD vs GROW top organisation. Only one row is
           "active" at a time; the other is grayed out so users can see the
@@ -421,10 +425,10 @@ export const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalR
               <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 2 }, t.textInk]}>{MONEY(contribution)}</Text>
             </Pressable>
           )}
-          {/* Cash chip — BUILD modes only (uses Total Cash per Wealth tab). */}
+          {/* Cash chip — BUILD modes only (uses AVAILABLE Cash = Total − Set Aside, per Wealth tab). */}
           {isBuild && (
             <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 1, borderColor: '#e6dcc5', backgroundColor: t.dark ? '#2a251f' : '#fbf6ec' }}>
-              <Text style={{ fontSize: 8, color: '#a97c39', fontWeight: '800', letterSpacing: 0.6 }}>CASH</Text>
+              <Text style={{ fontSize: 8, color: '#a97c39', fontWeight: '800', letterSpacing: 0.6 }}>AVAILABLE CASH</Text>
               <Text style={[{ fontSize: 12, fontWeight: '800', marginTop: 2 }, t.textInk]}>{MONEY(buildStartingCash)}</Text>
             </View>
           )}
@@ -479,7 +483,7 @@ export const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalR
                   {/* --- Starting Wealth --- */}
                   <Text style={[{ fontSize: 10, fontWeight: '800', color: '#a97c39', letterSpacing: 1, marginTop: 16 }]}>STARTING WEALTH</Text>
                   <View style={{ marginTop: 6, gap: 4 }}>
-                    <Row label="Cash" value={MONEY(bd.startingCash)} muted={t.textMuted} ink={t.textInk} />
+                    <Row label="Available Cash (Total − Set Aside)" value={MONEY(bd.startingCash)} muted={t.textMuted} ink={t.textInk} />
                     <Row label="Investments" value={MONEY(bd.startingInvestments)} muted={t.textMuted} ink={t.textInk} />
                     <View style={{ height: 1, backgroundColor: t.dark ? '#332e26' : '#efe6d0', marginVertical: 4 }} />
                     <Row label="Starting Wealth" value={MONEY(bd.startingWealth)} muted={t.textMuted} ink={t.textInk} valueColor="#9a6d32" />
@@ -886,7 +890,7 @@ export const LegacyScreen = ({ investmentTotal, totalCash, availableCash, totalR
           </Text>
         </View>
       </View>
-    </ScrollView>
+    </KeyboardAwareScrollView>
   );
 };
 

@@ -23,7 +23,9 @@ export const HomeScreen = ({ name, initials, experience, netWorth, investmentTot
   // BUILD (Jun 2026 spec): starts with Total Cash + Investments per Wealth.
   // Investments held FLAT — no compounding assumption. Cash accumulates by
   // the current monthly budget net (positive or negative).
-  const buildStartingCash = (typeof totalCash === 'number' ? totalCash : 0) || 0;
+  // BUILD preview mirrors the Legacy tab: Available Cash (Total − Set Aside)
+  // + investments held flat. Set-aside money is reserved, never projected.
+  const buildStartingCash = (typeof availableCash === 'number' ? availableCash : (typeof totalCash === 'number' ? totalCash : 0)) || 0;
   const signedMonthlyNet = Number(monthlyNet || 0);
   const buildAt = (n: number) => {
     // Home BUILD teaser math: investments held flat, cash accumulates by

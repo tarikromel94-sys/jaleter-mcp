@@ -117,6 +117,11 @@ Seeded sample rows (Cash, Investments, Real Estate, Vehicles) are now APPENDED w
 ## Billing Lapse Emails (June 2026)
 - `invoice.payment_failed` webhook → `_send_payment_failed_email` (stripe_service.py): friendly Resend email via `build_payment_failed_email` (email_service.py) with amount, retry date, jaleter.com/billing CTA; throttled to 1 per 20h via `users.last_payment_failed_email_at`; access retained during past_due grace.
 
+## Budget/Legacy/Keyboard fixes (June 2026)
+- Budget status convention (everywhere): Actual < Budget = under; Actual = Budget = "On Budget/Fully Used" (amber 100% badge, never OVER); Actual > Budget = Over (red). Applied to sub badge, category bar (BudgetScreen 996/1035), and backend push alerts (budget_alert_service: "Budget fully used" vs "Budget exceeded", $0.005 tolerance).
+- Legacy BUILD (and Home BUILD preview) start from Available Cash = Total Cash − Set Aside (props `availableCash`); chip label "AVAILABLE CASH"; drill-down row "Available Cash (Total − Set Aside)". Set Aside buckets are a subset of Total Cash — never double-counted.
+- Keyboard UX: react-native-keyboard-controller@1.18.5 (bundled in Expo Go SDK 54). KeyboardProvider wraps root Stack (_layout.tsx); shared `Sheet` (appShared) uses KeyboardAwareScrollView bottomOffset=24 → covers ALL amount sheets (Budget set, TxForm, Wealth buckets/manual accounts/investments, Legacy contrib/hypo); LegacyScreen main scroll is KeyboardAwareScrollView bottomOffset=90 for inline age inputs. No-op on web. Real-device validation pending (user, iPhone).
+
 ## Docs
 - `/app/memory/test_credentials.md` — test credentials + endpoint reference
 - Backend tests: `/app/backend/tests/test_providers.py`, `test_regression_fixes.py`, `test_password_reset.py`, `test_backend_auth.py`, `test_simplefin.py`

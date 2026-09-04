@@ -157,11 +157,18 @@ async def evaluate_budget_alerts_for_user(db, user_id: str, *,
         # 100%+ wins over 80% wins over 50% in a single tick.
         if pct >= 1.0 and conf['exceeded']:
             over = spent - budget
+            # Exact match (within a cent) is "fully used", NEVER "exceeded".
+            if over > 0.005:
+                title = "Budget exceeded"
+                body = f"{display} is ${over:,.2f} over budget. You've spent ${spent:,.2f} of your ${budget:,.2f} monthly budget."
+            else:
+                title = "Budget fully used"
+                body = f"{display} has used 100% of its ${budget:,.2f} monthly budget — you're right on budget."
             n = await _emit(
                 db, user_id=user_id,
                 key=f"u/{user_id}/{period}/{sub_id}/category_100",
-                title="Budget exceeded",
-                body=f"{display} is ${over:,.2f} over budget. You've spent ${spent:,.2f} of your ${budget:,.2f} monthly budget.",
+                title=title,
+                body=body,
                 ntype='category_100', category_id=sub_id, transaction_id=None, period=period,
                 metadata={'spent': spent, 'budget': budget, 'pct': pct, 'name': display},
             )
