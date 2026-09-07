@@ -406,6 +406,12 @@ async def handle_webhook_event(db, event: dict) -> dict:
                     update["stripe_customer_id"] = obj["customer"]
                 if obj.get("subscription"):
                     update["stripe_subscription_id"] = obj["subscription"]
+                # Bank-debit (ACH) payments complete Checkout with
+                # payment_status 'unpaid' while the debit clears (days). Mark
+                # 'processing' so the app shows "Payment processing" instead
+                # of "no membership" and blocks a duplicate purchase. Cleared
+                # by async_payment_succeeded / invoice.paid.
+                update["membership_processing"] = obj.get("payment_status") not in ("paid", "no_payment_required")
                 await db.users.update_one({"user_id": user["user_id"]}, {"$set": update})
                 # The subsequent `customer.subscription.*` events carry the
                 # authoritative status. This event does not itself grant
@@ -422,6 +428,21 @@ async def handle_webhook_event(db, event: dict) -> dict:
             # Terminal cancellation — mark canceled (or expired for
             # incomplete_expired). Access drops immediately.
             resolved_user = await _apply_subscription(db, obj)
+        elif event_type in ("checkout.session.async_payment_succeeded", "checkout.session.async_payment_failed"):
+            # Delayed-notification payment methods (ACH / bank debits) settle
+            # days after Checkout completes. Success activates the membership;
+            # failure clears the 'processing' state so the user can retry.
+            user = await _resolve_user(db, obj)
+            if user:
+                resolved_user = user["user_id"]
+                await db.users.update_one(
+                    {"user_id": user["user_id"]},
+                    {"$set": {"membership_processing": False}},
+                )
+                if event_type.endswith("succeeded") and obj.get("subscription"):
+                    _configure_stripe()
+                    sub = stripe.Subscription.retrieve(obj["subscription"])
+                    await _apply_subscription(db, sub)
         elif event_type == "invoice.paid":
             # Refresh the subscription (renewal successful).
             sub_id = obj.get("subscription")
@@ -429,6 +450,11 @@ async def handle_webhook_event(db, event: dict) -> dict:
                 _configure_stripe()
                 sub = stripe.Subscription.retrieve(sub_id)
                 resolved_user = await _apply_subscription(db, sub)
+            if resolved_user:
+                await db.users.update_one(
+                    {"user_id": resolved_user},
+                    {"$set": {"membership_processing": False}},
+                )
         elif event_type == "invoice.payment_failed":
             # Do not fake success; Stripe will move sub to past_due and
             # eventually cancel per the dunning policy. Reflect the
@@ -459,6 +485,44 @@ async def handle_webhook_event(db, event: dict) -> dict:
             {"$set": {"processed": False, "last_error": str(exc)}},
         )
         raise
+
+
+# ---- Webhook-independent reconciliation ----------------------------------
+_RECONCILE_STATUS_RANK = {"active": 5, "trialing": 4, "past_due": 3, "incomplete": 2, "paused": 1}
+
+
+async def reconcile_membership_from_stripe(db, user: dict) -> dict:
+    """Query Stripe DIRECTLY and sync this user's membership record.
+
+    Safety net for missed webhooks (misconfigured endpoint/secret, outage):
+    'Refresh Membership' and the checkout duplicate-guard call this so a
+    paid member is always recognized from Stripe's own records. Read-only
+    against Stripe — never creates or mutates anything there.
+    """
+    result = {"reconciled": False, "processing": False}
+    customer_id = (user or {}).get("stripe_customer_id")
+    if not customer_id:
+        return result
+    _configure_stripe()
+    subs = stripe.Subscription.list(customer=customer_id, status="all", limit=10)
+    best, best_key = None, (-1, -1)
+    for sub in subs.get("data") or []:
+        rank = _RECONCILE_STATUS_RANK.get(sub.get("status"), 0)
+        items = ((sub.get("items") or {}).get("data")) or [{}]
+        period_end = items[0].get("current_period_end") or 0
+        if (rank, period_end) > best_key:
+            best, best_key = sub, (rank, period_end)
+    if best is None:
+        return result
+    await _apply_subscription(db, best)
+    # 'incomplete' = first invoice not yet settled (e.g. ACH still clearing).
+    processing = best.get("status") == "incomplete"
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"membership_processing": processing}},
+    )
+    result.update(reconciled=True, processing=processing, status=best.get("status"))
+    return result
 
 
 # ---- Portal (for cancel / manage) ---------------------------------------

@@ -1816,6 +1816,23 @@ async def payments_checkout(payload: CheckoutRequest, request: Request, current_
     # ---- Membership (subscription) path -------------------------------
     if payload.product == 'jaleter_premium':
         import stripe_service as _stripe
+        # ---- Duplicate-payment guard ---------------------------------
+        # Never open a second Checkout when the user is already entitled or
+        # a bank payment is still clearing. Reconciling directly with Stripe
+        # also self-heals accounts whose activation webhook was missed.
+        u = await db.users.find_one({'user_id': current_user['user_id']}, {'_id': 0}) or current_user
+        if _stripe.has_active_membership(u):
+            return {'already_active': True}
+        try:
+            rec = await _stripe.reconcile_membership_from_stripe(db, u)
+            if rec.get('reconciled'):
+                fresh_u = await db.users.find_one({'user_id': current_user['user_id']}, {'_id': 0})
+                if fresh_u and _stripe.has_active_membership(fresh_u):
+                    return {'already_active': True}
+            if rec.get('processing') or u.get('membership_processing'):
+                return {'processing': True}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('Checkout duplicate-guard reconcile failed for %s: %s', current_user['user_id'], exc)
         price_id = getattr(request.app.state, 'stripe_price_id', None)
         if not price_id:
             # Try to bootstrap on-demand if startup missed it.
@@ -1957,19 +1974,28 @@ async def coaching_bookings(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.get('/user/membership')
-async def user_membership(current_user: dict = Depends(get_current_user)):
+async def user_membership(refresh: int = 0, current_user: dict = Depends(get_current_user)):
     """Return the authoritative membership state for the current user.
 
-    This is a READ-ONLY report of what the backend already knows. It does
-    not query Stripe or perform any side effects. Never trust the client
-    to derive premium access from a boolean here — the same source is
+    With ``?refresh=1`` the backend first reconciles directly with Stripe
+    (webhook-independent safety net used by "Refresh Membership" and the
+    paywall's return-to-foreground check). Without it this is a READ-ONLY
+    report of what the backend already knows. Never trust the client to
+    derive premium access from a boolean here — the same source is
     consulted server-side by `require_active_membership`.
     """
     import stripe_service as _stripe
+    if refresh:
+        try:
+            u = await db.users.find_one({'user_id': current_user['user_id']}, {'_id': 0}) or current_user
+            await _stripe.reconcile_membership_from_stripe(db, u)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('Membership refresh reconcile failed for %s: %s', current_user['user_id'], exc)
     fresh = await db.users.find_one({'user_id': current_user['user_id']}, {'_id': 0}) or current_user
     active = _stripe.has_active_membership(fresh)
     return {
         'active': active,
+        'processing': bool(fresh.get('membership_processing')) and not active,
         'status': fresh.get('subscription_status') or ('legacy_active' if active else 'inactive'),
         'plan': 'jaleter_premium_annual' if active else None,
         'price': 90 if active else None,

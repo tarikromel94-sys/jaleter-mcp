@@ -122,6 +122,13 @@ Seeded sample rows (Cash, Investments, Real Estate, Vehicles) are now APPENDED w
 - Legacy BUILD (and Home BUILD preview) start from Available Cash = Total Cash − Set Aside (props `availableCash`); chip label "AVAILABLE CASH"; drill-down row "Available Cash (Total − Set Aside)". Set Aside buckets are a subset of Total Cash — never double-counted.
 - Keyboard UX: react-native-keyboard-controller@1.18.5 (bundled in Expo Go SDK 54). KeyboardProvider wraps root Stack (_layout.tsx); shared `Sheet` (appShared) uses KeyboardAwareScrollView bottomOffset=24 → covers ALL amount sheets (Budget set, TxForm, Wealth buckets/manual accounts/investments, Legacy contrib/hypo); LegacyScreen main scroll is KeyboardAwareScrollView bottomOffset=90 for inline age inputs. No-op on web. Real-device validation pending (user, iPhone).
 
+## Membership payment resilience (June 2026, post double-charge incident)
+- Incident: user paid twice in prod (webhooks not reaching prod backend — placeholder STRIPE_WEBHOOK_SECRET). Remediation: duplicate sub canceled + $90 refunded via live Stripe API; kept sub active → 2027-09-06.
+- `reconcile_membership_from_stripe` (stripe_service.py): queries Stripe directly, ranks subs (active>trialing>past_due>incomplete>paused), applies best. Used by `GET /user/membership?refresh=1` (Refresh button + paywall mount/foreground) and the checkout duplicate guard → missed webhooks self-heal.
+- Duplicate guard in POST /payments/checkout (jaleter_premium): returns {already_active:true} or {processing:true} instead of a second Checkout session.
+- ACH/bank-debit "Payment Processing": users.membership_processing set on checkout.session.completed w/ payment_status unpaid; cleared by checkout.session.async_payment_succeeded / async_payment_failed / invoice.paid. /user/membership exposes `processing`. Paywall shows amber processing card + disabled pay button.
+- Stripe Dashboard webhook events required in PROD: checkout.session.completed, checkout.session.async_payment_succeeded, checkout.session.async_payment_failed, customer.subscription.created/updated/deleted, invoice.paid, invoice.payment_failed → endpoint https://no-changes-mobile.emergent.host/api/payments/webhook; STRIPE_WEBHOOK_SECRET must be real in prod env.
+
 ## Docs
 - `/app/memory/test_credentials.md` — test credentials + endpoint reference
 - Backend tests: `/app/backend/tests/test_providers.py`, `test_regression_fixes.py`, `test_password_reset.py`, `test_backend_auth.py`, `test_simplefin.py`

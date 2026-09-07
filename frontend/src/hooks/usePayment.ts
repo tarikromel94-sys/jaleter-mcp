@@ -15,7 +15,7 @@ export function formatBookingDate(iso: string): string {
   } catch { return iso; }
 }
 
-type CheckoutResult = { ok: boolean; paid?: boolean; canceled?: boolean; error?: string; sessionId?: string };
+type CheckoutResult = { ok: boolean; paid?: boolean; canceled?: boolean; alreadyActive?: boolean; processing?: boolean; error?: string; sessionId?: string };
 
 // Reusable Stripe Checkout runner. Opens hosted Checkout, waits for redirect,
 // then polls /api/payments/status until payment_status becomes 'paid'.
@@ -32,6 +32,11 @@ export function usePayment() {
     } catch (e: any) {
       return { ok: false, error: e?.message || 'Could not start checkout.' };
     }
+    // Duplicate-payment guard responses (no Checkout session created):
+    // membership already active on Stripe → unlock; bank payment still
+    // clearing → tell the user, never let them pay twice.
+    if (created?.already_active) return { ok: true, paid: true, alreadyActive: true };
+    if (created?.processing) return { ok: true, processing: true };
     const { url, session_id } = created;
     if (!url) return { ok: false, error: 'Payment provider did not return a URL.' };
 

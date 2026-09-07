@@ -27,20 +27,36 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
   const pay = usePayment();
   const [busy, setBusy] = useState<null | 'checkout' | 'refresh'>(null);
   const [notice, setNotice] = useState('');
+  const [processing, setProcessing] = useState(false);
   const busyRef = useRef(false);
+  const processingRef = useRef(false);
   useEffect(() => { busyRef.current = !!busy; }, [busy]);
+  useEffect(() => { processingRef.current = processing; }, [processing]);
 
-  // Auto-recheck whenever the app returns to the foreground (e.g. the user
-  // just paid on jaleter.com/Stripe in the browser and switched back). This
-  // makes "Refresh Membership" a backup, not a required step.
+  const PROCESSING_MSG = 'No need to pay again — bank payments can take a few business days to clear. Jaleter unlocks automatically the moment Stripe confirms it.';
+
+  const applyResult = (m: { active: boolean; processing: boolean }): boolean => {
+    if (m.active) { onUnlocked(); return true; }
+    setProcessing(!!m.processing);
+    return false;
+  };
+
+  // On mount + whenever the app returns to the foreground (e.g. the user just
+  // paid on jaleter.com/Stripe in the browser), reconcile with Stripe
+  // server-side. This self-heals missed webhooks and makes "Refresh
+  // Membership" a backup, not a required step.
   useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state !== 'active' || busyRef.current) return;
-      (async () => {
-        try { if (await checkMembership()) onUnlocked(); } catch {}
-      })();
-    });
-    return () => sub.remove();
+    let disposed = false;
+    const reconcile = async () => {
+      if (busyRef.current) return;
+      try {
+        const m = await checkMembership(true);
+        if (!disposed) applyResult(m);
+      } catch {}
+    };
+    reconcile();
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') reconcile(); });
+    return () => { disposed = true; sub.remove(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -50,7 +66,9 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
   const confirmActivation = async (): Promise<boolean> => {
     for (let i = 0; i < 12; i += 1) {
       try {
-        if (await checkMembership()) { onUnlocked(); return true; }
+        const m = await checkMembership(i === 0 || i === 5 || i === 11);
+        if (applyResult(m)) return true;
+        if (m.processing) return false; // bank payment clearing — stop polling
       } catch {}
       await new Promise((r) => setTimeout(r, 2500));
     }
@@ -58,11 +76,20 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
   };
 
   const startCheckout = async () => {
+    if (processing) { setNotice(PROCESSING_MSG); return; }
     setBusy('checkout'); setNotice('');
     try {
       // Preferred: backend creates a Stripe Checkout already linked to THIS
-      // Jaleter user (user_id + customer_id — never email matching).
+      // Jaleter user (user_id + customer_id — never email matching). The
+      // backend refuses to open a second Checkout if a membership is already
+      // active or a bank payment is still clearing.
       const res = await pay.start('jaleter_premium');
+      if (res.alreadyActive) {
+        setNotice('Your membership is already active — welcome back!');
+        const m = await checkMembership(true);
+        if (applyResult(m)) return;
+      }
+      if (res.processing) { setProcessing(true); setNotice(PROCESSING_MSG); return; }
       if (!res.ok) {
         // Fallback: send them to the membership page on jaleter.com.
         await openJaleter(JALETER_SUBSCRIPTION_URL);
@@ -72,15 +99,21 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
       if (res.canceled) { setNotice('Checkout canceled. You can restart any time.'); return; }
       setNotice('Confirming your membership with Stripe…');
       const active = await confirmActivation();
-      if (!active) setNotice("We haven't received Stripe's confirmation yet. If you completed payment, tap \"Refresh Membership\" in a moment.");
+      if (!active) {
+        setNotice(processingRef.current ? PROCESSING_MSG : "We haven't received Stripe's confirmation yet. If you completed payment, tap \"Refresh Membership\" in a moment.");
+      }
     } finally { setBusy(null); }
   };
 
   const refreshNow = async () => {
     setBusy('refresh'); setNotice('');
     try {
-      if (await checkMembership()) { onUnlocked(); return; }
-      setNotice("We couldn't find an active membership on this account yet. If you just paid, give it a few seconds and refresh again.");
+      // refresh=1 → backend reconciles straight from Stripe's records.
+      const m = await checkMembership(true);
+      if (applyResult(m)) return;
+      setNotice(m.processing
+        ? PROCESSING_MSG
+        : "We couldn't find an active membership on this account yet. If you just paid, give it a few seconds and refresh again.");
     } catch {
       setNotice('Could not reach Jaleter. Check your connection and try again.');
     } finally { setBusy(null); }
@@ -104,11 +137,22 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
           </View>
         ))}
       </View>
+      {processing ? (
+        <View testID="paywall-processing" style={{ marginTop: 18, borderWidth: 1, borderColor: '#e3cf9e', backgroundColor: '#fdf7e9', borderRadius: 14, padding: 14, flexDirection: 'row', gap: 10, alignItems: 'flex-start' }}>
+          <Ionicons name="time-outline" size={18} color="#a5772e" style={{ marginTop: 1 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: '#8a6a2e', fontSize: 12, fontWeight: '800' }}>Payment Processing</Text>
+            <Text style={{ color: '#8a6a2e', fontSize: 11, lineHeight: 16, marginTop: 3 }}>
+              Your payment is on its way. Bank payments can take a few business days to clear — Jaleter will unlock automatically once Stripe confirms it. Please don&apos;t pay again.
+            </Text>
+          </View>
+        </View>
+      ) : null}
       <View style={{ marginTop: 18 }}>
         <GoldButton
-          label={busy === 'checkout' ? 'Opening secure checkout…' : 'Continue to Jaleter.com'}
+          label={processing ? 'Payment processing — no need to pay again' : busy === 'checkout' ? 'Opening secure checkout…' : 'Continue to Jaleter.com'}
           onPress={startCheckout}
-          disabled={!!busy}
+          disabled={!!busy || processing}
           testID="paywall-checkout"
         />
       </View>

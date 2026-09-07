@@ -260,14 +260,15 @@ function MainApp() {
   // ---- Server-side membership gate ---------------------------------------
   // The backend is the source of truth (`GET /api/user/membership`, driven by
   // Stripe webhooks). Every sign-in / session-restore re-validates before the
-  // dashboard opens. The local cache only lets a returning ACTIVE member skip
-  // the loading gap — the server verdict that follows immediately corrects it.
-  const checkMembership = useCallback(async (): Promise<boolean> => {
-    if (!auth.token) return false;
-    const data = await apiCall('/api/user/membership', { method: 'GET' }, auth.token);
+  // dashboard opens. `reconcile=true` additionally makes the backend query
+  // Stripe directly (webhook-independent safety net). The local cache only
+  // lets a returning ACTIVE member skip the loading gap.
+  const checkMembership = useCallback(async (reconcile = false): Promise<{ active: boolean; processing: boolean }> => {
+    if (!auth.token) return { active: false, processing: false };
+    const data = await apiCall(`/api/user/membership${reconcile ? '?refresh=1' : ''}`, { method: 'GET' }, auth.token);
     const isActive = !!data?.active;
     storage.setItem(MEMBERSHIP_CACHE_KEY, JSON.stringify({ active: isActive, status: data?.status || null, at: Date.now() })).catch(() => {});
-    return isActive;
+    return { active: isActive, processing: !!data?.processing };
   }, [auth.token]);
 
   // Any premium API returning HTTP 402 anywhere in the app drops the user
@@ -298,8 +299,8 @@ function MainApp() {
         if (raw && JSON.parse(raw)?.active && !cancelled) setStage('app');
       } catch {}
       try {
-        const isActive = await checkMembership();
-        if (!cancelled) setStage(isActive ? 'app' : 'paywall');
+        const m = await checkMembership();
+        if (!cancelled) setStage(m.active ? 'app' : 'paywall');
       } catch {
         // Offline / server unreachable: fall back to the last server verdict.
         if (cancelled) return;
