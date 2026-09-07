@@ -1641,3 +1641,10 @@ Add Apple Sign-In to Login + Signup screens.
 - backend: reconcile_membership_from_stripe (webhook-independent, ?refresh=1 on /user/membership), checkout duplicate guard (already_active/processing responses), membership_processing flag (checkout unpaid→set, async_payment_succeeded/invoice.paid→clear), async_payment_failed handled. 5/5 mocked unit tests + 6/6 pytest (tests/test_iteration80_duplicate_guard.py).
 - frontend: Paywall processing card (paywall-processing), disabled pay button during processing, mount+foreground auto-reconcile, refresh uses ?refresh=1; usePayment short-circuits already_active/processing. All frontend flows pass.
 - PROD ACTION REQUIRED (user): configure Stripe Dashboard webhook endpoint → https://no-changes-mobile.emergent.host/api/payments/webhook (8 events incl. async_payment_*), set real STRIPE_WEBHOOK_SECRET in prod env, redeploy.
+
+## Iteration 81 (Membership welcome/receipt email)
+- backend: build_membership_welcome_email (branded receipt: amount, period end, ref, benefits, billing link) + _send_welcome_email hooked into _apply_subscription — fires once per customer on first activation (active/trialing), flag users.membership_welcome_email_at; replays/renewals/past_due never send. 4/4 mocked unit tests pass. Works via BOTH webhook and reconcile paths, so the stuck prod member gets it upon activation after redeploy.
+
+## Iteration 82 (Apple Sign-In restored)
+- User confirmed Sign In with Apple capability enabled on App ID com.emergent.nochangesmobile.fl0fmc (active profile already includes entitlement, exp. 2027-08-25).
+- Restored: app.json ios.usesAppleSignIn=true; expo-apple-authentication@8.0.8 installed; real AppleSignInButton in AuthScreens.tsx (Signup + Login); loginWithApple in AuthContext (POST /api/auth/apple). Backend endpoint unchanged (verified 401 on bogus token, not 500). Web preview: button correctly hidden (iOS-only), login renders clean. Full validation requires a real iOS build via TestFlight (aud=bundle id check may reject Expo Go tokens).

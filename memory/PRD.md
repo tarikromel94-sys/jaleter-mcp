@@ -114,8 +114,11 @@ Seeded sample rows (Cash, Investments, Real Estate, Vehicles) are now APPENDED w
 - Deleted dead code: BackgroundArtwork, GoldRibbon, shortTermCash, upcomingCoachingSlots, CALENDLY_URL. Fixed latent missing Platform/Alert imports in NetWorthScreen.
 - Known pre-existing tsc type errors (runtime-safe, predate refactor): hypoFrequency literal in index.tsx, expo-file-system cacheDirectory/EncodingType typings + t.textInk in BudgetScreen.
 
-## Billing Lapse Emails (June 2026)
-- `invoice.payment_failed` webhook → `_send_payment_failed_email` (stripe_service.py): friendly Resend email via `build_payment_failed_email` (email_service.py) with amount, retry date, jaleter.com/billing CTA; throttled to 1 per 20h via `users.last_payment_failed_email_at`; access retained during past_due grace.
+## Membership Welcome/Receipt Email (June 2026)
+- `build_membership_welcome_email` (email_service.py) — branded "Welcome to Jaleter — your membership is active ✦" with receipt card ($ amount from Stripe price, period-end date, sub reference), benefits list, billing management links.
+- `_send_welcome_email` called from `_apply_subscription` (stripe_service.py) when status becomes active/trialing — once per customer via `users.membership_welcome_email_at` flag (webhook replays, renewals, reconciles never re-send; past_due never triggers). Fires through BOTH the webhook path and the ?refresh=1 reconcile path.
+
+## Billing Lapse Emails (June 2026)- `invoice.payment_failed` webhook → `_send_payment_failed_email` (stripe_service.py): friendly Resend email via `build_payment_failed_email` (email_service.py) with amount, retry date, jaleter.com/billing CTA; throttled to 1 per 20h via `users.last_payment_failed_email_at`; access retained during past_due grace.
 
 ## Budget/Legacy/Keyboard fixes (June 2026)
 - Budget status convention (everywhere): Actual < Budget = under; Actual = Budget = "On Budget/Fully Used" (amber 100% badge, never OVER); Actual > Budget = Over (red). Applied to sub badge, category bar (BudgetScreen 996/1035), and backend push alerts (budget_alert_service: "Budget fully used" vs "Budget exceeded", $0.005 tolerance).
@@ -128,6 +131,10 @@ Seeded sample rows (Cash, Investments, Real Estate, Vehicles) are now APPENDED w
 - Duplicate guard in POST /payments/checkout (jaleter_premium): returns {already_active:true} or {processing:true} instead of a second Checkout session.
 - ACH/bank-debit "Payment Processing": users.membership_processing set on checkout.session.completed w/ payment_status unpaid; cleared by checkout.session.async_payment_succeeded / async_payment_failed / invoice.paid. /user/membership exposes `processing`. Paywall shows amber processing card + disabled pay button.
 - Stripe Dashboard webhook events required in PROD: checkout.session.completed, checkout.session.async_payment_succeeded, checkout.session.async_payment_failed, customer.subscription.created/updated/deleted, invoice.paid, invoice.payment_failed → endpoint https://no-changes-mobile.emergent.host/api/payments/webhook; STRIPE_WEBHOOK_SECRET must be real in prod env.
+
+## Apple Sign-In (RESTORED June 2026)
+- User enabled the capability on App ID com.emergent.nochangesmobile.fl0fmc (active App Store profile includes the entitlement, exp. 2027-08-25).
+- app.json: `ios.usesAppleSignIn: true`; `expo-apple-authentication@8.0.8`; AppleSignInButton (AuthScreens.tsx, shown on Signup + Login, iOS-native only); `loginWithApple` in AuthContext → `POST /api/auth/apple` (backend verifies identity token vs Apple JWKS). Satisfies Apple Guideline 5.1.1(v) alongside Google Sign-In. Needs TestFlight build for end-to-end validation.
 
 ## Docs
 - `/app/memory/test_credentials.md` — test credentials + endpoint reference

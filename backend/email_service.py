@@ -131,6 +131,60 @@ def build_verification_email(name: str, verify_token: str) -> Tuple[str, str, st
     return subject, _shell(inner, "EMAIL VERIFICATION"), text
 
 
+def build_membership_welcome_email(
+    name: str,
+    amount_label: str | None,
+    period_end_label: str | None,
+    last_ref: str | None = None,
+) -> Tuple[str, str, str]:
+    """Branded welcome + receipt sent the moment a membership activates.
+    One per customer (guarded by users.membership_welcome_email_at)."""
+    subject = "Welcome to Jaleter — your membership is active ✦"
+    friendly = name or "there"
+    amount_line = amount_label or "$90.00 USD"
+    period_line = (
+        f"Your membership is active through {period_end_label}."
+        if period_end_label else "Your annual membership is now active."
+    )
+    ref_line = f"\nReference: {last_ref}" if last_ref else ""
+    text = (
+        f"Hi {friendly},\n\n"
+        f"Welcome to Jaleter — your membership is active. {period_line}\n\n"
+        f"Receipt\n"
+        f"  Jaleter Annual Membership: {amount_line}\n"
+        f"  Renews automatically each year until canceled.{ref_line}\n\n"
+        f"You now have full access to:\n"
+        f"  - Grid-based budgeting across every month\n"
+        f"  - Connected financial accounts (Plaid + statement import)\n"
+        f"  - Spending insights & intelligent reports\n"
+        f"  - Net worth, goals & Legacy projections\n"
+        f"  - Jaleter Coach — AI-powered financial insights\n\n"
+        f"Manage billing any time in the app (More → Membership) or at https://jaleter.com/billing.\n\n"
+        f"Steward today. Build tomorrow.\n"
+        f"— The Jaleter team"
+    )
+    ref_html = f'<p style="color:#928c83;font-size:11px;margin-top:4px">Reference: {last_ref}</p>' if last_ref else ""
+    inner = f"""<p>Hi <strong>{friendly}</strong>,</p>
+      <p>Welcome to Jaleter — your membership is <strong>active</strong>. {period_line}</p>
+      <div style="border:1px solid #e8e0d0;border-radius:12px;padding:16px 18px;margin:18px 0;background:#fdfaf3">
+        <p style="margin:0;color:#a5772e;font-size:11px;letter-spacing:1.2px;font-weight:700">RECEIPT</p>
+        <p style="margin:8px 0 0;color:#3d3a35;font-size:14px"><strong>Jaleter Annual Membership</strong> — {amount_line}</p>
+        <p style="margin:4px 0 0;color:#77726b;font-size:12px">Renews automatically each year until canceled.</p>
+        {ref_html}
+      </div>
+      <p style="color:#3d3a35;font-size:13px;margin-bottom:6px"><strong>You now have full access to:</strong></p>
+      <ul style="color:#615b52;font-size:13px;line-height:1.7;padding-left:20px;margin-top:0">
+        <li>Grid-based budgeting across every month</li>
+        <li>Connected financial accounts (Plaid + statement import)</li>
+        <li>Spending insights &amp; intelligent reports</li>
+        <li>Net worth, goals &amp; Legacy projections</li>
+        <li>Jaleter Coach — AI-powered financial insights</li>
+      </ul>
+      <p style="color:#77726b;font-size:12px">Manage billing any time in the app (<em>More → Membership</em>) or at <a href="https://jaleter.com/billing" style="color:#b18245">jaleter.com/billing</a>.</p>
+      <p style="color:#928c83;font-size:12px">Steward today. Build tomorrow.<br/>— The Jaleter team</p>"""
+    return subject, _shell(inner, "MEMBERSHIP ACTIVE"), text
+
+
 def build_payment_failed_email(name: str, amount_label: str | None, retry_date_label: str | None) -> Tuple[str, str, str]:
     """Friendly billing-lapse notice sent when a membership renewal payment
     fails. Access continues during Stripe's retry window (past_due grace),

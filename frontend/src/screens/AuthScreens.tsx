@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Platform, Dimensions, StatusBar as RNStatusBar } from 'react-native';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import { useAuth } from '@/src/AuthContext';
@@ -213,7 +214,62 @@ export const Onboarding = ({ experience, setExperience, onContinue, back }: any)
  *
  * Email + Google (Emergent OAuth) remain the two supported sign-in methods.
  * ------------------------------------------------------------------------- */
-const AppleSignInButton = (_props: { onError: (m: string) => void; onBusy: (v: boolean) => void }) => null;
+/* ---------------- Apple Sign-In (native iOS only) ----------------
+ * Restored June 2026 after the user enabled the "Sign In with Apple"
+ * capability on App ID com.emergent.nochangesmobile.fl0fmc (active
+ * provisioning profile already includes the entitlement, exp. 2027-08-25).
+ * Requires app.json ios.usesAppleSignIn=true + expo-apple-authentication.
+ * Renders nothing on web/Android/Expo Go-unsupported environments. */
+const AppleSignInButton = ({ onError, onBusy }: { onError: (m: string) => void; onBusy: (v: boolean) => void }) => {
+  const { loginWithApple } = useAuth();
+  const [available, setAvailable] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const ok = await AppleAuthentication.isAvailableAsync();
+        if (alive) setAvailable(!!ok);
+      } catch { if (alive) setAvailable(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
+  // Apple only supports native iOS. Hide the button everywhere else.
+  if (Platform.OS !== 'ios' || !available) return null;
+  const onPress = async () => {
+    onBusy(true);
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+      if (!credential.identityToken) throw new Error('Apple did not return an identity token.');
+      const name = credential.fullName
+        ? [credential.fullName.givenName, credential.fullName.familyName].filter(Boolean).join(' ').trim() || null
+        : null;
+      await loginWithApple({
+        identity_token: credential.identityToken,
+        name,
+        email: credential.email || null,
+      });
+    } catch (e: any) {
+      if (e?.code === 'ERR_REQUEST_CANCELED') { /* user tapped Cancel — ignore */ }
+      else onError(e?.message || 'Apple sign-in failed.');
+    } finally {
+      onBusy(false);
+    }
+  };
+  return (
+    <AppleAuthentication.AppleAuthenticationButton
+      buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+      buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+      cornerRadius={12}
+      style={{ height: 46, marginTop: 10 }}
+      onPress={onPress}
+    />
+  );
+};
 
 /* ---------------- Signup (real register) ---------------- */
 export const Signup = ({ back, onCreated, goLogin }: any) => {

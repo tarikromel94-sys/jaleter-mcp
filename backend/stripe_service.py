@@ -323,7 +323,50 @@ async def _apply_subscription(db, sub: dict) -> Optional[str]:
     if status_internal in ENTITLEMENT_STATES and not user.get("premium_since"):
         update["premium_since"] = now
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": update})
+    # Branded welcome + receipt the moment the membership becomes active.
+    # Once per customer (flag-guarded), so webhook replays / reconciles /
+    # renewals never re-send it. past_due grace never triggers a welcome.
+    if status_internal in ("active", "trialing") and not user.get("membership_welcome_email_at"):
+        await _send_welcome_email(db, user["user_id"], sub)
     return user["user_id"]
+
+
+async def _send_welcome_email(db, user_id: str, sub: dict) -> None:
+    """Best-effort welcome/receipt email on first activation. Never raises."""
+    try:
+        import email_service
+
+        user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+        if not user or not user.get("email") or user.get("membership_welcome_email_at"):
+            return
+        price = ((sub.get("items") or {}).get("data") or [{}])[0].get("price") or {}
+        amount_label = None
+        if price.get("unit_amount"):
+            currency = str(price.get("currency") or "usd").upper()
+            amount_label = f"${price['unit_amount'] / 100:,.2f} {currency}"
+        period_end = sub.get("current_period_end") or (
+            ((sub.get("items") or {}).get("data") or [{}])[0].get("current_period_end")
+        )
+        period_label = (
+            datetime.fromtimestamp(period_end, tz=timezone.utc).strftime("%B %d, %Y")
+            if period_end else None
+        )
+        sub_id = sub.get("id") or ""
+        subject, html, text = email_service.build_membership_welcome_email(
+            user.get("name") or "", amount_label, period_label,
+            last_ref=sub_id[-8:] if sub_id else None,
+        )
+        sent, detail = await email_service.send_email(user["email"], subject, html, text)
+        if sent:
+            await db.users.update_one(
+                {"user_id": user_id},
+                {"$set": {"membership_welcome_email_at": datetime.now(timezone.utc)}},
+            )
+            logger.info("Membership welcome email sent to user %s", user_id)
+        else:
+            logger.warning("Welcome email not sent for %s: %s", user_id, detail)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Welcome email error for %s: %s", user_id, exc)
 
 
 async def _send_payment_failed_email(db, user_id: str, invoice: dict) -> None:
