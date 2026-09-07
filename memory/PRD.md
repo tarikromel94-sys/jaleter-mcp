@@ -136,6 +136,10 @@ Seeded sample rows (Cash, Investments, Real Estate, Vehicles) are now APPENDED w
 - User enabled the capability on App ID com.emergent.nochangesmobile.fl0fmc (active App Store profile includes the entitlement, exp. 2027-08-25).
 - app.json: `ios.usesAppleSignIn: true`; `expo-apple-authentication@8.0.8`; AppleSignInButton (AuthScreens.tsx, shown on Signup + Login, iOS-native only); `loginWithApple` in AuthContext → `POST /api/auth/apple` (backend verifies identity token vs Apple JWKS). Satisfies Apple Guideline 5.1.1(v) alongside Google Sign-In. Needs TestFlight build for end-to-end validation.
 
+## Reset App Data vs Delete Account (updated June 2026)
+- Reset (POST /user/reset-data): keeps login/Plaid/subscription; wipes user-scoped: bank_transactions, transactions, budgets/cells/categories/income_sources, goals, restricted_buckets (Set Aside), account_overrides, **manual_accounts**, **net_worth_snapshots**, coach_messages, reclassify_runs, legacy_snapshots, digests/alerts/notifications, import_mappings + unsets finalized_budget_months/wealth_overrides/legacy_state. (June 2026 fix: manual_accounts was missing → manual investment survived reset.)
+- Delete Account cascade now also purges manual_accounts, net_worth_snapshots, restricted_buckets, reclassify_runs (plus everything it already removed: Stripe cancel, Plaid revoke, all user-scoped collections, sessions, user doc → anonymized billing_receipts).
+
 ## Docs
 - `/app/memory/test_credentials.md` — test credentials + endpoint reference
 - Backend tests: `/app/backend/tests/test_providers.py`, `test_regression_fixes.py`, `test_password_reset.py`, `test_backend_auth.py`, `test_simplefin.py`

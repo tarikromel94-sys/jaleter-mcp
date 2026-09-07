@@ -1648,3 +1648,8 @@ Add Apple Sign-In to Login + Signup screens.
 ## Iteration 82 (Apple Sign-In restored)
 - User confirmed Sign In with Apple capability enabled on App ID com.emergent.nochangesmobile.fl0fmc (active profile already includes entitlement, exp. 2027-08-25).
 - Restored: app.json ios.usesAppleSignIn=true; expo-apple-authentication@8.0.8 installed; real AppleSignInButton in AuthScreens.tsx (Signup + Login); loginWithApple in AuthContext (POST /api/auth/apple). Backend endpoint unchanged (verified 401 on bogus token, not 500). Web preview: button correctly hidden (iOS-only), login renders clean. Full validation requires a real iOS build via TestFlight (aud=bundle id check may reject Expo Go tokens).
+
+## Iteration 83 (Reset App Data: manual accounts fix)
+- Bug: manual_accounts (manual cash/investment/liability rows) missing from reset-data collection list → manual investment survived reset. Also missing from delete-account cascade.
+- Fix: added manual_accounts, net_worth_snapshots, coach_messages, reclassify_runs to POST /api/user/reset-data; added manual_accounts, net_worth_snapshots, restricted_buckets, reclassify_runs to DELETE /auth/delete-account cascade.
+- Regression (curl, fresh user): manual cash+investments+auto_loans created → reset → accounts/all = 0, login kept, deleted_counts {manual_accounts:3, net_worth_snapshots:1}; Delete Account (password) → login 401. ALL PASS.

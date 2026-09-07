@@ -679,6 +679,7 @@ async def delete_account(request: Request, current_user: dict = Depends(get_curr
         'bank_transactions', 'linked_accounts', 'snaptrade_accounts', 'snaptrade_users',
         'support_tickets', 'support_requests', 'coaching_bookings',
         'payment_transactions', 'coach_messages', 'account_overrides',
+        'manual_accounts', 'net_worth_snapshots', 'restricted_buckets', 'reclassify_runs',
         'notifications', 'alert_state', 'device_tokens',
         'import_mappings', 'weekly_digest_state', 'budget_alert_state',
         'push_history', 'legacy_snapshots', 'budget_cells', 'goals',
@@ -774,6 +775,13 @@ async def reset_user_data(request: Request, current_user: dict = Depends(get_cur
         'bank_transactions', 'transactions',
         'budgets', 'budget_cells', 'categories', 'income_sources',
         'goals', 'restricted_buckets', 'account_overrides',
+        # Manual financial records (cash / investment / retirement /
+        # liability accounts added by hand) — the June 2026 bug: these were
+        # missing, so a manual investment account survived Reset App Data.
+        'manual_accounts',
+        'net_worth_snapshots',    # net-worth history built from user data
+        'coach_messages',         # Coach AI history references user finances
+        'reclassify_runs',        # derived classification runs
         'legacy_snapshots', 'weekly_digest_state', 'budget_alert_state',
         'notifications', 'alert_state', 'import_mappings',
     )
