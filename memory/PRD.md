@@ -140,6 +140,10 @@ Seeded sample rows (Cash, Investments, Real Estate, Vehicles) are now APPENDED w
 - Reset (POST /user/reset-data): keeps login/Plaid/subscription; wipes user-scoped: bank_transactions, transactions, budgets/cells/categories/income_sources, goals, restricted_buckets (Set Aside), account_overrides, **manual_accounts**, **net_worth_snapshots**, coach_messages, reclassify_runs, legacy_snapshots, digests/alerts/notifications, import_mappings + unsets finalized_budget_months/wealth_overrides/legacy_state. (June 2026 fix: manual_accounts was missing → manual investment survived reset.)
 - Delete Account cascade now also purges manual_accounts, net_worth_snapshots, restricted_buckets, reclassify_runs (plus everything it already removed: Stripe cancel, Plaid revoke, all user-scoped collections, sessions, user doc → anonymized billing_receipts).
 
+## Wealth Cash Policy + Import Delete (Sept 2026)
+- Total Cash = manual cash (user-entered 'cash' asset row in Wealth) + Plaid/linked cash ONLY. Activity/manual/imported transactions NEVER move Wealth cash (removed the old income−expense "syncedCash"). Statement-import (provider 'file') rows are excluded from all Wealth aggregations (dedupedLinked filter) — imports feed Activity/Budget/Reports only, but still appear under Settings → Linked Accounts.
+- DELETE /accounts/link/{link_id}: string link_ids (file/snaptrade) route through provider.unlink (file provider also deletes that import's bank_transactions); ObjectId fallback for legacy SimpleFIN rows. Previously 400'd on file links (ObjectId parse) — that was the broken trash button.
+
 ## Docs
 - `/app/memory/test_credentials.md` — test credentials + endpoint reference
 - Backend tests: `/app/backend/tests/test_providers.py`, `test_regression_fixes.py`, `test_password_reset.py`, `test_backend_auth.py`, `test_simplefin.py`

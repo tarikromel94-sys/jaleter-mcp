@@ -605,6 +605,11 @@ function MainApp() {
       const looksInsurance = /(term life|term-life|disability insurance|whole life|umbrella|renters insurance|auto insurance|life insurance)/.test(hay);
       const bal = Number(r.balance || 0);
       if (looksInsurance && bal === 0) continue;
+      // Statement imports are transaction history ONLY (Activity / Budget /
+      // Reports / cash-flow). They must never create a Wealth balance — skip
+      // them here so Cash, Net Worth, Available Cash, and Legacy all ignore
+      // them entirely. (They still appear in Settings → Linked Accounts.)
+      if (r.provider === 'file' || r.kind === 'file') continue;
       out.push(r);
     }
     return out;
@@ -648,16 +653,16 @@ function MainApp() {
     linkedCashTotal + linkedInvestmentTotal + linkedRealEstateTotal +
     linkedVehiclesTotal + linkedOtherAssetsTotal;
 
-  const income = transactions.filter(t => t.type === 'income' && !isSystemTransaction(t)).reduce((sum, t) => sum + t.amount, 0);
-  const expense = transactions.filter(t => t.type === 'expense' && !isSystemTransaction(t)).reduce((sum, t) => sum + t.amount, 0);
-  const openingCash = 0;
-  const syncedCash = openingCash + income - expense;
-  const syncedAssets = assets.map(x => x.id === 'cash' ? { ...x, value: syncedCash } : x);
-  const manualAssetsTotal = syncedAssets.reduce((sum, x) => sum + x.value, 0);
+  // ---- Wealth cash policy (Sept 2026) --------------------------------------
+  // Total Cash = manually entered cash (Wealth tab) + Plaid/linked cash
+  // balances ONLY. Activity transactions and statement imports NEVER move a
+  // Wealth cash balance — they feed Activity, Budget, and Reports exclusively.
+  const manualCash = assets.find((x: Asset) => x.id === 'cash')?.value || 0;
+  const manualAssetsTotal = assets.reduce((sum, x) => sum + x.value, 0);
   const manualLiabilitiesTotal = liabilities.reduce((sum: number, x: Asset) => sum + (x.value || 0), 0);
-  const manualInvestments = syncedAssets.find((x: any) => x.id === 'investments')?.value || 0;
+  const manualInvestments = assets.find((x: any) => x.id === 'investments')?.value || 0;
   const investmentTotal = manualInvestments + linkedInvestmentTotal;
-  const totalCash = syncedCash + linkedCashTotal; // Cash-only linked accounts, per spec #2
+  const totalCash = manualCash + linkedCashTotal;
   // ---- Single source of truth: Net Worth ------------------------------------
   // Sum unique linked accounts (already de-duped by account_id) + manual rows
   // exactly once. Category totals are used for aggregation ONLY — we never
@@ -665,16 +670,16 @@ function MainApp() {
   // bug that produced Home $269K vs Wealth $563K).
   const canonicalTotalAssets = React.useMemo(() => {
     // Manual seeds: Cash + Investments seed values + all manual "other" rows.
-    const manualSeedCash = syncedCash; // synced from transactions + opening
+    const manualSeedCash = manualCash; // user-entered in Wealth, never tx-derived
     const manualSeedInvest = manualInvestments; // manual investments seed
-    const manualOtherRows = syncedAssets.filter((x: Asset) => x.id !== 'cash' && x.id !== 'investments');
+    const manualOtherRows = assets.filter((x: Asset) => x.id !== 'cash' && x.id !== 'investments');
     const manualOtherTotal = manualOtherRows.reduce((s: number, r: Asset) => s + (r.value || 0), 0);
     return (
       manualSeedCash + manualSeedInvest + manualOtherTotal +
       linkedCashTotal + linkedInvestmentTotal +
       linkedRealEstateTotal + linkedVehiclesTotal + linkedOtherAssetsTotal
     );
-  }, [syncedCash, manualInvestments, syncedAssets, linkedCashTotal, linkedInvestmentTotal, linkedRealEstateTotal, linkedVehiclesTotal, linkedOtherAssetsTotal]);
+  }, [manualCash, manualInvestments, assets, linkedCashTotal, linkedInvestmentTotal, linkedRealEstateTotal, linkedVehiclesTotal, linkedOtherAssetsTotal]);
   const canonicalTotalLiabilities = React.useMemo(() => {
     return manualLiabilitiesTotal + linkedLiabilitiesTotal;
   }, [manualLiabilitiesTotal, linkedLiabilitiesTotal]);
@@ -912,7 +917,12 @@ function MainApp() {
     const monthName = now.toLocaleString('en-US', { month: 'long' });
     return `${monthName} ${budgetYear} budget`;
   }, [budgetYear]);
-  const budgetUsage = monthlyBudget > 0 ? (expense / monthlyBudget) * 100 : 0;
+  // Same expense basis the old cash-sync used — Home "budget used" indicator.
+  const totalExpenses = React.useMemo(
+    () => transactions.filter(t => t.type === 'expense' && !isSystemTransaction(t)).reduce((sum, t) => sum + t.amount, 0),
+    [transactions],
+  );
+  const budgetUsage = monthlyBudget > 0 ? (totalExpenses / monthlyBudget) * 100 : 0;
   const nav = (screen: string, category: string | null = null) => { setActive(screen); if (category) setFocusCategory(category); };
 
   // Multi-year budget: snapshot the current year's categories into the map,
@@ -1022,7 +1032,7 @@ function MainApp() {
             },
           }} />}
           {active === 'transactions' && <TransactionsScreen transactions={mergedTransactions} setTransactions={setTransactions} categories={categories} incomeSources={incomeSources} alerts={alerts} openLinkSheet={() => { setActive('settings'); }} onRefresh={refreshAccounts} />}
-          {active === 'networth' && <NetWorthScreen assets={syncedAssets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} linkedRowsByCategory={linkedRowsByCategory} linkedByCategory={linkedByCategory} onRefreshAccounts={refreshAccounts} canonicalTotalAssets={totalAssets} canonicalTotalLiabilities={totalLiabilities} canonicalNetWorth={netWorth} financialsReady={financialsReady} />}
+          {active === 'networth' && <NetWorthScreen assets={assets} setAssets={setAssets} liabilities={liabilities} setLiabilities={setLiabilities} transactions={transactions} restrictedBuckets={restrictedBuckets} setRestrictedBuckets={setRestrictedBuckets} linkedRowsByCategory={linkedRowsByCategory} linkedByCategory={linkedByCategory} onRefreshAccounts={refreshAccounts} canonicalTotalAssets={totalAssets} canonicalTotalLiabilities={totalLiabilities} canonicalNetWorth={netWorth} financialsReady={financialsReady} />}
           {active === 'more' && <MoreScreen navigate={nav} linkedCount={validLinked.length} onBack={() => setActive('home')} />}
           {active === 'legacy' && <LegacyScreen investmentTotal={investmentTotal} totalCash={totalCash} availableCash={availableCash} totalRestricted={totalRestricted} monthlyNet={monthlyNet} monthlyBudgetIncome={monthlyBudgetIncome} monthlyBudgetExpense={monthlyBudgetExpense} monthlyBudgetPeriod={monthlyBudgetPeriod} perMonthNet={legacyPerMonthNet} financialsReady={financialsReady} timeframe={legacyTimeframe} setTimeframe={setLegacyTimeframe} contribution={legacyContribution} setContribution={setLegacyContribution} hypothetical={legacyHypothetical} setHypothetical={setLegacyHypothetical} hypoFrequency={legacyHypoFrequency} setHypoFrequency={setLegacyHypoFrequency} hypoDuration={legacyHypoDuration} setHypoDuration={setLegacyHypoDuration} returnRate={legacyReturnRate} setReturnRate={setLegacyReturnRate} cumulative={legacyCumulative} setCumulative={setLegacyCumulative} currentAge={currentAge} setCurrentAge={setCurrentAge} retirementAge={retirementAge} setRetirementAge={setRetirementAge} />}
           {active === 'reports' && <ReportsScreen transactions={transactions} categories={categories} incomeSources={incomeSources} back={() => nav('home')} />}

@@ -1250,12 +1250,27 @@ async def _sync_docs(current_user: dict, docs: list) -> dict:
 
 @api_router.delete('/accounts/link/{link_id}')
 async def unlink(link_id: str, current_user: dict = Depends(get_current_user)):
+    user_id = current_user['user_id']
+    # Provider-managed links (statement imports etc.) store a STRING link_id —
+    # match those first. The file provider's unlink also deletes every
+    # transaction from that import, so no balance reference survives anywhere
+    # (Wealth, Net Worth, Available Cash, Legacy all read live data).
+    row = await db.linked_accounts.find_one({'user_id': user_id, 'link_id': link_id})
+    if row:
+        provider = _provider_registry.get(row.get('provider'))
+        if provider is not None:
+            await provider.unlink(user_id, link_id)
+        else:
+            await db.linked_accounts.delete_one({'user_id': user_id, 'link_id': link_id})
+            await db.bank_transactions.delete_many({'user_id': user_id, 'link_id': link_id})
+        return {'ok': True, 'note': 'Account and its imported transactions were removed.'}
+    # Legacy SimpleFIN rows are keyed by Mongo ObjectId.
     from bson import ObjectId
     try:
         oid = ObjectId(link_id)
     except Exception:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail='Invalid link id')
-    res = await db.linked_accounts.delete_one({'_id': oid, 'user_id': current_user['user_id']})
+        raise HTTPException(status_code=404, detail='Linked account not found')
+    res = await db.linked_accounts.delete_one({'_id': oid, 'user_id': user_id})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail='Linked account not found')
     return {'ok': True, 'note': 'Remove this app from your SimpleFIN Bridge dashboard to fully revoke access.'}

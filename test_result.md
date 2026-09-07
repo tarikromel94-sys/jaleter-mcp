@@ -1653,3 +1653,8 @@ Add Apple Sign-In to Login + Signup screens.
 - Bug: manual_accounts (manual cash/investment/liability rows) missing from reset-data collection list → manual investment survived reset. Also missing from delete-account cascade.
 - Fix: added manual_accounts, net_worth_snapshots, coach_messages, reclassify_runs to POST /api/user/reset-data; added manual_accounts, net_worth_snapshots, restricted_buckets, reclassify_runs to DELETE /auth/delete-account cascade.
 - Regression (curl, fresh user): manual cash+investments+auto_loans created → reset → accounts/all = 0, login kept, deleted_counts {manual_accounts:3, net_worth_snapshots:1}; Delete Account (password) → login 401. ALL PASS.
+
+## Iteration 84 (Imported account delete + Wealth cash policy)
+- Bug 1 root cause: DELETE /accounts/link/{id} only matched Mongo ObjectIds, but file-import links use string link_id (e.g. file-xxxx) → 400 'Invalid link id'. Fixed: string link_id path routes through provider.unlink (file provider deletes the link AND all its bank_transactions); ObjectId fallback kept for legacy SimpleFIN rows. Verified via curl: import CSV → 3 tx + file row w/ balance 649.75 → DELETE → 0 file rows, 0 transactions.
+- Bug 2: Wealth cash policy — Total Cash = manual cash (assets 'cash' row, user-entered, no longer overwritten by income−expense) + linked (Plaid) cash. dedupedLinked now skips provider==='file' rows so imports never enter Cash / Net Worth / Available Cash / Legacy. budgetUsage rebased on totalExpenses (same math as before). NetWorthScreen now receives raw assets (manual cash editable/persistent).
+- Smoke: Wealth/Legacy/Home render clean post-change. tsc/lint: only pre-existing warnings.
