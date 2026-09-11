@@ -458,6 +458,40 @@ async def _startup():
         app.state.stripe_price_id = None
         logger.warning('Stripe subscription catalog bootstrap skipped: %s', e)
 
+    # ---- Apple App Review account (idempotent) ---------------------------
+    # Dedicated reviewer login with PERMANENT premium so App Review never has
+    # to pay through Stripe. Applies ONLY to this fixed account: the flag is
+    # plain `subscription_status=active` + a far-future period end, evaluated
+    # by the same server-side entitlement as everyone else — no special code
+    # paths a regular user could exploit. Re-seeded on every boot, so even if
+    # a reviewer exercises "Delete Account", the login returns after restart.
+    try:
+        review_email = 'applereview@jaleter.com'
+        review_password = 'JaleterReview2026!'
+        existing = await db.users.find_one({'email': review_email})
+        base = {
+            'email_verified': True,
+            'provider': 'password',
+            'password_hash': hash_password(review_password),
+            'subscription_status': 'active',
+            'subscription_current_period_end': datetime(2099, 1, 1, tzinfo=timezone.utc),
+            'membership_processing': False,
+            'is_review_account': True,
+        }
+        if existing:
+            await db.users.update_one({'email': review_email}, {'$set': base})
+        else:
+            await db.users.insert_one({
+                'user_id': new_user_id(),
+                'email': review_email,
+                'name': 'Apple Review',
+                'created_at': datetime.now(timezone.utc),
+                **base,
+            })
+        logger.info('App Review premium account ready: %s', review_email)
+    except Exception as e:  # noqa: BLE001
+        logger.warning('App Review account seeding failed: %s', e)
+
 
 @app.on_event('shutdown')
 async def _shutdown():
@@ -877,7 +911,16 @@ async def emergent_session(payload: EmergentSessionRequest):
 # ---------------- Sign in with Apple ----------------
 APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys'
 APPLE_ISSUER = 'https://appleid.apple.com'
-APPLE_AUDIENCES = [a.strip() for a in os.environ.get('APPLE_AUDIENCES', '').split(',') if a.strip()]
+# Audiences accepted for Sign in with Apple identity tokens. The env var can
+# override, but we ALWAYS fall back to the known production Bundle ID +
+# Expo Go, so a missing env var in the production deployment can never break
+# Apple sign-in again (June 2026 App Review rejection: prod env lacked
+# APPLE_AUDIENCES → 500 "not configured" during review).
+_APPLE_DEFAULT_AUDIENCES = ['com.emergent.nochangesmobile.fl0fmc', 'host.exp.Exponent']
+APPLE_AUDIENCES = (
+    [a.strip() for a in os.environ.get('APPLE_AUDIENCES', '').split(',') if a.strip()]
+    or _APPLE_DEFAULT_AUDIENCES
+)
 APPLE_TEAM_ID = os.environ.get('APPLE_TEAM_ID', '').strip()
 APPLE_KEY_ID = os.environ.get('APPLE_KEY_ID', '').strip()
 APPLE_PRIVATE_KEY = os.environ.get('APPLE_PRIVATE_KEY', '').strip()

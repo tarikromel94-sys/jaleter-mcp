@@ -11,12 +11,19 @@ Update the placeholder demo password with the value output by
 **Sign-In required:** YES
 
 **Demo user (paste into App Store Connect):**
-- Email: `demo@jaleter.com`
-- Password: `<paste from seed_demo_account.py output>`
+- Email: `applereview@jaleter.com`
+- Password: `JaleterReview2026!`
 
-This demo user has Premium activated server-side for 365 days from seed
-time, so reviewers can access every gated feature (Coach AI, budget
-alerts, weekly digests) without completing a real payment.
+This dedicated App Review account is seeded automatically on every backend
+startup with PERMANENT Premium (server-side entitlement, period end 2099),
+so reviewers can access every gated feature (Dashboard, Budget, Activity,
+Reports, Wealth/Net Worth, Set Aside, Legacy BUILD/GROW, Coach AI, Plaid,
+Settings, Notifications, Support, Reset Data, Delete Account, Membership)
+without completing a real payment. Tapping the membership purchase button
+returns "already active" — it never opens Stripe checkout. If a reviewer
+deletes the account, it is re-created on the next backend restart.
+
+(Legacy alternative: `demo@jaleter.com` — password from seed_demo_account.py.)
 
 ---
 
