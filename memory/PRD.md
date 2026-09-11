@@ -154,3 +154,9 @@ Seeded sample rows (Cash, Investments, Real Estate, Vehicles) are now APPENDED w
 ## Docs
 - `/app/memory/test_credentials.md` — test credentials + endpoint reference
 - Backend tests: `/app/backend/tests/test_providers.py`, `test_regression_fixes.py`, `test_password_reset.py`, `test_backend_auth.py`, `test_simplefin.py`
+
+## Budget Alert Email Delivery Fix (Sept 2026)
+- ROOT CAUSE of "no alerts received": alert pipeline (budget_alert_service._emit) was PUSH-ONLY. In dev/preview EMERGENT_PUSH_KEY=placeholder → every push 401-failed → delivery_status 'failed'; NO email channel existed; and the dedupe claim (alert_state) persisted anyway, blocking re-fires for the rest of the month. Alerts appeared in-app inbox only.
+- FIX: `_emit` now delivers via BOTH channels: Emergent push AND Emergent Resend email (`build_alert_email` in email_service.py — same title/body as push). Notification doc records `push_status`, `email_status`, and overall `delivery_status` ('sent' if either channel succeeded). Stale never-delivered alert_state claims (16) were purged so existing crossed thresholds re-fire once.
+- E2E VERIFIED (review acct jaleter.appreview@gmail.com): $1,000 budget + $850 spend → category_80 email SENT; $1,100 spend → category_100 email SENT; $250 tx vs $200 threshold → large_transaction email SENT; repeat evaluations → 0 duplicates.
+- Push still requires the deployed build (real EMERGENT_PUSH_KEY injected at publish) — expected 'failed' in dev.

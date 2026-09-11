@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, Pressable, ScrollView } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import { C, D } from '@/src/jaleterTheme';
 import { dailyQuote, MONEY, QuoteType } from '@/src/quoteLibrary';
 import ProjectionLineChart from '@/src/components/ProjectionLineChart';

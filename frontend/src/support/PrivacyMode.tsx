@@ -3,7 +3,7 @@
  */
 import React, { useState } from 'react';
 import { View, Text, Pressable, TextInput } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import { C } from '@/src/jaleterTheme';
 import { styles } from './styles';
 import { Attachment, Ticket, PRIVACY_ACTIONS } from './types';

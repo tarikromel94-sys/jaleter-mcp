@@ -238,3 +238,34 @@ def build_delete_confirmation_email(name: str) -> Tuple[str, str, str]:
       <p style="color:#77726b;font-size:13px">If this wasn't you, please contact <a href="mailto:support@jaleter.com" style="color:#b18245">support@jaleter.com</a> immediately.</p>
       <p style="color:#928c83;font-size:12px">Thank you for using Jaleter.<br/>— The Jaleter team</p>"""
     return subject, _shell(inner, "ACCOUNT DELETED"), text
+
+
+_ALERT_HEADERS = {
+    "category_50": "BUDGET CHECK-IN",
+    "category_80": "BUDGET WARNING",
+    "category_100": "BUDGET ALERT",
+    "large_transaction": "TRANSACTION ALERT",
+}
+
+
+def build_alert_email(name: str, title: str, body: str, ntype: str) -> Tuple[str, str, str]:
+    """Budget / transaction alert email. `title` and `body` come straight from
+    the notification record so email and push always say the same thing."""
+    subject = f"Jaleter alert: {title}"
+    friendly = name or "there"
+    header = _ALERT_HEADERS.get(ntype, "ALERT")
+    text = (
+        f"Hi {friendly},\n\n"
+        f"{title}\n{body}\n\n"
+        f"Open the Jaleter app to review your spending and adjust your budget.\n\n"
+        f"You're receiving this because Budget Alerts are enabled in Jaleter → More → Alerts.\n\n"
+        f"— The Jaleter team"
+    )
+    inner = f"""<p>Hi <strong>{friendly}</strong>,</p>
+      <div style="background:#f5efe5;border:1px solid #e2d3bd;border-radius:10px;padding:16px;margin:14px 0">
+        <div style="font-size:16px;font-weight:600;color:#171611">{title}</div>
+        <div style="font-size:14px;color:#4a463f;margin-top:6px">{body}</div>
+      </div>
+      <p style="color:#77726b;font-size:13px">Open the Jaleter app to review your spending and adjust your budget.</p>
+      <p style="color:#928c83;font-size:12px">You're receiving this because Budget Alerts are enabled in Jaleter → More → Alerts.<br/>— The Jaleter team</p>"""
+    return subject, _shell(inner, header), text

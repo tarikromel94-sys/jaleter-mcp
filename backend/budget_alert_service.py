@@ -18,6 +18,7 @@ from typing import Any, Optional
 from pymongo.errors import DuplicateKeyError
 
 from push_service import send_push
+from email_service import send_email, build_alert_email
 
 logger = logging.getLogger(__name__)
 
@@ -106,23 +107,47 @@ async def _claim(db, key: str) -> bool:
         return False
 
 
+async def _send_alert_email(db, user_id: str, title: str, body: str, ntype: str) -> str:
+    """Deliver the alert via Emergent-managed Resend to the user's account
+    email. Returns 'sent' | 'failed' | 'skipped' (no email on record)."""
+    u = await db.users.find_one({'user_id': user_id}, {'_id': 0, 'email': 1, 'name': 1}) or {}
+    email = (u.get('email') or '').strip()
+    if not email:
+        return 'skipped'
+    try:
+        subject, html, text = build_alert_email(u.get('name') or '', title, body, ntype)
+        ok, detail = await send_email(email, subject, html, text)
+        if not ok:
+            logger.warning('Alert email to %s failed: %s', email, detail)
+        return 'sent' if ok else 'failed'
+    except Exception as e:  # noqa: BLE001
+        logger.warning('Alert email error for %s: %s', user_id, e)
+        return 'failed'
+
+
 async def _emit(db, *, user_id: str, key: str, title: str, body: str,
                  ntype: str, category_id: Optional[str], transaction_id: Optional[str],
                  period: Optional[str], metadata: dict) -> Optional[dict]:
-    """Claim → record → send. Returns notification doc or None if suppressed."""
+    """Claim → record → deliver (push + email). Returns the notification doc
+    or None if the dedupe key was already claimed. Overall delivery_status is
+    'sent' when at least one channel (push or email) succeeded."""
     if not await _claim(db, key):
         return None
     n = await _record_notification(db, user_id=user_id, ntype=ntype, title=title, body=body,
                                    category_id=category_id, transaction_id=transaction_id,
                                    period=period, metadata=metadata)
-    status, msg_id = await _send_push(db, user_id, title, body,
-                                      {'type': ntype, 'notification_id': str(n['_id']),
-                                       'category_id': category_id, 'transaction_id': transaction_id})
+    push_status, msg_id = await _send_push(db, user_id, title, body,
+                                           {'type': ntype, 'notification_id': str(n['_id']),
+                                            'category_id': category_id, 'transaction_id': transaction_id})
+    email_status = await _send_alert_email(db, user_id, title, body, ntype)
+    overall = 'sent' if (push_status == 'sent' or email_status == 'sent') else 'failed'
     await db.notifications.update_one(
         {'_id': n['_id']},
-        {'$set': {'delivery_status': status, 'sent_at': datetime.now(timezone.utc),
+        {'$set': {'delivery_status': overall, 'push_status': push_status,
+                  'email_status': email_status, 'sent_at': datetime.now(timezone.utc),
                   'provider_message_id': msg_id}},
     )
+    n.update({'delivery_status': overall, 'push_status': push_status, 'email_status': email_status})
     return n
 
 

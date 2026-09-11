@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, Pressable, TextInput, Modal, Platform, ActivityIndicator } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import { storage } from '@/src/utils/storage';
 import { useAuth } from '@/src/AuthContext';
 import { C } from '@/src/jaleterTheme';

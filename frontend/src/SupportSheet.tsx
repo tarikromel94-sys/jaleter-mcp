@@ -16,7 +16,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet, Modal } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import { apiCall, useAuth } from '@/src/AuthContext';
 import { C } from '@/src/jaleterTheme';
 

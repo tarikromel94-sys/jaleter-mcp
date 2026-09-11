@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { View, Text, Pressable, TextInput } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import { C, D } from '@/src/jaleterTheme';
 import { MONEY } from '@/src/quoteLibrary';
 import ProjectionLineChart from '@/src/components/ProjectionLineChart';

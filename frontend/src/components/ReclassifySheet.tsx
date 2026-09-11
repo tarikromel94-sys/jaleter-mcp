@@ -12,7 +12,7 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, Pressable, TextInput, ActivityIndicator, ScrollView, Alert } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import { apiCall } from '@/src/AuthContext';
 
 type CategoryOption = { slug: string; label: string; is_asset: boolean };

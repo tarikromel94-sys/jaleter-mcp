@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, Pressable, ScrollView, ActivityIndicator, AppState } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import { C } from '@/src/jaleterTheme';
 import { openJaleter, JALETER_SUBSCRIPTION_URL } from '@/src/jaleterLinks';
 import { s, GoldButton } from '@/src/utils/appShared';

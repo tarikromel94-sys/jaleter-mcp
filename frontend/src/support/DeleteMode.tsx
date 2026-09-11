@@ -16,7 +16,7 @@
  */
 import React, { useState } from 'react';
 import { View, Text, Pressable, TextInput, ActivityIndicator } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import { useAuth } from '@/src/AuthContext';
 import { styles } from './styles';
 

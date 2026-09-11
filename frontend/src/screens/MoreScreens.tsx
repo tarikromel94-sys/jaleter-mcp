@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, Pressable, ScrollView, Platform, ActivityIndicator } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import { useAuth, apiCall } from '@/src/AuthContext';
 import { C, D } from '@/src/jaleterTheme';
 import { openJaleter } from '@/src/jaleterLinks';

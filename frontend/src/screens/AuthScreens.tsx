@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Platform, Dimensions, StatusBar as RNStatusBar } from 'react-native';
 import * as AppleAuthentication from 'expo-apple-authentication';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import { WebView } from 'react-native-webview';
 import { useAuth } from '@/src/AuthContext';
 import { C } from '@/src/jaleterTheme';

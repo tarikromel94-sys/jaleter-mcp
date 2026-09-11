@@ -3,7 +3,7 @@
  */
 import React from 'react';
 import { View, Text, Pressable, Alert, Platform, Image } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
 import { apiCall } from '@/src/AuthContext';

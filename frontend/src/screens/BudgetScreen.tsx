@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, Platform, Alert } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import { C, D } from '@/src/jaleterTheme';
 import { MONEY } from '@/src/quoteLibrary';
 import { s, useThemed, PeriodPills, PageHeader, Sheet, Toast as SharedToast, GoldButton } from '@/src/utils/appShared';

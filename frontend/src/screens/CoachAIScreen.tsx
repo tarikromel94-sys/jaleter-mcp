@@ -13,7 +13,7 @@ import {
   View, Text, TextInput, Pressable, ScrollView, ActivityIndicator,
   KeyboardAvoidingView, Platform, StyleSheet,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import { apiCall, useAuth } from '@/src/AuthContext';
 import { C, D } from '@/src/jaleterTheme';
 

@@ -11,7 +11,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, Platform, Alert } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import { MONEY } from '@/src/quoteLibrary';
 import { useAuth, apiCall } from '@/src/AuthContext';
 import { C, D } from '@/src/jaleterTheme';
