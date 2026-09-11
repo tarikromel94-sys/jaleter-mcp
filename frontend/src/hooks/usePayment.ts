@@ -23,7 +23,10 @@ export function usePayment() {
   const { token } = useAuth();
   const start = useCallback(async (product: 'coaching_session' | 'jaleter_premium', extras?: { scheduled_at?: string }): Promise<CheckoutResult> => {
     if (!token) return { ok: false, error: 'You must be signed in to purchase.' };
-    const platform = Platform.OS === 'web' ? 'web' : 'mobile';
+    // Exact OS ('ios' | 'android' | 'web') — the backend stores this on the
+    // Stripe session + transaction row so Android-originated sales can be
+    // reported under Google's U.S. External Content Links program (Oct 2026).
+    const platform = Platform.OS;
     let body: any = { product, platform };
     if (extras?.scheduled_at) body.scheduled_at = extras.scheduled_at;
     let created: any;

@@ -155,6 +155,7 @@ async def create_subscription_checkout(
     price_id: str,
     success_url: str,
     cancel_url: str,
+    origin_platform: str = 'mobile',
 ) -> dict:
     """Create a subscription-mode Checkout Session for the given user.
 
@@ -172,7 +173,10 @@ async def create_subscription_checkout(
         customer=customer_id,
         client_reference_id=user["user_id"],
         line_items=[{"price": price_id, "quantity": 1}],
-        metadata={"jaleter_user_id": user["user_id"]},
+        # origin_platform lives on the Stripe session AND our transaction row
+        # so Android-originated sales are queryable for Google Play's US
+        # External Content Links transaction reporting (from Oct 1, 2026).
+        metadata={"jaleter_user_id": user["user_id"], "origin_platform": origin_platform},
         subscription_data={"metadata": {"jaleter_user_id": user["user_id"]}},
         success_url=success_url,
         cancel_url=cancel_url,
@@ -189,6 +193,7 @@ async def create_subscription_checkout(
         "currency": ANNUAL_CURRENCY,
         "status": session.status,
         "payment_status": session.payment_status,
+        "origin_platform": origin_platform,
         "created_at": datetime.now(timezone.utc),
         "updated_at": datetime.now(timezone.utc),
     })

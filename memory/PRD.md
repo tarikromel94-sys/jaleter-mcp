@@ -147,6 +147,10 @@ Seeded sample rows (Cash, Investments, Real Estate, Vehicles) are now APPENDED w
 - Total Cash = manual cash (user-entered 'cash' asset row in Wealth) + Plaid/linked cash ONLY. Activity/manual/imported transactions NEVER move Wealth cash (removed the old income−expense "syncedCash"). Statement-import (provider 'file') rows are excluded from all Wealth aggregations (dedupedLinked filter) — imports feed Activity/Budget/Reports only, but still appear under Settings → Linked Accounts.
 - DELETE /accounts/link/{link_id}: string link_ids (file/snaptrade) route through provider.unlink (file provider also deletes that import's bank_transactions); ObjectId fallback for legacy SimpleFIN rows. Previously 400'd on file links (ObjectId parse) — that was the broken trash button.
 
+## Google Play US External Content Links (Sept 2026)
+- Owner chose to ENROLL in Google's US External Content Links program (Play Console action, user-side) and keep the Stripe link-out. From Oct 1, 2026: transaction reporting + ~10% service fee on Android-originated sales.
+- Code readiness: checkout sends exact Platform.OS → `origin_platform` stored on payment_transactions + Stripe session metadata (query Stripe by metadata.origin_platform='android' for reporting). Link opens in system browser/Custom Tabs (compliant). Possible future requirement: Play Billing Library external-offers dialog API (native module) if Google review demands it.
+
 ## Docs
 - `/app/memory/test_credentials.md` — test credentials + endpoint reference
 - Backend tests: `/app/backend/tests/test_providers.py`, `test_regression_fixes.py`, `test_password_reset.py`, `test_backend_auth.py`, `test_simplefin.py`

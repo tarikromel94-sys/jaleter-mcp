@@ -1872,7 +1872,12 @@ async def payments_checkout(payload: CheckoutRequest, request: Request, current_
     """
     if payload.product not in PRODUCTS:
         raise HTTPException(status_code=400, detail='Unknown product')
-    platform = payload.platform if payload.platform in ('mobile', 'web') else 'mobile'
+    # origin_platform: exact OS for Google Play US External-Content-Links
+    # transaction reporting (Android-originated sales owe Google a service
+    # fee from Oct 1, 2026). platform: coarse mobile/web for redirect URLs.
+    raw_platform = (payload.platform or 'mobile').lower()
+    origin_platform = raw_platform if raw_platform in ('ios', 'android', 'web') else 'mobile'
+    platform = 'web' if raw_platform == 'web' else 'mobile'
 
     # Determine origin for web return URLs (respect proxy headers set by the ingress).
     forwarded_proto = request.headers.get('x-forwarded-proto') or request.url.scheme
@@ -1920,6 +1925,7 @@ async def payments_checkout(payload: CheckoutRequest, request: Request, current_
         try:
             result = await _stripe.create_subscription_checkout(
                 db, current_user, price_id, success_url, cancel_url,
+                origin_platform=origin_platform,
             )
         except Exception as e:
             logger.exception('Subscription checkout creation failed')
