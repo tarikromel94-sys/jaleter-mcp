@@ -11,6 +11,7 @@ export type AlertPrefs = {
   perCategory: Record<string, { p50: boolean; p80: boolean; exceeded: boolean }>;
   singleExpense: { enabled: boolean; threshold: number };
   weeklyDigest?: boolean;
+  emailFrequency?: 'instant' | 'daily' | 'weekly';
 };
 
 export type NotificationItem = {

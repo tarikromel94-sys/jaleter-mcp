@@ -106,7 +106,8 @@ function MainApp() {
     perCategory: Record<string, { p50: boolean; p80: boolean; exceeded: boolean }>;
     singleExpense?: { enabled: boolean; threshold: number };
     weeklyDigest?: boolean;
-  }>({ enabled: true, threshold: 80, perCategory: {}, singleExpense: { enabled: false, threshold: 200 }, weeklyDigest: true });
+    emailFrequency?: 'instant' | 'daily' | 'weekly';
+  }>({ enabled: true, threshold: 80, perCategory: {}, singleExpense: { enabled: false, threshold: 200 }, weeklyDigest: true, emailFrequency: 'instant' });
   // Legacy screen state — hoisted here so timeframe, contribution, and hypothetical
   // amount survive navigation and app reloads (previously reset on every visit).
   const [legacyTimeframe, setLegacyTimeframe] = useState<string>('Retirement');
@@ -214,6 +215,7 @@ function MainApp() {
           perCategory: { ...(prev.perCategory || {}), ...(server.perCategory || {}) },
           singleExpense: server.singleExpense || prev.singleExpense || { enabled: false, threshold: 200 },
           weeklyDigest: (server as any).weeklyDigest !== false,
+          emailFrequency: (server as any).emailFrequency || (prev as any).emailFrequency || 'instant',
         } as any));
       }
       setAlertsSynced(true);
@@ -232,6 +234,7 @@ function MainApp() {
         perCategory: alerts.perCategory || {},
         singleExpense: alerts.singleExpense || { enabled: false, threshold: 200 },
         weeklyDigest: (alerts as any)?.weeklyDigest !== false, // default ON
+        emailFrequency: (alerts as any)?.emailFrequency || 'instant',
         timezone: tz,
       };
       putPrefs(auth.token!, blob as any).catch(() => {});

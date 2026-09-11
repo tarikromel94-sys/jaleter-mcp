@@ -15,10 +15,11 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pymongo.errors import DuplicateKeyError
 
 from push_service import send_push
-from email_service import send_email, build_alert_email
+from email_service import send_email, build_alert_email, build_alert_digest_email
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ async def get_user_alert_prefs(db, user_id: str) -> dict:
             'threshold': float((p.get('singleExpense') or {}).get('threshold') or 200),
         },
         'weeklyDigest': bool(p.get('weeklyDigest', True)),
+        'emailFrequency': p.get('emailFrequency') if p.get('emailFrequency') in ('instant', 'daily', 'weekly') else 'instant',
     }
 
 
@@ -127,10 +129,13 @@ async def _send_alert_email(db, user_id: str, title: str, body: str, ntype: str)
 
 async def _emit(db, *, user_id: str, key: str, title: str, body: str,
                  ntype: str, category_id: Optional[str], transaction_id: Optional[str],
-                 period: Optional[str], metadata: dict) -> Optional[dict]:
+                 period: Optional[str], metadata: dict, email_mode: str = 'instant') -> Optional[dict]:
     """Claim → record → deliver (push + email). Returns the notification doc
-    or None if the dedupe key was already claimed. Overall delivery_status is
-    'sent' when at least one channel (push or email) succeeded."""
+    or None if the dedupe key was already claimed. Push always fires
+    immediately; email fires now when email_mode='instant', otherwise the
+    record is queued (email_status='queued') for the daily/weekly digest
+    sweep. Overall delivery_status is 'sent' when at least one channel
+    succeeded."""
     if not await _claim(db, key):
         return None
     n = await _record_notification(db, user_id=user_id, ntype=ntype, title=title, body=body,
@@ -139,8 +144,16 @@ async def _emit(db, *, user_id: str, key: str, title: str, body: str,
     push_status, msg_id = await _send_push(db, user_id, title, body,
                                            {'type': ntype, 'notification_id': str(n['_id']),
                                             'category_id': category_id, 'transaction_id': transaction_id})
-    email_status = await _send_alert_email(db, user_id, title, body, ntype)
-    overall = 'sent' if (push_status == 'sent' or email_status == 'sent') else 'failed'
+    if email_mode == 'instant':
+        email_status = await _send_alert_email(db, user_id, title, body, ntype)
+    else:
+        email_status = 'queued'
+    if push_status == 'sent' or email_status == 'sent':
+        overall = 'sent'
+    elif email_status == 'queued':
+        overall = 'queued'
+    else:
+        overall = 'failed'
     await db.notifications.update_one(
         {'_id': n['_id']},
         {'$set': {'delivery_status': overall, 'push_status': push_status,
@@ -167,6 +180,7 @@ async def evaluate_budget_alerts_for_user(db, user_id: str, *,
     prefs = await get_user_alert_prefs(db, user_id)
     if not prefs['enabled'] or not category_totals:
         return []
+    email_mode = prefs.get('emailFrequency', 'instant')
     period = period or current_period()
     out: list[dict] = []
     for sub_id, row in category_totals.items():
@@ -196,6 +210,7 @@ async def evaluate_budget_alerts_for_user(db, user_id: str, *,
                 body=body,
                 ntype='category_100', category_id=sub_id, transaction_id=None, period=period,
                 metadata={'spent': spent, 'budget': budget, 'pct': pct, 'name': display},
+                email_mode=email_mode,
             )
             if n: out.append(n)
         elif pct >= 0.80 and conf['p80']:
@@ -207,6 +222,7 @@ async def evaluate_budget_alerts_for_user(db, user_id: str, *,
                 body=f"You've used {int(pct*100)}% of your {display} budget — ${spent:,.2f} of ${budget:,.2f}. ${remaining:,.2f} remaining.",
                 ntype='category_80', category_id=sub_id, transaction_id=None, period=period,
                 metadata={'spent': spent, 'budget': budget, 'pct': pct, 'name': display},
+                email_mode=email_mode,
             )
             if n: out.append(n)
         elif pct >= 0.50 and conf['p50']:
@@ -217,6 +233,7 @@ async def evaluate_budget_alerts_for_user(db, user_id: str, *,
                 body=f"You've used {int(pct*100)}% of your {display} budget — ${spent:,.2f} of ${budget:,.2f}.",
                 ntype='category_50', category_id=sub_id, transaction_id=None, period=period,
                 metadata={'spent': spent, 'budget': budget, 'pct': pct, 'name': display},
+                email_mode=email_mode,
             )
             if n: out.append(n)
     return out
@@ -255,7 +272,83 @@ async def evaluate_transaction_alert(db, user_id: str, tx: dict) -> Optional[dic
         body=body,
         ntype='large_transaction', category_id=None, transaction_id=str(tx_id), period=None,
         metadata={'amount': amt, 'merchant': merchant, 'threshold': threshold},
+        email_mode=prefs.get('emailFrequency', 'instant'),
     )
+
+
+# ---- Email digest (daily / weekly alert emails) --------------------------
+ALERT_EMAIL_TYPES = ('category_50', 'category_80', 'category_100', 'large_transaction')
+
+
+async def flush_user_alert_digest(db, user: dict, freq_label: str) -> dict:
+    """Send ONE combined email covering every queued alert for this user.
+
+    On success the queued notifications flip to email_status='sent' and
+    delivery_status='sent'. On send failure they STAY 'queued' so the next
+    sweep retries. Returns a small report dict."""
+    user_id = user['user_id']
+    q = {'user_id': user_id, 'email_status': 'queued', 'type': {'$in': list(ALERT_EMAIL_TYPES)}}
+    items = await db.notifications.find(q).sort('created_at', 1).to_list(length=200)
+    if not items:
+        return {'skipped': 'empty'}
+    email = (user.get('email') or '').strip()
+    ids = [i['_id'] for i in items]
+    if not email:
+        await db.notifications.update_many({'_id': {'$in': ids}}, {'$set': {'email_status': 'skipped'}})
+        return {'skipped': 'no_email'}
+    subject, html, text = build_alert_digest_email(
+        user.get('name') or '', [(i.get('title') or '', i.get('body') or '') for i in items], freq_label)
+    ok, detail = await send_email(email, subject, html, text)
+    if not ok:
+        logger.warning('Alert digest email to %s failed: %s', email, detail)
+        return {'sent': False, 'count': len(items), 'detail': detail}
+    await db.notifications.update_many(
+        {'_id': {'$in': ids}},
+        {'$set': {'email_status': 'sent', 'delivery_status': 'sent',
+                  'digest_sent_at': datetime.now(timezone.utc)}},
+    )
+    return {'sent': True, 'count': len(items)}
+
+
+async def sweep_alert_email_digests(db) -> dict:
+    """Hourly sweep: flush queued alert emails per each user's frequency.
+
+    daily  → any day, 18:00–18:59 local
+    weekly → Sunday,  18:00–18:59 local
+    instant (user switched back with leftovers queued) → flush immediately.
+    The queued→sent transition is the dedupe; scheduler max_instances=1
+    prevents concurrent double-sends."""
+    now_utc = datetime.now(timezone.utc)
+    flushed = 0
+    considered = 0
+    user_ids = await db.notifications.distinct(
+        'user_id', {'email_status': 'queued', 'type': {'$in': list(ALERT_EMAIL_TYPES)}})
+    for uid in user_ids:
+        user = await db.users.find_one(
+            {'user_id': uid}, {'_id': 0, 'user_id': 1, 'email': 1, 'name': 1, 'timezone': 1, 'alert_prefs': 1})
+        if not user:
+            continue
+        considered += 1
+        freq = ((user.get('alert_prefs') or {}).get('emailFrequency')) or 'instant'
+        try:
+            tz = ZoneInfo(user.get('timezone') or 'UTC')
+        except ZoneInfoNotFoundError:
+            tz = ZoneInfo('UTC')
+        now_local = now_utc.astimezone(tz)
+        due = (
+            (freq == 'daily' and now_local.hour == 18)
+            or (freq == 'weekly' and now_local.weekday() == 6 and now_local.hour == 18)
+            or freq == 'instant'
+        )
+        if not due:
+            continue
+        try:
+            res = await flush_user_alert_digest(db, user, freq if freq in ('daily', 'weekly') else 'daily')
+            if res.get('sent'):
+                flushed += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning('alert digest flush failed for %s: %s', uid, e)
+    return {'considered': considered, 'flushed': flushed}
 
 
 # ---- Device registration -----------------------------------------------

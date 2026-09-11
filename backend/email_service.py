@@ -269,3 +269,33 @@ def build_alert_email(name: str, title: str, body: str, ntype: str) -> Tuple[str
       <p style="color:#77726b;font-size:13px">Open the Jaleter app to review your spending and adjust your budget.</p>
       <p style="color:#928c83;font-size:12px">You're receiving this because Budget Alerts are enabled in Jaleter → More → Alerts.<br/>— The Jaleter team</p>"""
     return subject, _shell(inner, header), text
+
+
+def build_alert_digest_email(name: str, items: list[tuple[str, str]], freq_label: str) -> Tuple[str, str, str]:
+    """Combined daily/weekly alert email. `items` = [(title, body), ...]."""
+    n = len(items)
+    label = "Daily" if freq_label == "daily" else "Weekly"
+    subject = f"Jaleter {label.lower()} alert summary — {n} alert{'s' if n != 1 else ''}"
+    friendly = name or "there"
+    lines = "\n".join(f"• {t}: {b}" for t, b in items)
+    text = (
+        f"Hi {friendly},\n\n"
+        f"Here's your {label.lower()} summary of {n} budget alert{'s' if n != 1 else ''}:\n\n"
+        f"{lines}\n\n"
+        f"Open the Jaleter app to review your spending and adjust your budget.\n\n"
+        f"You chose {label.lower()} alert emails in Jaleter → Settings → Budget Alerts.\n\n"
+        f"— The Jaleter team"
+    )
+    rows = "".join(
+        f"""<div style="background:#f5efe5;border:1px solid #e2d3bd;border-radius:10px;padding:12px;margin:8px 0">
+          <div style="font-size:14px;font-weight:600;color:#171611">{t}</div>
+          <div style="font-size:13px;color:#4a463f;margin-top:4px">{b}</div>
+        </div>"""
+        for t, b in items
+    )
+    inner = f"""<p>Hi <strong>{friendly}</strong>,</p>
+      <p>Here's your {label.lower()} summary of <strong>{n}</strong> budget alert{'s' if n != 1 else ''}:</p>
+      {rows}
+      <p style="color:#77726b;font-size:13px">Open the Jaleter app to review your spending and adjust your budget.</p>
+      <p style="color:#928c83;font-size:12px">You chose {label.lower()} alert emails in Jaleter → Settings → Budget Alerts.<br/>— The Jaleter team</p>"""
+    return subject, _shell(inner, f"{label.upper()} ALERT SUMMARY"), text

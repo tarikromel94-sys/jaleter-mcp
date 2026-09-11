@@ -160,3 +160,9 @@ Seeded sample rows (Cash, Investments, Real Estate, Vehicles) are now APPENDED w
 - FIX: `_emit` now delivers via BOTH channels: Emergent push AND Emergent Resend email (`build_alert_email` in email_service.py — same title/body as push). Notification doc records `push_status`, `email_status`, and overall `delivery_status` ('sent' if either channel succeeded). Stale never-delivered alert_state claims (16) were purged so existing crossed thresholds re-fire once.
 - E2E VERIFIED (review acct jaleter.appreview@gmail.com): $1,000 budget + $850 spend → category_80 email SENT; $1,100 spend → category_100 email SENT; $250 tx vs $200 threshold → large_transaction email SENT; repeat evaluations → 0 duplicates.
 - Push still requires the deployed build (real EMERGENT_PUSH_KEY injected at publish) — expected 'failed' in dev.
+
+## Alert Email Digest Choice (Sept 2026)
+- alert_prefs.emailFrequency: 'instant' (default) | 'daily' | 'weekly'. Instant = email per alert as it fires. Daily/weekly = alert emails queued (email_status='queued') and flushed as ONE combined summary email at 18:00 local (Sundays for weekly) by `sweep_alert_email_digests` (hourly APScheduler job at :10, registered in weekly_digest_service.start_scheduler). Push + in-app inbox always fire instantly regardless.
+- QA endpoint: POST /api/notifications/email-digest/run-now (flushes current user's queue immediately). Dedupe = queue drain (queued→sent); failed sends stay queued for retry next sweep.
+- Builders: email_service.build_alert_digest_email. UI: Settings → Budget Alerts → 'Alert email frequency' PeriodPills (testID alert-email-frequency).
+- Tested: 8/8 backend (tests/test_iteration82_email_digest.py) + full SDK 57 frontend regression PASS (all tabs, icons, paywall flow, settings, persistence across reload).

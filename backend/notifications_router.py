@@ -58,6 +58,7 @@ class PrefsBody(BaseModel):
     perCategory: dict[str, PerCategoryPref] = Field(default_factory=dict)
     singleExpense: SingleExpensePref = Field(default_factory=SingleExpensePref)
     weeklyDigest: bool = True
+    emailFrequency: str = "instant"  # instant | daily | weekly
     timezone: Optional[str] = None  # IANA TZ (e.g. "America/Los_Angeles")
 
 
@@ -78,6 +79,7 @@ async def put_prefs(body: PrefsBody, current_user: dict = Depends(_auth())):
         "perCategory": {k: v.model_dump() for k, v in body.perCategory.items()},
         "singleExpense": body.singleExpense.model_dump(),
         "weeklyDigest": bool(body.weeklyDigest),
+        "emailFrequency": body.emailFrequency if body.emailFrequency in ("instant", "daily", "weekly") else "instant",
     }
     update: dict[str, Any] = {"alert_prefs": normalized}
     if tz_val:
@@ -175,6 +177,18 @@ async def weekly_digest_run_now(current_user: dict = Depends(_auth())):
         raise HTTPException(402, "Premium subscription required for weekly digest.")
     res = await send_weekly_digest(db, fresh)
     return res
+
+
+@router.post("/email-digest/run-now")
+async def email_digest_run_now(current_user: dict = Depends(_auth())):
+    """QA / preview: flush the requesting user's queued alert emails as ONE
+    combined digest email right now, regardless of the scheduled window."""
+    db = _db()
+    user = await db.users.find_one({"user_id": current_user["user_id"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(404, "User not found")
+    freq = ((user.get("alert_prefs") or {}).get("emailFrequency")) or "instant"
+    return await bas.flush_user_alert_digest(db, user, freq if freq in ("daily", "weekly") else "daily")
 
 
 # ---------- Evaluators (called by frontend on data mutation) ----------

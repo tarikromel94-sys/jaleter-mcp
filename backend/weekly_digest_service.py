@@ -306,6 +306,18 @@ def start_scheduler(db) -> None:
         coalesce=True,
         replace_existing=True,
     )
+    # Alert email digest sweep — flushes queued daily/weekly alert emails at
+    # 18:00 local per user (see budget_alert_service.sweep_alert_email_digests).
+    from budget_alert_service import sweep_alert_email_digests  # noqa: WPS433
+    sched.add_job(
+        sweep_alert_email_digests,
+        CronTrigger(minute=10),  # hourly, offset from the weekly sweep
+        kwargs={"db": db},
+        id="alert_email_digest_sweep",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
     sched.start()
     _scheduler = sched
     logger.info("Weekly digest scheduler started (hourly sweep, Sunday 18:00 local delivery)")

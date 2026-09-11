@@ -276,6 +276,27 @@ export const SettingsScreen = ({ experience, setExperience, appearance, setAppea
             </Text>
           </View>
         )}
+        {/* Alert email frequency — instant sends each alert email as it
+            fires; daily/weekly bundle queued alerts into one summary email
+            delivered at 6PM local (Sundays for weekly). Push + in-app inbox
+            always fire instantly regardless. */}
+        {alerts.enabled && (
+          <View style={{ marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: t.dark ? D.border : '#ece5d5' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Ionicons name="mail-outline" size={14} color="#c49450" />
+              <Text style={[{ flex: 1, fontSize: 11, fontWeight: '700' }, t.textInk]}>Alert email frequency</Text>
+            </View>
+            <PeriodPills
+              values={['Instant', 'Daily', 'Weekly']}
+              value={(alerts as any).emailFrequency === 'daily' ? 'Daily' : (alerts as any).emailFrequency === 'weekly' ? 'Weekly' : 'Instant'}
+              onChange={(v: string) => setAlerts({ ...(alerts as any), emailFrequency: v.toLowerCase() })}
+              testID="alert-email-frequency"
+            />
+            <Text style={[{ fontSize: 9, marginTop: 6 }, t.textMuted]}>
+              Instant emails each alert as it fires. Daily bundles the day&apos;s alerts into one 6PM email. Weekly sends one Sunday 6PM summary. Push and in-app alerts are always instant.
+            </Text>
+          </View>
+        )}
       </View>
       <View style={[s.settingsSection, t.cardBg]}>
         <Text style={[s.settingsH3, t.textInk]}>App Lock</Text>
