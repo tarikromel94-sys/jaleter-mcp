@@ -11,8 +11,8 @@ Update the placeholder demo password with the value output by
 **Sign-In required:** YES
 
 **Demo user (paste into App Store Connect):**
-- Email: `applereview@jaleter.com`
-- Password: `JaleterReview2026!`
+- Email: `Jaleter.appreview@gmail.com`
+- Password: `Jaleter029496!`
 
 This dedicated App Review account is seeded automatically on every backend
 startup with PERMANENT Premium (server-side entitlement, period end 2099),

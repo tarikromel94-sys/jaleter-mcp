@@ -218,8 +218,8 @@ async def evaluate_transaction_alert(db, user_id: str, tx: dict) -> Optional[dic
     amt = float(tx.get('amount') or 0)
     if amt <= 0:
         return None  # only outgoing spend triggers large-transaction alerts
-    if amt <= threshold:
-        return None
+    if amt < threshold:
+        return None  # fires at the threshold or above ("$500 or more")
     merchant = tx.get('merchant_name') or tx.get('description') or tx.get('name') or 'Merchant'
     acct = tx.get('account_name') or 'your account'
     body = f"A ${amt:,.2f} transaction from {merchant} posted to {acct}."

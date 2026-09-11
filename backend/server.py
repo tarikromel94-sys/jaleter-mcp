@@ -466,8 +466,8 @@ async def _startup():
     # paths a regular user could exploit. Re-seeded on every boot, so even if
     # a reviewer exercises "Delete Account", the login returns after restart.
     try:
-        review_email = 'applereview@jaleter.com'
-        review_password = 'JaleterReview2026!'
+        review_email = 'jaleter.appreview@gmail.com'
+        review_password = 'Jaleter029496!'
         existing = await db.users.find_one({'email': review_email})
         base = {
             'email_verified': True,
@@ -1023,24 +1023,40 @@ async def apple_sign_in(payload: AppleAuthRequest):
         raise HTTPException(status_code=401, detail='Apple identity token signed with unknown key.')
 
     public_key = jwk.construct(key_dict)
+    APPLE_FRIENDLY_ERROR = 'Unable to sign in with Apple. Please try again.'
     try:
+        # NOTE: python-jose requires `audience` to be a SINGLE string — passing
+        # our list raised "audience must be a string or None", which is the
+        # exact error Apple's reviewer hit. Verify signature/issuer/expiry
+        # here, then validate the audience manually against the allow-list.
         claims = jwt.decode(
             payload.identity_token,
             public_key.to_pem().decode(),
             algorithms=['RS256'],
-            audience=APPLE_AUDIENCES,
             issuer=APPLE_ISSUER,
+            options={'verify_aud': False},
         )
     except ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail='Apple identity token has expired.')
+        logger.warning('Apple sign-in: identity token expired')
+        raise HTTPException(status_code=401, detail=APPLE_FRIENDLY_ERROR)
     except JWTClaimsError as e:
-        raise HTTPException(status_code=401, detail=f'Apple identity token claims invalid: {e}')
+        logger.warning('Apple sign-in: claims invalid: %s', e)
+        raise HTTPException(status_code=401, detail=APPLE_FRIENDLY_ERROR)
     except JWTError as e:
-        raise HTTPException(status_code=401, detail=f'Apple identity token verification failed: {e}')
+        logger.warning('Apple sign-in: token verification failed: %s', e)
+        raise HTTPException(status_code=401, detail=APPLE_FRIENDLY_ERROR)
+
+    # Manual audience check: `aud` may be a string or a list per RFC 7519.
+    aud_claim = claims.get('aud')
+    aud_values = aud_claim if isinstance(aud_claim, list) else [aud_claim]
+    if not any(a in APPLE_AUDIENCES for a in aud_values if a):
+        logger.warning('Apple sign-in: audience %s not in allow-list %s', aud_values, APPLE_AUDIENCES)
+        raise HTTPException(status_code=401, detail=APPLE_FRIENDLY_ERROR)
 
     apple_sub = claims.get('sub')
     if not apple_sub:
-        raise HTTPException(status_code=401, detail='Apple identity token missing subject.')
+        logger.warning('Apple sign-in: token missing subject')
+        raise HTTPException(status_code=401, detail=APPLE_FRIENDLY_ERROR)
 
     token_email = (claims.get('email') or '').lower() or None
     # Apple sometimes returns a private-relay email; still valid.

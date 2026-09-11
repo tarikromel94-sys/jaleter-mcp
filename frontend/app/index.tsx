@@ -560,7 +560,9 @@ function MainApp() {
     if (!alerts.singleExpense?.enabled) return;
     const threshold = Number(alerts.singleExpense.threshold || 0);
     if (threshold <= 0) return;
-    const list = (transactions as any[]) || [];
+    // Watch ALL spend — manual AND Plaid/imported — so synced transactions
+    // trigger the alert too. Threshold is inclusive ("$500 or more").
+    const list = (mergedTransactions as any[]) || [];
     for (const tx of list) {
       if (!tx?.id) continue;
       if (seenTxIdsRef.current.has(tx.id)) continue;
@@ -569,7 +571,7 @@ function MainApp() {
       if (tx.is_transfer) continue;
       if (tx.system_category === 'transfer') continue;
       const amt = Math.abs(Number(tx.amount || 0));
-      if (amt <= threshold) continue;
+      if (amt < threshold) continue;
       evaluateTransaction(auth.token!, {
         id: String(tx.id),
         amount: amt,
@@ -578,7 +580,7 @@ function MainApp() {
         account_name: tx.account_name,
       }).catch(() => {});
     }
-  }, [auth.token, alertsSynced, alerts.enabled, alerts.singleExpense?.enabled, alerts.singleExpense?.threshold, transactions]);
+  }, [auth.token, alertsSynced, alerts.enabled, alerts.singleExpense?.enabled, alerts.singleExpense?.threshold, mergedTransactions]);
   // Group linked accounts by their Jaleter category so every downstream
   // calculation is grounded in the same classification (see #1 / #2 / #27).
   // Balances for liability accounts are already sent as positive magnitudes
