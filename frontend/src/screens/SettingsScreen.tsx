@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, Modal, Platform } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { useAuth, apiCall } from '@/src/AuthContext';
 import { C, D, F } from '@/src/jaleterTheme';
@@ -147,7 +148,7 @@ export const SettingsScreen = ({ experience, setExperience, appearance, setAppea
     ['privacy', 'Privacy Policy', 'Opens jaleter.com/privacy', 'lock-closed-outline'],
   ];
   return (
-    <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
+    <KeyboardAwareScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }} bottomOffset={24} keyboardShouldPersistTaps="handled">
       <PageHeader title="Settings" subtitle="Make Jaleter work your way." back={back} action={<View style={s.avatar}><Text style={{ color: C.goldText, fontSize: 11, fontWeight: '700' }}>{initials || '—'}</Text></View>} />
       <View style={[s.settingsSection, t.cardBg]}>
         <Text style={[s.settingsH3, t.textInk]}>Your Experience</Text>
@@ -311,6 +312,7 @@ export const SettingsScreen = ({ experience, setExperience, appearance, setAppea
         <Text style={[s.settingsSub, t.textMuted]}>Payments and subscriptions are managed on our website.</Text>
         <BillingWebsiteNotice compact />
       </View>
+      <AdminReleasePanel />
       <View style={[s.settingsMenu, t.cardBg]}>
         {rows.map(([id, label, detail, icon]) => (
           <Pressable
@@ -391,11 +393,106 @@ export const SettingsScreen = ({ experience, setExperience, appearance, setAppea
         <DeleteAccountMode back={() => setSheet(null)} onDeleted={() => setSheet(null)} />
       </Sheet>
       {toast ? <SharedToast message={toast} onHide={() => setToast('')} /> : null}
-    </ScrollView>
+    </KeyboardAwareScrollView>
   );
 };
 
 /* ---------------- Extra Sheets ---------------- */
+
+/**
+ * AdminReleasePanel — visible ONLY to admin accounts (support login).
+ * Two-step publish: Preview shows exactly how many customers will be
+ * emailed; Confirm & Send publishes the release + fires the email blast.
+ * The backend blocks re-emailing the same version, ever.
+ */
+const AdminReleasePanel = () => {
+  const t = useThemed();
+  const { user, token } = useAuth();
+  const [version, setVersion] = useState('');
+  const [audience, setAudience] = useState('All customers');
+  const [critical, setCritical] = useState(false);
+  const [preview, setPreview] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState('');
+  const [latest, setLatest] = useState<any>(null);
+  useEffect(() => {
+    if (!user?.is_admin || !token) return;
+    apiCall('/api/admin/releases', { method: 'GET' }, token)
+      .then((r: any) => setLatest((r?.releases || [])[0] || null))
+      .catch(() => {});
+  }, [user?.is_admin, token, result]);
+  if (!user?.is_admin) return null;
+  const publish = async (confirm: boolean) => {
+    if (!version.trim()) { setResult('Enter a version number first, e.g. 1.2.0'); return; }
+    setBusy(true); setResult('');
+    try {
+      const res = await apiCall('/api/admin/releases', {
+        method: 'POST',
+        body: JSON.stringify({
+          version: version.trim(),
+          audience: audience === 'Premium only' ? 'premium' : 'all',
+          critical,
+          send_email: true,
+          confirm,
+        }),
+      }, token);
+      if (!confirm) {
+        setPreview(res);
+        if (res.email_already_sent) setResult(`v${res.version} customers were already emailed — publishing again will NOT re-send.`);
+      } else {
+        setPreview(null);
+        setResult(`v${res.version} published — update email sent to ${res.email_sent_count} customer${res.email_sent_count === 1 ? '' : 's'}${res.email_failed_count ? ` (${res.email_failed_count} failed)` : ''}.`);
+        setVersion(''); setCritical(false);
+      }
+    } catch (e: any) {
+      setPreview(null);
+      setResult(e?.message || 'Publish failed');
+    }
+    setBusy(false);
+  };
+  return (
+    <View style={[s.settingsSection, t.cardBg]} testID="admin-release-panel">
+      <Text style={[s.settingsH3, t.textInk]}>Releases (Admin)</Text>
+      <Text style={[s.settingsSub, t.textMuted]}>
+        Announce a production release. Customers get the branded update email once per version — never on TestFlight/dev builds.
+        {latest?.version ? ` Latest published: v${latest.version}${latest.email_sent_count != null ? ` (emailed ${latest.email_sent_count})` : ''}.` : ''}
+      </Text>
+      <Text style={[{ fontSize: 10, fontWeight: '700', marginTop: 8 }, t.textMuted]}>Version</Text>
+      <TextInput
+        style={s.input}
+        value={version}
+        onChangeText={(v) => { setVersion(v); setPreview(null); }}
+        placeholder="e.g. 1.2.0"
+        autoCapitalize="none"
+        testID="release-version"
+      />
+      <Text style={[{ fontSize: 10, fontWeight: '700', marginTop: 10 }, t.textMuted]}>Email audience</Text>
+      <PeriodPills values={['All customers', 'Premium only']} value={audience} onChange={(v: string) => { setAudience(v); setPreview(null); }} testID="release-audience" />
+      <Pressable onPress={() => setCritical(!critical)} style={s.settingToggleRow} testID="release-critical">
+        <View style={{ flex: 1 }}>
+          <Text style={[{ fontSize: 11, fontWeight: '700' }, t.textInk]}>Critical release</Text>
+          <Text style={[{ fontSize: 9, color: C.muted3 }, t.textMuted]}>Blocks older versions with a required-update screen. Leave OFF for normal updates.</Text>
+        </View>
+        <View style={[s.toggle, critical && s.toggleOn]}><View style={[s.toggleKnob, critical && { transform: [{ translateX: 14 }] }]} /></View>
+      </Pressable>
+      {!preview ? (
+        <GoldButton label={busy ? 'Checking…' : 'Preview email blast'} onPress={() => !busy && publish(false)} testID="release-preview" />
+      ) : (
+        <View style={{ marginTop: 4 }}>
+          <Text style={[{ fontSize: 11, fontWeight: '700', marginBottom: 8 }, t.textInk]}>
+            Publish v{preview.version} and email {preview.recipient_count} customer{preview.recipient_count === 1 ? '' : 's'}?
+          </Text>
+          <GoldButton label={busy ? 'Sending…' : `Confirm & send to ${preview.recipient_count}`} onPress={() => !busy && publish(true)} testID="release-confirm" />
+          <Pressable onPress={() => setPreview(null)} style={{ alignSelf: 'center', marginTop: 8 }} testID="release-cancel">
+            <Text style={{ fontSize: 11, color: C.muted3, fontWeight: '700' }}>Cancel</Text>
+          </Pressable>
+        </View>
+      )}
+      {result ? <Text style={[{ fontSize: 10, marginTop: 8, color: '#8fa88f', fontWeight: '600' }]}>{result}</Text> : null}
+    </View>
+  );
+};
+
 const LegalSheet = ({ visible, close, type }: any) => (
   <Sheet visible={visible} close={close} title={type} subtitle="Last updated July 15, 2026">
     {type === 'Privacy Policy' ? (

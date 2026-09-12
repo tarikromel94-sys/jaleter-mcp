@@ -2080,7 +2080,9 @@ async def user_membership(refresh: int = 0, current_user: dict = Depends(get_cur
         except Exception as exc:  # noqa: BLE001
             logger.warning('Membership refresh reconcile failed for %s: %s', current_user['user_id'], exc)
     fresh = await db.users.find_one({'user_id': current_user['user_id']}, {'_id': 0}) or current_user
-    active = _stripe.has_active_membership(fresh)
+    # Admins bypass the paywall — mirrors require_active_membership so the
+    # support/admin account is never stuck on the membership screen.
+    active = bool(fresh.get('is_admin')) or _stripe.has_active_membership(fresh)
     return {
         'active': active,
         'processing': bool(fresh.get('membership_processing')) and not active,
@@ -2913,6 +2915,10 @@ app.include_router(push_router)
 # Budget alerts + notification inbox — /api/notifications/*
 from notifications_router import router as notifications_router  # noqa: E402
 app.include_router(notifications_router)
+
+# App release announcements — /api/app/version + /api/admin/releases
+from releases_router import router as releases_router  # noqa: E402
+app.include_router(releases_router)
 
 app.add_middleware(
     CORSMiddleware,

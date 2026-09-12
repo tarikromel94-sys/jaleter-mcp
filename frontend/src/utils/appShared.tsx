@@ -18,6 +18,7 @@
  */
 import React, { createContext, useContext, useEffect } from 'react';
 import {
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -236,18 +237,26 @@ export const PageHeader = ({ title, subtitle, back, action }: any) => {
 
 export const Sheet = ({ visible, close, title, subtitle, children }: any) => (
   <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
-    <View style={s.modalBackdrop}>
+    {/* Core KeyboardAvoidingView (NOT keyboard-controller's) — RN Modals render
+        in a separate native window on iOS, where keyboard-controller's tracking
+        is unreliable. Core KAV listens to Keyboard frame events directly, so
+        the WHOLE sheet (inputs + Save button) lifts above the iOS keyboard and
+        settles back when it closes. Android resizes the window natively. */}
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={s.modalBackdrop}
+    >
       <Pressable style={{ flex: 1 }} onPress={close} />
       <View style={s.modalSheet}>
         <Pressable testID="modal-close" onPress={close} style={s.modalClose}><Ionicons name="close" size={20} color={C.ink} /></Pressable>
         <Text style={s.sheetTitle}>{title}</Text>
         {subtitle ? <Text style={s.sheetSubtitle}>{subtitle}</Text> : null}
-        {/* Keyboard-aware: bottom sheets sit right where the keyboard opens, so
-            the focused input is auto-scrolled to stay visible with a 24px gap.
-            The scroll returns to normal once the keyboard closes. */}
+        {/* Keyboard-aware: if the lifted sheet is still taller than the space
+            above the keyboard, the focused input is auto-scrolled into view
+            with a 24px gap. Returns to normal once the keyboard closes. */}
         <KeyboardAwareScrollView style={{ maxHeight: 520 }} bottomOffset={24} keyboardShouldPersistTaps="handled">{children}</KeyboardAwareScrollView>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   </Modal>
 );
 

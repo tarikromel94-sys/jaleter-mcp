@@ -15,7 +15,7 @@
  * ticket id, and the shared "my tickets" list used by hub + list).
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, Pressable, ScrollView, StyleSheet, Modal } from 'react-native';
+import { View, Text, Pressable, ScrollView, StyleSheet, Modal, KeyboardAvoidingView, Platform } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { apiCall, useAuth } from '@/src/AuthContext';
 import { C } from '@/src/jaleterTheme';
@@ -76,7 +76,7 @@ export function SupportSheet({ visible, close }: { visible: boolean; close: () =
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
-      <View style={sheetStyles.backdrop}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={sheetStyles.backdrop}>
         <Pressable style={{ flex: 1 }} onPress={close} />
         <View style={sheetStyles.sheet}>
           <Pressable onPress={close} style={sheetStyles.closeBtn} testID="support-close">
@@ -133,7 +133,7 @@ export function SupportSheet({ visible, close }: { visible: boolean; close: () =
             )}
           </ScrollView>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

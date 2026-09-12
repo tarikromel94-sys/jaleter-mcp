@@ -299,3 +299,21 @@ def build_alert_digest_email(name: str, items: list[tuple[str, str]], freq_label
       <p style="color:#77726b;font-size:13px">Open the Jaleter app to review your spending and adjust your budget.</p>
       <p style="color:#928c83;font-size:12px">You chose {label.lower()} alert emails in Jaleter → Settings → Budget Alerts.<br/>— The Jaleter team</p>"""
     return subject, _shell(inner, f"{label.upper()} ALERT SUMMARY"), text
+
+
+def build_app_update_email(name: str) -> Tuple[str, str, str]:
+    """New-version announcement (admin-triggered on production releases)."""
+    subject = "A new Jaleter update is available"
+    friendly = name or "there"
+    text = (
+        f"Hi {friendly},\n\n"
+        f"A new version of Jaleter is now available with the latest improvements and fixes.\n\n"
+        f"Please update Jaleter through the App Store or Google Play to make sure "
+        f"you're using the latest version.\n\n"
+        f"Thank you,\nJaleter"
+    )
+    inner = f"""<p>Hi <strong>{friendly}</strong>,</p>
+      <p>A new version of Jaleter is now available with the latest improvements and fixes.</p>
+      <p>Please update Jaleter through the App Store or Google Play to make sure you&rsquo;re using the latest version.</p>
+      <p style="color:#928c83;font-size:12px">Thank you,<br/>Jaleter</p>"""
+    return subject, _shell(inner, "APP UPDATE"), text

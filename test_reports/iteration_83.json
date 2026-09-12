@@ -1,0 +1,45 @@
+{
+  "summary": "Frontend-only verification for keyboard-avoidance Sheet refactor + Admin release panel + Update banner. Sheets (Support, Budget subcategory 'Set month', Add transaction, Wealth Set Aside Cash) all open, accept input, expose Save button, and close without regression — the shared Sheet KAV change is safe. Update banner ('A new version of Jaleter is available — test release') renders for jaleter.appreview and dismiss works. Admin-only Release Panel is correctly hidden for non-admin. Backend spot checks: GET /api/app/version returns 1.1.0 (public), POST /api/admin/releases without admin returns 403, 1.1.0 preview shows email_already_sent=true, and 1.1.0 confirm=true returns HTTP 409 with the expected 'Re-sending is blocked' message. CRITICAL BLOCKER: admin support@jaleter.com is stuck on the Paywall because /api/user/membership returns active=false for admins — the client route decision uses only `active` (not is_admin), so the AdminReleasePanel is UNREACHABLE via the UI. Backend 409 guard was verified via API only; UI preview→confirm flow could not be exercised.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "PaywallScreen / membership gate",
+        "issue": "Admin user (support@jaleter.com, is_admin=true) is routed to the Paywall on login because GET /api/user/membership returns active=false. The client route (app/index.tsx checkMembership → setStage('paywall')) only trusts `data.active`. Result: Settings screen (and therefore the Admin Release Panel testID=admin-release-panel) is unreachable via UI. Backend membership endpoint should return active=true when fresh.get('is_admin') is true (mirroring require_active_membership in server.py:283), OR the client should also check user.is_admin. Reference: /app/backend/server.py:2064-2100 and /app/frontend/app/index.tsx:270-307.",
+        "testID": "admin-release-panel",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Admin release publish flow (UI)",
+        "issue": "Cannot end-to-end verify the Preview → Confirm → 409 flow through the UI because the admin cannot bypass the Paywall to reach Settings. Backend contract IS verified via API (409 message + email_already_sent flag). Only the visual rendering of the 'already emailed... Re-sending is blocked' error inside the panel could not be verified.",
+        "affected_testIDs": ["admin-release-panel", "release-version", "release-preview", "release-confirm", "release-cancel"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter83/"
+  ],
+  "action_items": [
+    "FIX (CRITICAL): Make admin users bypass the Paywall. Simplest patch: in server.py `/api/user/membership`, return active=true when fresh.get('is_admin') is true. Alternative: in app/index.tsx checkMembership branch, also treat auth.user.is_admin as active. Either fix will restore UI access to the Admin Release Panel.",
+    "After the paywall fix, re-run the R2 UI flow: log in as support@jaleter.com, open Settings, verify admin-release-panel is visible, type 1.1.0, tap release-preview, then tap release-confirm and confirm the 409 message renders inside the panel. DO NOT confirm any version other than 1.1.0 (email blast would go to ~16 real users)."
+  ],
+  "critical_code_review_comments": [
+    "server.py:2083 `has_active_membership(fresh)` intentionally ignores is_admin, but the SAME file's require_active_membership (server.py:283) grants admin access. This inconsistency between the entitlement gate and the client-facing membership endpoint is the root cause of the admin-locked-out bug.",
+    "SupportSheet (src/SupportSheet.tsx) already wraps its own Modal in core KeyboardAvoidingView with iOS padding — matches the appShared Sheet refactor. Good consistency.",
+    "appShared Sheet (src/utils/appShared.tsx:238-261) now wraps Modal in core KAV + inner KeyboardAwareScrollView. Web-preview cannot verify iOS lift, but functional smoke (open/type/save/close) shows no regression across Support, Budget, Add Transaction, and Set Aside sheets."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (4/4 spot checks)", "frontend": "83% (5/6 verified — admin-panel-in-UI blocked by paywall bug)"},
+  "seed_data_creation": "None. app_releases v1.1.0 (pre-seeded email_sent=true) was left untouched. Only preview (confirm=false) calls were made against 1.1.0; the single confirm=true call against 1.1.0 was correctly rejected with 409, so no email was sent.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "After main agent patches the admin membership gate, focus retest ONLY on: (1) admin login → Settings loads (not Paywall); (2) admin-release-panel visible; (3) enter 1.1.0 → release-preview → release-confirm → verify the 409 guard error text renders in the panel. NEVER confirm-publish any version except 1.1.0. Sheets, banner, and non-admin panel-hidden checks already passed and don't need re-verification unless appShared.tsx is edited again.",
+  "rca_of_issue": "Root cause of admin-paywall: server.py `/api/user/membership` endpoint returns `active = _stripe.has_active_membership(fresh)` which checks only Stripe/legacy fields. It does NOT OR with fresh.get('is_admin'), even though the entitlement dependency `require_active_membership` (same file, line 283) DOES include the is_admin bypass. The frontend (app/index.tsx:307) sets stage to 'paywall' whenever `m.active` is false, so admin users without a Stripe subscription land on the Paywall and cannot reach the Admin Release Panel. Reproduction: POST /api/auth/login with support@jaleter.com / Tarik0731!, then GET /api/user/membership → {\"active\": false}. Mitigation: add `is_admin` short-circuit in the /user/membership handler (server.py ~line 2083) OR add a frontend guard checking auth.user?.is_admin in checkMembership/setStage in app/index.tsx."
+}

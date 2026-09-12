@@ -8,6 +8,7 @@ import { getPrefs, putPrefs, evaluateBudget, evaluateTransaction, currentPeriod 
 import { C, D } from '@/src/jaleterTheme';
 import { ReportsScreen } from '@/src/ReportsScreen';
 import { EmailVerificationBanner } from '@/src/components/EmailVerificationBanner';
+import { UpdateBanner } from '@/src/components/UpdateBanner';
 import { CoachAIScreen } from '@/src/screens/CoachAIScreen';
 import { s, ThemeCtx, Toast as SharedToast, isInvestmentAccount, type Asset } from '@/src/utils/appShared';
 import { NetWorthScreen } from '@/src/screens/NetWorthScreen';
@@ -998,6 +999,7 @@ function MainApp() {
       />
       {auth.user && stage === 'app' && !(appLock.enabled && appLock.locked) && (
         <View style={[{ flex: 1 }, isDark && { backgroundColor: D.bg }]}>
+          <UpdateBanner isDark={isDark} />
           <EmailVerificationBanner isDark={isDark} />
           {active === 'home' && <HomeScreen name={displayName} initials={displayInitials} experience={experience} netWorth={netWorth} investmentTotal={investmentTotal} totalCash={totalCash} availableCash={availableCash} monthlyNet={monthlyNet} legacyContribution={legacyContribution} legacyHypothetical={legacyHypothetical} legacyHypoFrequency={legacyHypoFrequency} legacyHypoDuration={legacyHypoDuration} legacyReturnRate={legacyReturnRate} budgetUsage={budgetUsage} alertsEnabled={alerts.enabled} navigate={nav} financialsReady={financialsReady} />}
           {active === 'budget' && <BudgetScreen categories={categories} setCategories={setCategories} categoriesByYear={categoriesByYear} setCategoriesByYear={setCategoriesByYear} incomeSources={incomeSources} setIncomeSources={setIncomeSources} transactions={transactions} setTransactions={setTransactions} focusCategory={focusCategory} clearFocus={() => setFocusCategory(null)} alerts={alerts} budgetYear={budgetYear} finalizedBudgetMonths={finalizedBudgetMonths} setFinalizedBudgetMonths={setFinalizedBudgetMonths} onSwitchYear={switchBudgetYear} onCopyLastYear={(prevYear: number) => {
