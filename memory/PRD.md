@@ -183,3 +183,9 @@ Seeded sample rows (Cash, Investments, Real Estate, Vehicles) are now APPENDED w
 - E2E PASS: Test Store purchase → 'Test valid purchase' → dashboard unlocked, /accounts 200, membership active with period_end (test store periods are ~1hr simulated). Restore on no-purchase account shows correct notice. Stripe users + admin unaffected.
 - KNOWN MINOR: Test Store displays $79.99 (RC default; upsert to $90 accepted for store products but test-store display price fixed). Real price comes from App Store Connect product — user must create the IAP at $89.99/$90 tier there.
 - USER-SIDE to go LIVE (steps in revenuecat.md): upload App Store Connect API key + IAP key to RevenueCat dashboard, create auto-renewable annual sub in ASC with the product ID shown in RC dashboard, payment profile, then build via Publish.
+
+## Sheet Layout Root-Cause Fix (Sept 2026, iteration_86)
+- User re-reported hidden amount fields ("Set Sep · Tithe", huge blank gap). TWO root causes fixed in shared Sheet (appShared.tsx):
+  1. KeyboardAwareScrollView inside RN Modal mis-measured on iOS and scrolled content out of view → REPLACED with plain ScrollView; the core KeyboardAvoidingView (iOS 'padding') lifts the whole sheet; content is compact and pinned right under the subtitle.
+  2. Web-only: RNW modal overlay anchors to the DOCUMENT (page taller than screen) so flex-end pushed sheets ~530px below the fold; slide animation's transform also hijacks position:fixed → backdrop now position:fixed inset 0 on web + animationType 'fade' on web (native keeps 'slide'). Same fix in SupportSheet. Also android softwareKeyboardLayoutMode:'resize' in app.json.
+- Verified (iteration_86, all PASS): every sheet app-wide renders fully inside a 390x844 viewport with input directly under subtitle; save/type/close flows work; paywall + IAP UI intact. iOS keyboard-lift itself needs device confirmation.

@@ -75,7 +75,7 @@ export function SupportSheet({ visible, close }: { visible: boolean; close: () =
   }, [mode]);
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
+    <Modal visible={visible} transparent animationType={Platform.OS === 'web' ? 'fade' : 'slide'} onRequestClose={close}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={sheetStyles.backdrop}>
         <Pressable style={{ flex: 1 }} onPress={close} />
         <View style={sheetStyles.sheet}>
@@ -142,7 +142,13 @@ export function SupportSheet({ visible, close }: { visible: boolean; close: () =
 // from the shared `src/support/styles.ts` so all modes share the same visual
 // language.
 const sheetStyles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: '#00000060', justifyContent: 'flex-end' },
+  backdrop: {
+    flex: 1,
+    backgroundColor: '#00000060',
+    justifyContent: 'flex-end',
+    // Web: pin to the real viewport (document-anchored overlay artifact).
+    ...(Platform.OS === 'web' ? ({ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 } as any) : null),
+  },
   sheet: { backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 22, paddingBottom: 32 },
   closeBtn: { position: 'absolute', top: 14, right: 14, padding: 6, zIndex: 2 },
   sheetTitle: { fontSize: 18, fontWeight: '700', color: C.ink, marginBottom: 14 },

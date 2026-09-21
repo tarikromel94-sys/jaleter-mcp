@@ -28,7 +28,6 @@ import {
   View,
 } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
-import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { LinearGradient } from 'expo-linear-gradient';
 import { C, D, F } from '@/src/jaleterTheme';
 
@@ -236,7 +235,7 @@ export const PageHeader = ({ title, subtitle, back, action }: any) => {
 };
 
 export const Sheet = ({ visible, close, title, subtitle, children }: any) => (
-  <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
+  <Modal visible={visible} transparent animationType={Platform.OS === 'web' ? 'fade' : 'slide'} onRequestClose={close}>
     {/* Core KeyboardAvoidingView (NOT keyboard-controller's) — RN Modals render
         in a separate native window on iOS, where keyboard-controller's tracking
         is unreliable. Core KAV listens to Keyboard frame events directly, so
@@ -251,10 +250,12 @@ export const Sheet = ({ visible, close, title, subtitle, children }: any) => (
         <Pressable testID="modal-close" onPress={close} style={s.modalClose}><Ionicons name="close" size={20} color={C.ink} /></Pressable>
         <Text style={s.sheetTitle}>{title}</Text>
         {subtitle ? <Text style={s.sheetSubtitle}>{subtitle}</Text> : null}
-        {/* Keyboard-aware: if the lifted sheet is still taller than the space
-            above the keyboard, the focused input is auto-scrolled into view
-            with a 24px gap. Returns to normal once the keyboard closes. */}
-        <KeyboardAwareScrollView style={{ maxHeight: 520 }} bottomOffset={24} keyboardShouldPersistTaps="handled">{children}</KeyboardAwareScrollView>
+        {/* Plain ScrollView on purpose: KeyboardAwareScrollView mis-measures
+            inside native iOS Modals (it scrolled content down, leaving a huge
+            blank gap and hiding the amount field behind the keyboard). Content
+            stays pinned to the top, right under the subtitle; the KAV above
+            keeps the whole sheet visible while typing. */}
+        <ScrollView style={{ maxHeight: 520 }} contentContainerStyle={{ flexGrow: 0 }} keyboardShouldPersistTaps="handled">{children}</ScrollView>
       </View>
     </KeyboardAvoidingView>
   </Modal>
@@ -529,7 +530,16 @@ export const s = StyleSheet.create({
   navIndicator: { position: 'absolute', top: 0, width: 24, height: 2, backgroundColor: C.gold, borderRadius: 3 },
   navLabel: { fontSize: 9, color: '#918b83' },
   /* Modal */
-  modalBackdrop: { flex: 1, backgroundColor: '#17130e66', justifyContent: 'flex-end' },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: '#17130e66',
+    justifyContent: 'flex-end',
+    // Web: RNW's modal overlay is anchored to the DOCUMENT (which can be much
+    // taller than the screen), so flex-end pushed sheets below the fold. Pin
+    // the backdrop to the real viewport. Requires animationType='fade' on web
+    // (slide's transform hijacks position:fixed). Native is unaffected.
+    ...(Platform.OS === 'web' ? ({ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 } as any) : null),
+  },
   modalSheet: { backgroundColor: '#fbf9f4', padding: 24, paddingTop: 30, borderTopLeftRadius: 27, borderTopRightRadius: 27, maxHeight: '90%' },
   modalClose: { position: 'absolute', right: 20, top: 20, width: 35, height: 35, borderRadius: 18, backgroundColor: '#eee9e0', alignItems: 'center', justifyContent: 'center', zIndex: 2 },
   sheetTitle: { fontFamily: F.serif, fontSize: 24, fontWeight: '600', color: C.ink, marginRight: 45 },
