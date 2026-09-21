@@ -2099,7 +2099,9 @@ async def user_membership(refresh: int = 0, current_user: dict = Depends(get_cur
             fresh['subscription_current_period_end'].isoformat()
             if isinstance(fresh.get('subscription_current_period_end'), datetime)
             else (fresh['premium_expires_at'].isoformat()
-                  if isinstance(fresh.get('premium_expires_at'), datetime) else None)
+                  if isinstance(fresh.get('premium_expires_at'), datetime)
+                  else (fresh['iap_premium_expires_at'].isoformat()
+                        if isinstance(fresh.get('iap_premium_expires_at'), datetime) else None))
         ),
         'cancel_at_period_end': bool(fresh.get('subscription_cancel_at_period_end')),
         'premium_since': (
@@ -2107,6 +2109,57 @@ async def user_membership(refresh: int = 0, current_user: dict = Depends(get_cur
             if isinstance(fresh.get('premium_since'), datetime) else None
         ),
     }
+
+
+# ---- Apple / Google In-App Purchase sync (RevenueCat) --------------------
+# The app posts its verified RevenueCat entitlement snapshot here after a
+# purchase, restore, renewal, or customer-info update. This keeps the
+# server-side paywall (`require_active_membership`) in sync for IAP buyers
+# without touching the Stripe path.
+# HARDENING: the client can only EXTEND premium, never revoke or shorten it
+# (expiry is monotonic and lapses naturally server-side) — browser/test SDKs
+# can report empty entitlements for legitimate iOS buyers, and a hostile
+# client must not be able to grant itself more than ~13 months.
+class IapSyncBody(BaseModel):
+    active: bool
+    expires_at: Optional[str] = None   # ISO 8601 from RevenueCat CustomerInfo
+    product_id: Optional[str] = None
+    platform: Optional[str] = None     # ios | android | web(test store)
+
+
+@api_router.post('/iap/sync')
+async def iap_sync(body: IapSyncBody, current_user: dict = Depends(get_current_user)):
+    import stripe_service as _stripe
+    now = datetime.now(timezone.utc)
+    update: dict = {'iap_synced_at': now}
+    if body.active:
+        update['iap_platform'] = (body.platform or '')[:16]
+        update['iap_product_id'] = (body.product_id or '')[:64]
+        update['iap_active'] = True
+        exp = None
+        if body.expires_at:
+            try:
+                exp = datetime.fromisoformat(body.expires_at.replace('Z', '+00:00'))
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+            except Exception:  # noqa: BLE001
+                exp = None
+        if exp is None or exp <= now:
+            # Annual sub with no parseable expiry — grant one year + grace.
+            exp = now + timedelta(days=366)
+        exp = min(exp, now + timedelta(days=400))
+        existing = await db.users.find_one({'user_id': current_user['user_id']},
+                                           {'_id': 0, 'iap_premium_expires_at': 1}) or {}
+        prev = existing.get('iap_premium_expires_at')
+        if isinstance(prev, datetime):
+            if prev.tzinfo is None:
+                prev = prev.replace(tzinfo=timezone.utc)
+            exp = max(exp, prev)  # monotonic — never shortened by the client
+        update['iap_premium_expires_at'] = exp
+    # inactive snapshots only bump iap_synced_at — NEVER revoke
+    await db.users.update_one({'user_id': current_user['user_id']}, {'$set': update})
+    fresh = await db.users.find_one({'user_id': current_user['user_id']}, {'_id': 0}) or {}
+    return {'ok': True, 'active': bool(fresh.get('is_admin')) or _stripe.has_active_membership(fresh)}
 
 
 @api_router.post('/payments/billing-portal')

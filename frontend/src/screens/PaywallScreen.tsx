@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, Pressable, ScrollView, ActivityIndicator, AppState } from 'react-native';
+import { View, Text, Pressable, ScrollView, ActivityIndicator, AppState, Platform } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { C } from '@/src/jaleterTheme';
 import { openJaleter, JALETER_SUBSCRIPTION_URL } from '@/src/jaleterLinks';
 import { s, GoldButton } from '@/src/utils/appShared';
 import { usePayment } from '@/src/hooks/usePayment';
+import { useAuth } from '@/src/AuthContext';
+import { useSubscription, rcEnabled, rcUsingTestStore, syncIapToBackend, REVENUECAT_ENTITLEMENT_IDENTIFIER } from '@/src/lib/revenuecat';
 
 /* ---------------- Connect ---------------- */
 /* ---------------- Membership Required (hard paywall) ---------------- */
@@ -25,13 +27,25 @@ const PAYWALL_BENEFITS = [
 ];
 export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }: any) => {
   const pay = usePayment();
-  const [busy, setBusy] = useState<null | 'checkout' | 'refresh'>(null);
+  const { token } = useAuth();
+  const iap = useSubscription();
+  const [busy, setBusy] = useState<null | 'checkout' | 'refresh' | 'iap' | 'restore'>(null);
   const [notice, setNotice] = useState('');
   const [processing, setProcessing] = useState(false);
+  const [confirmTestBuy, setConfirmTestBuy] = useState(false);
   const busyRef = useRef(false);
   const processingRef = useRef(false);
   useEffect(() => { busyRef.current = !!busy; }, [busy]);
   useEffect(() => { processingRef.current = processing; }, [processing]);
+
+  // Apple/Google in-app subscription — annual package from the current
+  // offering (never hardcode product ids or prices).
+  const annualPkg = iap.offerings?.current?.annual
+    || iap.offerings?.current?.availablePackages?.find((p: any) => p.identifier === '$rc_annual')
+    || iap.offerings?.current?.availablePackages?.[0]
+    || null;
+  const iapAvailable = rcEnabled && !!annualPkg;
+  const iapPrice = annualPkg?.product?.priceString || '$90.00';
 
   const PROCESSING_MSG = 'No need to pay again — bank payments can take a few business days to clear. Jaleter unlocks automatically the moment Stripe confirms it.';
 
@@ -119,6 +133,56 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
     } finally { setBusy(null); }
   };
 
+  // ---- Apple / Google In-App Purchase ($90/yr via RevenueCat) ------------
+  const finishIapUnlock = async (info: any): Promise<boolean> => {
+    const active = !!info?.entitlements?.active?.[REVENUECAT_ENTITLEMENT_IDENTIFIER];
+    if (!active) return false;
+    // Sync entitlement to the backend so server-gated APIs unlock, then
+    // confirm through the normal membership check.
+    await syncIapToBackend(token!, info);
+    try {
+      const m = await checkMembership(false);
+      if (applyResult(m)) return true;
+    } catch {}
+    onUnlocked(); // entitlement verified by the store — never strand a buyer
+    return true;
+  };
+
+  const buyWithStore = async () => {
+    if (!annualPkg) return;
+    if (!iap.identityReady) {
+      setNotice('Preparing your account for purchase — try again in a moment.');
+      return;
+    }
+    // Test Store (preview/dev): require a deliberate second tap.
+    if (rcUsingTestStore && !confirmTestBuy) { setConfirmTestBuy(true); return; }
+    setConfirmTestBuy(false);
+    setBusy('iap'); setNotice('');
+    try {
+      const info = await iap.purchase(annualPkg);
+      const ok = await finishIapUnlock(info);
+      if (!ok) setNotice("The purchase completed but the subscription isn't active yet. Tap Restore Purchases in a moment.");
+    } catch (e: any) {
+      const msg = String(e?.message || e || '');
+      if (!e?.userCancelled && !/cancel/i.test(msg)) {
+        setNotice(msg === 'identity_not_ready'
+          ? 'Preparing your account for purchase — try again in a moment.'
+          : `Purchase failed: ${msg}`);
+      }
+    } finally { setBusy(null); }
+  };
+
+  const restorePurchases = async () => {
+    setBusy('restore'); setNotice('');
+    try {
+      const info = await iap.restore();
+      const ok = await finishIapUnlock(info);
+      if (!ok) setNotice('No previous App Store purchases were found for this account.');
+    } catch (e: any) {
+      setNotice(`Restore failed: ${String(e?.message || e || '')}`);
+    } finally { setBusy(null); }
+  };
+
   return (
     <ScrollView style={s.lightScreen} contentContainerStyle={{ padding: 23, paddingTop: 60, paddingBottom: 40 }}>
       <View style={s.paywallMark}><Text style={{ color: '#e2b96f', fontSize: 24 }}>✦</Text></View>
@@ -149,12 +213,64 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
         </View>
       ) : null}
       <View style={{ marginTop: 18 }}>
-        <GoldButton
-          label={processing ? 'Payment processing — no need to pay again' : busy === 'checkout' ? 'Opening secure checkout…' : 'Continue to Jaleter.com'}
-          onPress={startCheckout}
-          disabled={!!busy || processing}
-          testID="paywall-checkout"
-        />
+        {iapAvailable ? (
+          <>
+            {confirmTestBuy ? (
+              <View testID="paywall-iap-confirm" style={{ borderWidth: 1, borderColor: '#e3cf9e', backgroundColor: '#fdf7e9', borderRadius: 14, padding: 14, marginBottom: 10 }}>
+                <Text style={{ color: '#8a6a2e', fontSize: 12, fontWeight: '800' }}>Confirm test purchase (simulated)</Text>
+                <Text style={{ color: '#8a6a2e', fontSize: 11, marginTop: 3, lineHeight: 15 }}>
+                  You&apos;re in the preview Test Store — no real money moves. Confirm to simulate the {iapPrice}/year subscription.
+                </Text>
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+                  <Pressable onPress={buyWithStore} style={{ flex: 1, backgroundColor: '#a57537', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} testID="paywall-iap-confirm-yes">
+                    <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>Confirm</Text>
+                  </Pressable>
+                  <Pressable onPress={() => setConfirmTestBuy(false)} style={{ flex: 1, borderWidth: 1, borderColor: '#d9cdb6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} testID="paywall-iap-confirm-no">
+                    <Text style={{ color: '#8a6a2e', fontSize: 12, fontWeight: '700' }}>Cancel</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+            <GoldButton
+              label={busy === 'iap' ? 'Completing your purchase…' : `Subscribe — ${iapPrice}/year`}
+              onPress={buyWithStore}
+              disabled={!!busy || processing}
+              testID="paywall-iap-buy"
+            />
+            <Pressable
+              onPress={restorePurchases}
+              disabled={!!busy}
+              style={{ marginTop: 12, alignItems: 'center', opacity: busy ? 0.6 : 1 }}
+              testID="paywall-iap-restore"
+            >
+              {busy === 'restore'
+                ? <ActivityIndicator size="small" color="#a57537" />
+                : <Text style={{ color: '#a57537', fontSize: 12, fontWeight: '700' }}>Restore Purchases</Text>}
+            </Pressable>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 12 }}>
+              <View style={{ flex: 1, height: 1, backgroundColor: '#e6ddcc' }} />
+              <Text style={{ fontSize: 10, color: '#a29a8e' }}>or</Text>
+              <View style={{ flex: 1, height: 1, backgroundColor: '#e6ddcc' }} />
+            </View>
+            <Pressable
+              onPress={startCheckout}
+              disabled={!!busy || processing}
+              style={{ borderWidth: 1, borderColor: '#d9cdb6', borderRadius: 14, paddingVertical: 13, alignItems: 'center', opacity: busy || processing ? 0.6 : 1 }}
+              testID="paywall-checkout"
+            >
+              <Text style={{ color: '#a57537', fontSize: 12, fontWeight: '700' }}>
+                {processing ? 'Payment processing — no need to pay again' : busy === 'checkout' ? 'Opening secure checkout…' : 'Pay on Jaleter.com instead'}
+              </Text>
+            </Pressable>
+          </>
+        ) : (
+          <GoldButton
+            label={processing ? 'Payment processing — no need to pay again' : busy === 'checkout' ? 'Opening secure checkout…' : 'Continue to Jaleter.com'}
+            onPress={startCheckout}
+            disabled={!!busy || processing}
+            testID="paywall-checkout"
+          />
+        )}
       </View>
       <Pressable
         onPress={refreshNow}
@@ -183,7 +299,9 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
         </Pressable>
       </View>
       <Text style={{ marginTop: 16, fontSize: 9, color: '#a29a8e', textAlign: 'center', lineHeight: 13 }}>
-        Payments are handled securely by Stripe on the web — Jaleter never sees your card. $90 USD billed annually; renews automatically until canceled. Cancel any time from Membership settings.
+        {iapAvailable
+          ? `$90 USD billed annually via ${Platform.OS === 'ios' ? 'your Apple ID (App Store)' : Platform.OS === 'android' ? 'Google Play' : 'the store'}; renews automatically until canceled in your store subscription settings. Web payments are handled securely by Stripe — either unlocks the same membership.`
+          : 'Payments are handled securely by Stripe on the web — Jaleter never sees your card. $90 USD billed annually; renews automatically until canceled. Cancel any time from Membership settings.'}
       </Text>
     </ScrollView>
   );

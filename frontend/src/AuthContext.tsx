@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef, ReactNode } from 'react';
 import { Platform } from 'react-native';
+import { bindRevenueCatIdentity, rcEnabled } from '@/src/lib/revenuecat';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { storage } from '@/src/utils/storage';
@@ -99,6 +100,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(t);
     setUser(u);
   }, []);
+
+  // RevenueCat identity — COMPULSORY before any in-app purchase. Binds the
+  // RC customer to our stable user_id on EVERY auth path (restore, sign-in,
+  // sign-up) and unbinds on sign-out. Native builds use logIn/logOut; browser
+  // mode (preview/Expo Go) re-configures with appUserID since logIn is a
+  // no-op there. Purchases while anonymous are additionally blocked by the
+  // paywall's `identityReady` gate.
+  const rcIdentityRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!rcEnabled) return;
+    (async () => {
+      try {
+        const uid = user?.user_id || null;
+        if (uid === rcIdentityRef.current) return;
+        await bindRevenueCatIdentity(uid);
+        rcIdentityRef.current = uid;
+        if (uid) console.log('[RevenueCat] identity bound:', uid);
+      } catch (e) {
+        // Surfaced at point of sale: Paywall disables Buy while identityReady
+        // is false and shows a retry notice — never a silent anonymous buy.
+        console.warn('[RevenueCat] identity binding failed:', e);
+      }
+    })();
+  }, [user?.user_id]);
 
   // Restore existing session, and consume ?session_id / #session_id from a Google web redirect
   useEffect(() => {

@@ -1,0 +1,71 @@
+{
+  "summary": "RevenueCat IAP E2E on Expo web preview. T1 PASS (paywall renders with all 5 testIDs paywall-iap-buy/paywall-iap-restore/paywall-checkout/paywall-signout/paywall-refresh; welcome→login via coords (278,788) works). T5 PASS (jaleter.appreview@gmail.com and support@jaleter.com both bypass paywall and land on dashboard — iteration_83 admin-paywall regression is FIXED). T7 PASS via curl (POST /api/iap/sync active:true→membership active:true; active:false→revokes; iap_premium_expires_at persists correctly). CRITICAL FAIL — T2, T3, T4, T6 all blocked by two bugs: (A) RevenueCat web-browser SDK does NOT honor Purchases.logIn(user_id): console prints '[RevenueCat] identity bound: $RCAnonymousID:...' even after AuthContext calls Purchases.logIn, so identityReady stays false. Tapping paywall-iap-buy shows 'Preparing your account for purchase — try again in a moment.' and NEVER opens paywall-iap-confirm. Test-store purchase E2E is impossible in preview. (B) MUCH WORSE: the auto-sync effect in app/index.tsx:297-304 fires on every mount with the web SDK's empty customerInfo and posts {\"active\":false} to /api/iap/sync, silently REVOKING any active IAP entitlement. Reproduced: pre-granted the throwaway user active IAP via /api/iap/sync, logged in via UI, network trace shows one POST /api/iap/sync {\"active\":false} within 8s of load, /api/user/membership immediately flips to active:false, user lands on paywall. This is a data-loss bug: any App Store buyer who opens the web preview (or Expo Go / dev build with RC web mode) LOSES their premium server-side. Also: paywall button reads 'Subscribe — $79.99/year' instead of the spec's $90.00/year — the RevenueCat Test Store $rc_annual product is configured at $79.99, so priceString differs from the Stripe/App Store price the UI advertises elsewhere ($90).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/user/membership", "issue": "When IAP is active but Stripe fields are empty, response returns current_period_end:null even though iap_premium_expires_at is set in the DB. Not blocking but the client cannot show a renewal date for IAP-only subscribers."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "app/index.tsx auto-sync effect",
+        "issue": "CRITICAL DATA-LOSS: useEffect at app/index.tsx:297-304 calls syncIapToBackend(token, customerInfo) whenever RevenueCat customerInfo changes. On web/Expo Go the RC browser SDK returns customerInfo with no active entitlements (server-side IAP is invisible to it), so the effect posts {active:false} to /api/iap/sync and the backend obediently sets iap_premium_expires_at = None. Reproduced: pre-grant active IAP via /api/iap/sync → login in UI → one POST /api/iap/sync {active:false,expires_at:null,product_id:null,platform:web} → /api/user/membership flips to active:false → paywall shown. Any real App Store buyer who opens the web build (or Expo Go using the TEST key) will lose their premium. Fix: (1) never sync active:false from the client — only sync active:true snapshots; let the backend revoke via expiry or a RevenueCat server webhook. (2) or add a guard: skip syncing when originalAppUserId starts with $RCAnonymousID (identity not bound). (3) or the backend /api/iap/sync could refuse to downgrade an entitlement that was set on a different platform.",
+        "testID": "N/A",
+        "priority": "CRITICAL"
+      },
+      {
+        "component": "AuthContext.tsx / RevenueCat.logIn on web",
+        "issue": "After AuthContext.tsx:117 calls `await Purchases.logIn(String(uid))`, the returned customerInfo.originalAppUserId is STILL '$RCAnonymousID:...'. Console log: '[RevenueCat] identity bound: $RCAnonymousID:e3a7836e60e54ea9a12906f593818d8d'. Effect: PaywallScreen.buyWithStore short-circuits with 'Preparing your account for purchase — try again in a moment.' and paywall-iap-confirm never appears, so test-store purchase E2E is impossible in the preview. The purchase-time choke point in revenuecat.tsx:99 correctly refuses to purchase anonymously, but the logIn wiring is not working on the RC Web Browser SDK (purchases-js 1.63.1). Likely cause: on web/browser mode, Purchases.logIn may be a no-op / return the anonymous id; needs a workaround (either force-set app_user_id via Purchases.configure({ appUserID: user_id }) BEFORE first getCustomerInfo/getOfferings call, or re-configure the SDK after auth). Blocks T2, T3, T6.",
+        "testID": "paywall-iap-buy",
+        "priority": "CRITICAL"
+      },
+      {
+        "component": "PaywallScreen price display",
+        "issue": "Button reads 'Subscribe — $79.99/year' but the annual card above still shows '$90/year' and the disclaimer/spec expects $90.00. RevenueCat Test Store $rc_annual product is configured at $79.99, so priceString mismatches the price the rest of the paywall advertises. Not a code bug per se — either update the RevenueCat test product to $90, or make the price card use the offering priceString too (so at least the two prices agree).",
+        "testID": "paywall-iap-buy",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "T4 IAP persistence after reload",
+        "issue": "Server-recognized IAP premium is IMMEDIATELY revoked on next app mount by the auto-sync effect (see ui_bugs #1). User goes to paywall instead of dashboard. Fails T4 outright.",
+        "affected_testIDs": ["paywall-iap-buy", "paywall-checkout"]
+      },
+      {
+        "flow": "T3 Test Store purchase E2E",
+        "issue": "Cannot proceed past first tap because identityReady is false (see ui_bugs #2). paywall-iap-confirm never rendered.",
+        "affected_testIDs": ["paywall-iap-buy", "paywall-iap-confirm", "paywall-iap-confirm-yes"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter84_welcome.jpeg",
+    "/app/test_reports/screenshots/iter84_after_login.jpeg",
+    "/app/test_reports/screenshots/iter84_after_buy_tap.jpeg",
+    "/app/test_reports/screenshots/iter84_appreview.jpeg",
+    "/app/test_reports/screenshots/iter84_admin_final.jpeg",
+    "/app/test_reports/screenshots/iter84_T4_iap_dash.jpeg"
+  ],
+  "action_items": [
+    "FIX (CRITICAL / data-loss): Change app/index.tsx auto-sync effect (lines 297-304) so it NEVER posts {active:false} to /api/iap/sync from a client whose customerInfo shows no entitlement. Only sync when ent is truthy. Backend can revoke via natural expiry (iap_premium_expires_at < now already excludes from has_active_membership) or a RevenueCat server webhook — the client is not the source of truth on revocation.",
+    "FIX (CRITICAL, blocks purchase): RevenueCat identity binding fails on web (browser SDK). After auth, Purchases.logIn returns customerInfo whose originalAppUserId still starts with $RCAnonymousID. Possible workarounds: (a) re-Purchases.configure({ apiKey, appUserID: user.user_id }) after auth completes instead of/along with logIn; (b) upgrade or check purchases-js version compatibility; (c) after logIn, verify originalAppUserId === uid and retry once. Until this is fixed, test-store purchases are impossible in the preview and the paywall Buy button appears broken to the user.",
+    "MEDIUM: Reconcile the paywall price mismatch. Either update the RevenueCat Test Store $rc_annual product to $90 USD (recommended — matches Stripe and App Store), or drive the '$90/year' card off the same priceString the button uses so at least the two prices agree.",
+    "MINOR: /api/user/membership does not populate current_period_end when only iap_premium_expires_at is set — surface that field so IAP subscribers see a renewal date."
+  ],
+  "critical_code_review_comments": [
+    "app/index.tsx:297-304 grants /api/iap/sync unilateral revoke power to any client. On any platform where RC cannot see the server-side entitlement (web browser SDK, Expo Go with a mismatched key, uninstall/reinstall race), this effect will delete a valid subscription server-side. This must be a one-way sync (grant only) or backed by an idempotent RevenueCat server webhook.",
+    "revenuecat.tsx:98-99 correctly guards against $RCAnonymousID purchases (choke point works), but there is no user-facing recovery path: identity binding fails silently on web, and the UI simply says 'try again in a moment' forever. Consider surfacing '[RevenueCat] identity binding failed' as a retryable notice on the paywall.",
+    "PaywallScreen.tsx:48 fallback price '$90.00' is dead code as long as the test-store offering loads with $79.99 — pick one source of truth."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (POST /api/iap/sync grant + revoke + membership read verified)", "frontend": "40% (T1 paywall UI + T5 stripe/admin bypass pass; T2 identity, T3 purchase, T4 persistence, T6 restore all blocked)"},
+  "seed_data_creation": "Created throwaway user test_rc_1790011012@example.com / TestPass123! for the IAP purchase flow. Granted IAP premium via /api/iap/sync, verified /api/user/membership.active flipped to true, then observed the UI auto-sync effect revoke it. User was DELETED via DELETE /api/auth/delete-account with the password body. No test data left behind.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "After main agent fixes the two critical bugs (auto-sync revoke + RC.logIn on web), retest in this order: (1) log in with throwaway user, confirm console shows '[RevenueCat] identity bound: <user_id>' where user_id does NOT start with $RCAnonymousID; (2) tap paywall-iap-buy → paywall-iap-confirm should render → tap paywall-iap-confirm-yes → dashboard within ~10s; (3) verify curl /api/user/membership with the user's token returns active:true AND user doc has iap_premium_expires_at set; (4) reload the page — user should land on dashboard, NOT paywall, and network trace should show either NO POST /api/iap/sync or a POST with {active:true}; (5) T5 already re-verified (jaleter.appreview@gmail.com / Jaleter029496! and support@jaleter.com / Tarik0731! both go straight to dashboard); (6) T6 restore: sign out (paywall-signout) and log back in, verify dashboard directly. DELETE any throwaway users afterwards.",
+  "rca_of_issue": "TWO independent critical bugs found in the RevenueCat IAP flow:\n\nBug #1 (data-loss, HIGHEST priority): app/index.tsx:297-304 auto-syncs the local RC customerInfo to /api/iap/sync on every change. On the web browser SDK (purchases-js 1.63.1), customerInfo.entitlements.active is empty even when the user has a valid server-side IAP entitlement. The effect therefore posts {\"active\":false,\"expires_at\":null,\"product_id\":null,\"platform\":\"web\"} on every login/mount. Backend /api/iap/sync (server.py:2149-2150) obediently sets iap_premium_expires_at = None, which stripe_service.has_active_membership then returns False for. Reproduction: 1) POST /api/auth/register → get token 2) POST /api/iap/sync {active:true,expires_at:'2027-01-15T00:00:00Z'} → membership active:true confirmed via GET /api/user/membership 3) Login same user via UI on web preview 4) Playwright network trace shows POST /api/iap/sync {active:false} 5) GET /api/user/membership → active:false, user shown paywall. Mitigation: Make the sync one-way (only when ent is truthy). Long-term: back with a RevenueCat server-to-server webhook so revocation is authoritative, never client-driven.\n\nBug #2 (blocks purchase): AuthContext.tsx:117 calls Purchases.logIn(uid) but the returned customerInfo.originalAppUserId is still '$RCAnonymousID:xxx'. This is likely a purchases-js browser-mode limitation — logIn may not persist the app_user_id if the SDK was already configured anonymously and never had its user id set at configure time. Effect: revenuecat.tsx identityReady stays false, PaywallScreen.buyWithStore returns early with 'Preparing your account for purchase — try again in a moment.', paywall-iap-confirm never renders. Mitigation: configure RC with appUserID at the point AuthContext knows the user, e.g., call Purchases.configure({ apiKey, appUserID: user.user_id }) inside the identity effect the first time it fires with a real uid, instead of relying only on logIn. Alternatively, verify originalAppUserId === uid after logIn and re-call logIn or reconfigure on mismatch."
+}

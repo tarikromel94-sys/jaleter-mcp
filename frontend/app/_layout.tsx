@@ -6,12 +6,25 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect } from "react";
 import { Alert, LogBox, Platform } from "react-native";
 import { KeyboardProvider } from "react-native-keyboard-controller";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useFonts } from "expo-font";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
+import { initializeRevenueCat, SubscriptionProvider } from "@/src/lib/revenuecat";
 
 LogBox.ignoreAllLogs(true);
 SplashScreen.preventAutoHideAsync();
+
+// RevenueCat MUST be configured at module scope — once per launch, before any
+// component mounts. A config error must never crash the app (paywall then
+// falls back to the Stripe web flow).
+try {
+  initializeRevenueCat();
+} catch (err) {
+  console.warn("RevenueCat unavailable:", err);
+}
+
+const queryClient = new QueryClient();
 
 /* ------------------------------------------------------------------ */
 /* Push Notifications — Emergent Managed (SuprSend relay).             */
@@ -129,7 +142,11 @@ export default function RootLayout() {
   if (!iconsLoaded && !iconsError) return null;
   return (
     <KeyboardProvider>
-      <Stack screenOptions={{ headerShown: false }} />
+      <QueryClientProvider client={queryClient}>
+        <SubscriptionProvider>
+          <Stack screenOptions={{ headerShown: false }} />
+        </SubscriptionProvider>
+      </QueryClientProvider>
     </KeyboardProvider>
   );
 }

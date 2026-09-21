@@ -250,7 +250,15 @@ def has_active_membership(user: dict) -> bool:
     if isinstance(exp, datetime):
         if exp.tzinfo is None:
             exp = exp.replace(tzinfo=timezone.utc)
-        return exp > datetime.now(timezone.utc)
+        if exp > datetime.now(timezone.utc):
+            return True
+    # Apple / Google in-app subscription (RevenueCat) — synced via
+    # POST /api/iap/sync from the app after purchase/restore/renewal.
+    iap_exp = user.get("iap_premium_expires_at")
+    if isinstance(iap_exp, datetime):
+        if iap_exp.tzinfo is None:
+            iap_exp = iap_exp.replace(tzinfo=timezone.utc)
+        return iap_exp > datetime.now(timezone.utc)
     return False
 
 

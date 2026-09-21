@@ -9,6 +9,7 @@ import { C, D } from '@/src/jaleterTheme';
 import { ReportsScreen } from '@/src/ReportsScreen';
 import { EmailVerificationBanner } from '@/src/components/EmailVerificationBanner';
 import { UpdateBanner } from '@/src/components/UpdateBanner';
+import { useSubscription, syncIapToBackend, REVENUECAT_ENTITLEMENT_IDENTIFIER } from '@/src/lib/revenuecat';
 import { CoachAIScreen } from '@/src/screens/CoachAIScreen';
 import { s, ThemeCtx, Toast as SharedToast, isInvestmentAccount, type Asset } from '@/src/utils/appShared';
 import { NetWorthScreen } from '@/src/screens/NetWorthScreen';
@@ -285,6 +286,24 @@ function MainApp() {
     });
     return () => setPaymentRequiredHandler(null);
   }, []);
+
+  // ---- Apple/Google IAP → backend sync ------------------------------------
+  // Whenever RevenueCat pushes fresh CustomerInfo with an ACTIVE entitlement
+  // (purchase, restore, RENEWAL, login), mirror it to /api/iap/sync so the
+  // server-side paywall stays in lock-step. Inactive snapshots are NEVER
+  // synced — the client can extend premium but can never revoke it (expiry
+  // lapses server-side on its own). Stripe entitlement is never touched.
+  const iapSub = useSubscription();
+  const lastIapSyncRef = React.useRef<string>('');
+  useEffect(() => {
+    if (!auth.token || !iapSub.customerInfo) return;
+    const ent = iapSub.customerInfo.entitlements?.active?.[REVENUECAT_ENTITLEMENT_IDENTIFIER];
+    if (!ent) return; // never post revokes from the client
+    const fingerprint = `${auth.user?.user_id || ''}|${ent.expirationDate || ''}`;
+    if (fingerprint === lastIapSyncRef.current) return;
+    lastIapSyncRef.current = fingerprint;
+    syncIapToBackend(auth.token, iapSub.customerInfo).catch(() => {});
+  }, [auth.token, auth.user?.user_id, iapSub.customerInfo]);
 
   // Route on every auth transition (login, signup, Google, session restore,
   // logout). Active membership → dashboard; signed-in without membership →
