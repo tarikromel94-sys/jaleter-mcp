@@ -91,6 +91,33 @@ export async function bindRevenueCatIdentity(uid: string | null): Promise<void> 
   identityListeners.forEach((fn) => { try { fn(); } catch {} });
 }
 
+/** Self-healing pre-purchase check. Re-runs configure + identity binding on
+ *  demand (the launch-time attempt can fail silently on device) and returns
+ *  either a linked customer or the REAL underlying error so the paywall can
+ *  show something actionable instead of stalling on "preparing". */
+export async function ensureRcReady(uid: string | null | undefined): Promise<{ ok: boolean; appUserId?: string; error?: string }> {
+  if (!rcEnabled) return { ok: false, error: 'in-app purchases are not available on this platform' };
+  if (!uid) return { ok: false, error: 'no signed-in account' };
+  try {
+    let configured = true;
+    try {
+      configured = await Promise.resolve((Purchases as any).isConfigured());
+    } catch {
+      configured = false;
+    }
+    if (!configured) initializeRevenueCat();
+    await bindRevenueCatIdentity(String(uid));
+    const info = await Purchases.getCustomerInfo();
+    const id = info.originalAppUserId || '';
+    if (id.startsWith('$RCAnonymousID:')) {
+      return { ok: false, appUserId: id, error: 'account link failed (anonymous customer)' };
+    }
+    return { ok: true, appUserId: id };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e || 'unknown error') };
+  }
+}
+
 function useSubscriptionContext() {
   const queryClient = useQueryClient();
 

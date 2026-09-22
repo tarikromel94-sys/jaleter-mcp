@@ -6,7 +6,7 @@ import { openJaleter, JALETER_SUBSCRIPTION_URL } from '@/src/jaleterLinks';
 import { s, GoldButton } from '@/src/utils/appShared';
 import { usePayment } from '@/src/hooks/usePayment';
 import { useAuth } from '@/src/AuthContext';
-import { useSubscription, rcEnabled, rcUsingTestStore, syncIapToBackend, REVENUECAT_ENTITLEMENT_IDENTIFIER } from '@/src/lib/revenuecat';
+import { useSubscription, rcEnabled, rcUsingTestStore, syncIapToBackend, ensureRcReady, REVENUECAT_ENTITLEMENT_IDENTIFIER } from '@/src/lib/revenuecat';
 
 /* ---------------- Connect ---------------- */
 /* ---------------- Membership Required (hard paywall) ---------------- */
@@ -27,7 +27,7 @@ const PAYWALL_BENEFITS = [
 ];
 export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }: any) => {
   const pay = usePayment();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const iap = useSubscription();
   const [busy, setBusy] = useState<null | 'checkout' | 'refresh' | 'iap' | 'restore'>(null);
   const [notice, setNotice] = useState('');
@@ -159,19 +159,26 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
   };
 
   const buyWithStore = async () => {
+    setBusy('iap'); setNotice('');
+    // Identity: self-heal instead of stalling. The launch-time binding can
+    // fail silently on device — re-run configure + logIn here and surface the
+    // real error if it still can't link the customer to this account.
     if (!iap.identityReady) {
-      setNotice('Preparing your account for purchase — try again in a moment.');
-      return;
+      const ready = await ensureRcReady(user?.user_id);
+      if (!ready.ok) {
+        setBusy(null);
+        setNotice(`Purchases can't start yet: ${ready.error}. Check your internet connection and try again.`);
+        return;
+      }
     }
     // Offering may not have loaded yet (or ASC product misconfigured) —
     // refetch on demand and surface the real error rather than hiding IAP.
     let pkg = annualPkg;
     if (!pkg) {
-      setBusy('iap'); setNotice('');
       try {
         const res = await iap.refetchOfferings();
         pkg = pickAnnual(res?.data);
-        if (res?.error) throw res.error;
+        if (!pkg && res?.error) throw res.error;
       } catch (e: any) {
         setBusy(null);
         setNotice(`The App Store subscription isn't available right now: ${String(e?.message || e || 'no products returned')}. If this persists, verify the subscription product in App Store Connect matches the RevenueCat product ID.`);
@@ -184,9 +191,8 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
       }
     }
     // Test Store (preview/dev): require a deliberate second tap.
-    if (rcUsingTestStore && !confirmTestBuy) { setConfirmTestBuy(true); return; }
+    if (rcUsingTestStore && !confirmTestBuy) { setBusy(null); setConfirmTestBuy(true); return; }
     setConfirmTestBuy(false);
-    setBusy('iap'); setNotice('');
     try {
       const info = await iap.purchase(pkg);
       const ok = await finishIapUnlock(info);
@@ -203,6 +209,12 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
 
   const restorePurchases = async () => {
     setBusy('restore'); setNotice('');
+    const ready = await ensureRcReady(user?.user_id);
+    if (!ready.ok) {
+      setBusy(null);
+      setNotice(`Restore can't start yet: ${ready.error}. Check your internet connection and try again.`);
+      return;
+    }
     try {
       const info = await iap.restore();
       const ok = await finishIapUnlock(info);
