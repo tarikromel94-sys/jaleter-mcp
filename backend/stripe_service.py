@@ -558,18 +558,72 @@ async def handle_webhook_event(db, event: dict) -> dict:
 _RECONCILE_STATUS_RANK = {"active": 5, "trialing": 4, "past_due": 3, "incomplete": 2, "paused": 1}
 
 
+async def _claim_customer_by_email(db, user: dict) -> str | None:
+    """Claim an UNLINKED Stripe Customer by verified email.
+
+    Covers purchases made through raw Stripe Payment Links on jaleter.com
+    (no Jaleter account at purchase time → no jaleter_user_id metadata).
+    When that buyer later creates/logs into a Jaleter account with the SAME
+    email and VERIFIES it, 'Refresh Membership' adopts their subscription.
+
+    Safety rails:
+      - requires user.email_verified (an unverified signup with someone
+        else's email can never steal their membership)
+      - never claims a customer already tagged with a DIFFERENT user_id
+      - only claims customers that actually have a subscription
+    """
+    email = (user.get("email") or "").strip().lower()
+    if not email or not user.get("email_verified"):
+        return None
+    try:
+        customers = stripe.Customer.list(email=email, limit=10)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("email-claim customer lookup failed for %s: %s", user.get("user_id"), exc)
+        return None
+    for cust in customers.get("data") or []:
+        tag = (cust.get("metadata") or {}).get("jaleter_user_id")
+        if tag and tag != user["user_id"]:
+            continue  # belongs to another Jaleter account
+        try:
+            subs = stripe.Subscription.list(customer=cust["id"], status="all", limit=5)
+        except Exception:  # noqa: BLE001
+            continue
+        if not (subs.get("data") or []):
+            continue
+        if not tag:
+            try:
+                stripe.Customer.modify(cust["id"], metadata={"jaleter_user_id": user["user_id"]})
+            except Exception:  # noqa: BLE001
+                pass  # tagging is best-effort; local link below is what matters
+        try:
+            await db.users.update_one(
+                {"user_id": user["user_id"]},
+                {"$set": {"stripe_customer_id": cust["id"]}},
+            )
+        except Exception as exc:  # noqa: BLE001
+            # unique index: customer already linked to another user doc
+            logger.warning("email-claim link failed for %s: %s", user.get("user_id"), exc)
+            continue
+        logger.info("Claimed Stripe customer %s for user %s via verified email", cust["id"], user["user_id"])
+        return cust["id"]
+    return None
+
+
 async def reconcile_membership_from_stripe(db, user: dict) -> dict:
     """Query Stripe DIRECTLY and sync this user's membership record.
 
     Safety net for missed webhooks (misconfigured endpoint/secret, outage):
     'Refresh Membership' and the checkout duplicate-guard call this so a
     paid member is always recognized from Stripe's own records. Read-only
-    against Stripe — never creates or mutates anything there.
+    against Stripe except the one-time email-claim tagging above.
     """
     result = {"reconciled": False, "processing": False}
     customer_id = (user or {}).get("stripe_customer_id")
     if not customer_id:
-        return result
+        _configure_stripe()
+        customer_id = await _claim_customer_by_email(db, user or {})
+        if not customer_id:
+            return result
     _configure_stripe()
     subs = stripe.Subscription.list(customer=customer_id, status="all", limit=10)
     best, best_key = None, (-1, -1)
