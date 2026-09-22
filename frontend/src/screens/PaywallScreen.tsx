@@ -234,7 +234,7 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
       </View>
       <View style={s.priceCard}>
         <Text style={{ color: C.goldEyebrow2, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 }}>ANNUAL MEMBERSHIP</Text>
-        <Text style={s.priceStrong}>$90<Text style={{ fontSize: 13, color: '#8d867d', fontWeight: '500' }}>/year</Text></Text>
+        <Text style={s.priceStrong}>{annualPkg?.product?.priceString || '$90'}<Text style={{ fontSize: 13, color: '#8d867d', fontWeight: '500' }}>/year</Text></Text>
         {PAYWALL_BENEFITS.map(b => (
           <View key={b} style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginVertical: 5 }}>
             <Ionicons name="checkmark" size={15} color="#a57537" />
