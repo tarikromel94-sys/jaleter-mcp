@@ -154,6 +154,7 @@ function useSubscriptionContext() {
     isLoading: customerInfoQuery.isLoading || offeringsQuery.isLoading,
     purchase: purchaseMutation.mutateAsync,
     restore: restoreMutation.mutateAsync,
+    refetchOfferings: offeringsQuery.refetch,
     isPurchasing: purchaseMutation.isPending,
     isRestoring: restoreMutation.isPending,
   };

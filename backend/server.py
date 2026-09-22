@@ -2087,6 +2087,14 @@ async def user_membership(refresh: int = 0, current_user: dict = Depends(get_cur
         'active': active,
         'processing': bool(fresh.get('membership_processing')) and not active,
         'status': fresh.get('subscription_status') or ('legacy_active' if active else 'inactive'),
+        # Billing source drives the Membership screen: Stripe members get the
+        # Stripe portal/cancel controls; Apple/Google subscribers manage the
+        # subscription in their store settings.
+        'source': (
+            'stripe' if _stripe.has_stripe_membership(fresh)
+            else 'iap' if _stripe.has_iap_membership(fresh)
+            else 'admin' if fresh.get('is_admin') else None
+        ),
         'plan': 'jaleter_premium_annual' if active else None,
         'price': 90 if active else None,
         'currency': 'usd' if active else None,

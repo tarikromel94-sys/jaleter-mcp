@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, Pressable, ScrollView, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, Pressable, ScrollView, Platform, ActivityIndicator, Linking } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { useAuth, apiCall } from '@/src/AuthContext';
@@ -97,6 +97,7 @@ export const MembershipScreen = ({ back }: any) => {
   const [membership, setMembership] = useState<{
     active: boolean;
     status: string | null;
+    source?: 'stripe' | 'iap' | 'admin' | null;
     plan: string | null;
     price: number | null;
     currency: string | null;
@@ -277,9 +278,13 @@ export const MembershipScreen = ({ back }: any) => {
         </View>
       </View>
 
-      {/* Action buttons — different set depending on membership state. */}
+      {/* Action buttons — different set depending on membership state and
+          BILLING SOURCE. Stripe members get the Stripe portal/cancel controls;
+          Apple/Google subscribers manage in their store settings. On iOS the
+          Stripe subscribe path is hidden entirely (Apple guideline 3.1.1 —
+          purchases must go through StoreKit; the Paywall handles that flow). */}
       <View style={{ marginTop: 14, gap: 10 }}>
-        {!membership?.active && (
+        {!membership?.active && Platform.OS !== 'ios' && (
           <Pressable
             onPress={startSubscribe}
             disabled={busy === 'subscribe' || confirming}
@@ -294,7 +299,20 @@ export const MembershipScreen = ({ back }: any) => {
               : <Text style={{ color: '#fff', fontWeight: '800', fontSize: 14 }}>Start membership — $90 / year</Text>}
           </Pressable>
         )}
-        {membership?.active && !membership.cancel_at_period_end && (
+        {membership?.active && membership.source === 'iap' && (
+          <Pressable
+            onPress={() => Linking.openURL(Platform.OS === 'android'
+              ? 'https://play.google.com/store/account/subscriptions'
+              : 'https://apps.apple.com/account/subscriptions').catch(() => {})}
+            style={{ borderWidth: 1, borderColor: '#c9b98f', paddingVertical: 12, borderRadius: 12, alignItems: 'center' }}
+            testID="membership-manage-store"
+          >
+            <Text style={{ color: '#8b6437', fontWeight: '800', fontSize: 13 }}>
+              Manage in {Platform.OS === 'android' ? 'Google Play' : 'App Store'} settings
+            </Text>
+          </Pressable>
+        )}
+        {membership?.active && membership.source !== 'iap' && !membership.cancel_at_period_end && (
           <>
             <Pressable
               onPress={openPortal}
@@ -316,7 +334,7 @@ export const MembershipScreen = ({ back }: any) => {
             </Pressable>
           </>
         )}
-        {membership?.active && membership.cancel_at_period_end && (
+        {membership?.active && membership.source !== 'iap' && membership.cancel_at_period_end && (
           <Pressable
             onPress={resume}
             disabled={busy === 'resume'}
@@ -330,7 +348,9 @@ export const MembershipScreen = ({ back }: any) => {
         )}
       </View>
       <Text style={{ fontSize: 10, color: t.dark ? D.textMuted : '#8d867d', textAlign: 'center', marginTop: 12, lineHeight: 14 }}>
-        Membership is $90.00 USD per year, billed by Stripe. Your subscription renews automatically each year at $90.00 USD unless you cancel at least 24 hours before the renewal date. You can cancel, update your card, or download invoices any time from Manage subscription or at jaleter.com/billing.
+        {membership?.source === 'iap'
+          ? `Membership is $90.00 USD per year, billed through your ${Platform.OS === 'android' ? 'Google Play' : 'Apple ID'} subscription. It renews automatically each year unless you cancel at least 24 hours before the renewal date in your ${Platform.OS === 'android' ? 'Google Play' : 'App Store'} subscription settings.`
+          : 'Membership is $90.00 USD per year, billed by Stripe. Your subscription renews automatically each year at $90.00 USD unless you cancel at least 24 hours before the renewal date. You can cancel, update your card, or download invoices any time from Manage subscription or at jaleter.com/billing.'}
       </Text>
     </ScrollView>
   );
@@ -343,7 +363,7 @@ export const MoreScreen = ({ navigate, linkedCount, onBack }: any) => {
       <View style={s.moreHero}>
         <Sparkle size={22} color="#d7ad6b" />
         <Text style={s.moreHeroH2}>Build with purpose.</Text>
-        <Text style={{ color: '#aaa298', fontSize: 10 }}>Every feature is designed to connect today's stewardship with tomorrow's freedom.</Text>
+        <Text style={{ color: '#aaa298', fontSize: 10 }}>Every feature is designed to connect today&apos;s stewardship with tomorrow&apos;s freedom.</Text>
       </View>
       <View style={{ gap: 10 }}>
         {[

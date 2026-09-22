@@ -230,8 +230,8 @@ ENTITLEMENT_STATES = {"active", "trialing", "past_due"}
 #   drop entitlement.
 
 
-def has_active_membership(user: dict) -> bool:
-    """True when the user is entitled to premium features RIGHT NOW."""
+def has_stripe_membership(user: dict) -> bool:
+    """True when a Stripe subscription (or legacy grant) is active RIGHT NOW."""
     if not user:
         return False
     status = user.get("subscription_status")
@@ -250,16 +250,27 @@ def has_active_membership(user: dict) -> bool:
     if isinstance(exp, datetime):
         if exp.tzinfo is None:
             exp = exp.replace(tzinfo=timezone.utc)
-        if exp > datetime.now(timezone.utc):
-            return True
-    # Apple / Google in-app subscription (RevenueCat) — synced via
-    # POST /api/iap/sync from the app after purchase/restore/renewal.
+        return exp > datetime.now(timezone.utc)
+    return False
+
+
+def has_iap_membership(user: dict) -> bool:
+    """Apple / Google in-app subscription (RevenueCat) — synced via
+    POST /api/iap/sync from the app after purchase/restore/renewal."""
+    if not user:
+        return False
     iap_exp = user.get("iap_premium_expires_at")
     if isinstance(iap_exp, datetime):
         if iap_exp.tzinfo is None:
             iap_exp = iap_exp.replace(tzinfo=timezone.utc)
         return iap_exp > datetime.now(timezone.utc)
     return False
+
+
+def has_active_membership(user: dict) -> bool:
+    """True when the user is entitled to premium features RIGHT NOW —
+    via EITHER a Stripe (web) membership OR an Apple/Google IAP subscription."""
+    return has_stripe_membership(user) or has_iap_membership(user)
 
 
 # ---- Webhook handling ---------------------------------------------------

@@ -40,12 +40,22 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
 
   // Apple/Google in-app subscription — annual package from the current
   // offering (never hardcode product ids or prices).
-  const annualPkg = iap.offerings?.current?.annual
-    || iap.offerings?.current?.availablePackages?.find((p: any) => p.identifier === '$rc_annual')
-    || iap.offerings?.current?.availablePackages?.[0]
+  const pickAnnual = (offerings: any) =>
+    offerings?.current?.annual
+    || offerings?.current?.availablePackages?.find((p: any) => p.identifier === '$rc_annual')
+    || offerings?.current?.availablePackages?.[0]
     || null;
-  const iapAvailable = rcEnabled && !!annualPkg;
+  const annualPkg = pickAnnual(iap.offerings);
+  // On native store builds the IAP button ALWAYS renders (Apple requires the
+  // native StoreKit flow to be the purchase path). If the offering hasn't
+  // loaded yet, tapping Subscribe refetches it and surfaces the real error
+  // instead of silently falling back to Stripe.
+  const isNativeStore = Platform.OS !== 'web';
+  const iapAvailable = rcEnabled && (isNativeStore || !!annualPkg);
   const iapPrice = annualPkg?.product?.priceString || '$90.00';
+  // Apple guideline 3.1.1: no external purchase links on iOS builds. Stripe
+  // web checkout stays available on Android/web (and in the dev test store).
+  const showStripeOption = Platform.OS !== 'ios' || rcUsingTestStore;
 
   const PROCESSING_MSG = 'No need to pay again — bank payments can take a few business days to clear. Jaleter unlocks automatically the moment Stripe confirms it.';
 
@@ -149,17 +159,36 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
   };
 
   const buyWithStore = async () => {
-    if (!annualPkg) return;
     if (!iap.identityReady) {
       setNotice('Preparing your account for purchase — try again in a moment.');
       return;
+    }
+    // Offering may not have loaded yet (or ASC product misconfigured) —
+    // refetch on demand and surface the real error rather than hiding IAP.
+    let pkg = annualPkg;
+    if (!pkg) {
+      setBusy('iap'); setNotice('');
+      try {
+        const res = await iap.refetchOfferings();
+        pkg = pickAnnual(res?.data);
+        if (res?.error) throw res.error;
+      } catch (e: any) {
+        setBusy(null);
+        setNotice(`The App Store subscription isn't available right now: ${String(e?.message || e || 'no products returned')}. If this persists, verify the subscription product in App Store Connect matches the RevenueCat product ID.`);
+        return;
+      }
+      if (!pkg) {
+        setBusy(null);
+        setNotice("The App Store subscription isn't available right now — the store returned no products. Verify the auto-renewable subscription exists in App Store Connect with the exact RevenueCat product ID and that agreements/banking are complete.");
+        return;
+      }
     }
     // Test Store (preview/dev): require a deliberate second tap.
     if (rcUsingTestStore && !confirmTestBuy) { setConfirmTestBuy(true); return; }
     setConfirmTestBuy(false);
     setBusy('iap'); setNotice('');
     try {
-      const info = await iap.purchase(annualPkg);
+      const info = await iap.purchase(pkg);
       const ok = await finishIapUnlock(info);
       if (!ok) setNotice("The purchase completed but the subscription isn't active yet. Tap Restore Purchases in a moment.");
     } catch (e: any) {
@@ -252,16 +281,24 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
               <Text style={{ fontSize: 10, color: '#a29a8e' }}>or</Text>
               <View style={{ flex: 1, height: 1, backgroundColor: '#e6ddcc' }} />
             </View>
-            <Pressable
-              onPress={startCheckout}
-              disabled={!!busy || processing}
-              style={{ borderWidth: 1, borderColor: '#d9cdb6', borderRadius: 14, paddingVertical: 13, alignItems: 'center', opacity: busy || processing ? 0.6 : 1 }}
-              testID="paywall-checkout"
-            >
-              <Text style={{ color: '#a57537', fontSize: 12, fontWeight: '700' }}>
-                {processing ? 'Payment processing — no need to pay again' : busy === 'checkout' ? 'Opening secure checkout…' : 'Pay on Jaleter.com instead'}
-              </Text>
-            </Pressable>
+            {showStripeOption ? (
+              <Pressable
+                onPress={startCheckout}
+                disabled={!!busy || processing}
+                style={{ borderWidth: 1, borderColor: '#d9cdb6', borderRadius: 14, paddingVertical: 13, alignItems: 'center', opacity: busy || processing ? 0.6 : 1 }}
+                testID="paywall-checkout"
+              >
+                <Text style={{ color: '#a57537', fontSize: 12, fontWeight: '700' }}>
+                  {processing ? 'Payment processing — no need to pay again' : busy === 'checkout' ? 'Opening secure checkout…' : 'Pay on Jaleter.com instead'}
+                </Text>
+              </Pressable>
+            ) : (
+              <Pressable onPress={refreshNow} disabled={!!busy} style={{ alignItems: 'center', paddingVertical: 4, opacity: busy ? 0.6 : 1 }} testID="paywall-refresh-membership">
+                <Text style={{ color: '#a29a8e', fontSize: 11, fontWeight: '700' }}>
+                  {busy === 'refresh' ? 'Checking…' : 'Already a member on Jaleter.com? Refresh membership'}
+                </Text>
+              </Pressable>
+            )}
           </>
         ) : (
           <GoldButton
@@ -300,7 +337,7 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
       </View>
       <Text style={{ marginTop: 16, fontSize: 9, color: '#a29a8e', textAlign: 'center', lineHeight: 13 }}>
         {iapAvailable
-          ? `$90 USD billed annually via ${Platform.OS === 'ios' ? 'your Apple ID (App Store)' : Platform.OS === 'android' ? 'Google Play' : 'the store'}; renews automatically until canceled in your store subscription settings. Web payments are handled securely by Stripe — either unlocks the same membership.`
+          ? `$90 USD billed annually via ${Platform.OS === 'ios' ? 'your Apple ID (App Store)' : Platform.OS === 'android' ? 'Google Play' : 'the store'}; renews automatically until canceled in your store subscription settings.${showStripeOption ? ' Web payments are handled securely by Stripe — either unlocks the same membership.' : ' Memberships purchased on the web are recognized automatically when you sign in.'}`
           : 'Payments are handled securely by Stripe on the web — Jaleter never sees your card. $90 USD billed annually; renews automatically until canceled. Cancel any time from Membership settings.'}
       </Text>
     </ScrollView>
