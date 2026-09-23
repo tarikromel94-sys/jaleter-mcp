@@ -1,0 +1,35 @@
+{
+  "summary": "Jaleter final pre-resubmission regression of membership/payment matrix — ALL 5 SCENARIOS PASS. M1 PASS: logged in as jaleter.appreview@gmail.com / Jaleter029496! (source=stripe) → home-profile avatar → Membership row → screen shows JALETER PREMIUM Annual Membership $90/year, 'ACTIVE · renews Jan 1, 2099' pill, 'Manage subscription' Pressable (testID membership-manage) VISIBLE, 'Cancel at period end' (membership-cancel) VISIBLE, membership-manage-store ABSENT, membership-subscribe ABSENT, footer contains 'billed by Stripe … cancel/update card/download invoices … Manage subscription or at jaleter.com/billing' and does NOT contain 'Apple ID'. M2 PASS: created throwaway test_iap_1790130972@example.com via POST /api/auth/register → POST /api/iap/sync {active:true, expires_at:'2027-10-01T00:00:00Z', platform:'ios'} returned {ok:true, active:true} → GET /api/user/membership now returns active:true, source:'iap', current_period_end:'2027-10-01T00:00:00+00:00'; logged in via UI → Membership screen shows 'ACTIVE · renews Oct 1, 2027' pill, 'Manage in App Store settings' button (testID membership-manage-store) PRESENT, membership-manage/cancel/subscribe all ABSENT, footer says 'billed through your Apple ID subscription … in your App Store subscription settings' and does NOT say 'billed by Stripe'. Throwaway deleted (HTTP 200). M3 PASS: fresh throwaway test_pw_1790131370@example.com → auto-shown paywall → big price card shows '$79.99/year' and Subscribe button shows 'Subscribe — $79.99/year' — both match exactly (RC test store price). Did NOT purchase before assertion. M4 PASS (curl-verified): GET /api/user/membership?refresh=1 with fresh unverified-email token → HTTP 200 in 99ms, returned {active:false, status:'inactive', source:null} — no 500, no hang; email-claim fallback silently skips for unverified emails as designed. Re-verified with second throwaway, same result (98ms). M5 PASS: same throwaway → paywall-iap-buy → paywall-iap-confirm-yes → RC Test Store dialog 'Test valid purchase' → dashboard unlocked (paywall gone, home-profile avatar present, 'Good evening, PW.' + Right Now/Your Legacy rendered). Throwaway deleted (HTTP 200). Zero red screens; only prior-known non-blocking warnings (RC 402 test-store noise, shadow* deprecation warning, require-cycle warning, Metro reconnect notice — all appear in prior iterations). Review account left in original state (source=stripe premium, unchanged).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter87/m1_dash.jpeg",
+    "/app/test_reports/screenshots/iter87/m1_membership.jpeg",
+    "/app/test_reports/screenshots/iter87/m2_dash.jpeg",
+    "/app/test_reports/screenshots/iter87/m2_membership.jpeg",
+    "/app/test_reports/screenshots/iter87/m3_paywall.jpeg",
+    "/app/test_reports/screenshots/iter87/m5_after_buy_click.jpeg",
+    "/app/test_reports/screenshots/iter87/m5_after_confirm.jpeg",
+    "/app/test_reports/screenshots/iter87/m5_after_valid.jpeg"
+  ],
+  "action_items": [
+    "No code changes required — the source-aware Membership UI, paywall price consistency, and email-claim safety are all working exactly per spec. Cleared for App Store resubmission from a UI/regression standpoint."
+  ],
+  "critical_code_review_comments": [
+    "MoreScreens.tsx MembershipScreen — footer conditional (source==='iap' vs Stripe) reads Platform.OS at render for the Google/Apple wording. On web preview Platform.OS==='web' so the fallback selects Apple ID/App Store — this happens to match the M2 spec but a native Android IAP user would still show Apple wording on web. Non-blocking for App Store review (iOS build renders 'ios'). Consider deriving the store label from the IAP payload's `platform` field instead of Platform.OS for cross-store correctness. Reference: /app/frontend/src/screens/MoreScreens.tsx:352.",
+    "PaywallScreen.tsx line 237: big price card falls back to '$90' when annualPkg is undefined, while the Subscribe button (line 276) falls back to '$90.00' via iapPrice default. These fallbacks diverge — if RC ever fails to load the offering, the card shows $90 and the button shows $90.00/year. Non-blocking (both display in preview because RC is loaded), but recommend making both use the same iapPrice constant.",
+    "shadow* style prop deprecation warnings persist across the app; Expo 51+ recommends `boxShadow`. Non-blocking but noisy in console."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only run, one API-side pre-check for M4 which passed)", "frontend": "100% (M1..M5 all PASS)"},
+  "seed_data_creation": "Two throwaway users created via POST /api/auth/register: test_iap_1790130972@example.com (granted IAP premium via POST /api/iap/sync) and test_pw_1790131370@example.com (unverified email, used for M3+M4+M5). Both DELETEd via /api/auth/delete-account with HTTP 200 after tests. Review account jaleter.appreview@gmail.com was untouched (only read via /api/user/membership + Membership screen navigation).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Membership screen is source-aware and rendered correctly for both Stripe and IAP users. Key selectors: home-profile (top-right avatar on Home) → more-membership row. testIDs on Membership: membership-subscribe (only when inactive & non-iOS), membership-manage (Stripe active), membership-cancel (Stripe active not-canceling), membership-resume (Stripe active canceling), membership-manage-store (IAP active). Paywall testIDs: paywall-iap-buy, paywall-iap-confirm-yes/no, paywall-checkout, paywall-refresh-membership, paywall-iap-restore. RC Test Store dialog shows a plain HTML 'Test valid purchase' / 'Test failed purchase' / 'Cancel' — click via get_by_text. Login flow on 390x844: click coord (278, 788) on welcome, then click coord (195, 543) for the 'Log in' button (Enter key does not submit).",
+  "rca_of_issue": "N/A — verification-only run, no bug reproduced. All 5 requested scenarios passed on first successful navigation attempt."
+}
