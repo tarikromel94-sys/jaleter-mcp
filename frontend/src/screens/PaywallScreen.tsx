@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, Pressable, ScrollView, ActivityIndicator, AppState, Platform } from 'react-native';
+import { View, Text, Pressable, ScrollView, ActivityIndicator, AppState, Platform, StyleSheet } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
-import { C } from '@/src/jaleterTheme';
 import { openJaleter, JALETER_SUBSCRIPTION_URL } from '@/src/jaleterLinks';
-import { s, GoldButton } from '@/src/utils/appShared';
 import { usePayment } from '@/src/hooks/usePayment';
 import { useAuth } from '@/src/AuthContext';
 import { useSubscription, rcEnabled, rcUsingTestStore, syncIapToBackend, ensureRcReady, REVENUECAT_ENTITLEMENT_IDENTIFIER } from '@/src/lib/revenuecat';
+import { F } from '@/src/jaleterTheme';
 
 /* ---------------- Connect ---------------- */
 /* ---------------- Membership Required (hard paywall) ---------------- */
@@ -17,14 +16,6 @@ import { useSubscription, rcEnabled, rcUsingTestStore, syncIapToBackend, ensureR
 //   2. signing into a different account that already has one.
 // Entitlement is never decided locally; `checkMembership` always asks the
 // server (`GET /api/user/membership`) and premium APIs return 402 anyway.
-const PAYWALL_BENEFITS = [
-  'Grid-based budgeting across every month',
-  'Connected financial accounts (Plaid + statement import)',
-  'Spending insights & intelligent reports',
-  'Financial goals & Legacy projections',
-  'Net worth tracking — investments, liabilities, credit cards',
-  'AI-powered financial insights (Jaleter Coach)',
-];
 export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }: any) => {
   const pay = usePayment();
   const { token, user } = useAuth();
@@ -53,9 +44,12 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
   const isNativeStore = Platform.OS !== 'web';
   const iapAvailable = rcEnabled && (isNativeStore || !!annualPkg);
   const iapPrice = annualPkg?.product?.priceString || '$90.00';
-  // Apple guideline 3.1.1: no external purchase links on iOS builds. Stripe
-  // web checkout stays available on Android/web (and in the dev test store).
-  const showStripeOption = Platform.OS !== 'ios' || rcUsingTestStore;
+  // Store digital subscriptions MUST use the native billing systems (Apple
+  // guideline 3.1.1 / Google Play Billing policy) — the Stripe web option is
+  // only shown on the web build, never inside iOS or Android store builds.
+  const showStripeOption = Platform.OS === 'web';
+  const priceNum = annualPkg?.product?.price;
+  const monthlyEq = priceNum ? `$${(Math.ceil((priceNum / 12) * 100) / 100).toFixed(2)}` : '$7.50';
 
   const PROCESSING_MSG = 'No need to pay again — bank payments can take a few business days to clear. Jaleter unlocks automatically the moment Stripe confirms it.';
 
@@ -224,134 +218,185 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
     } finally { setBusy(null); }
   };
 
+  const FEATURES: [string, string, string][] = [
+    ['analytics-outline', 'Advanced Insights', 'Smarter analytics and personalized recommendations'],
+    ['flag-outline', 'Goal Tracking', 'Stay on track and reach your goals faster'],
+    ['diamond-outline', 'Premium Tools', 'Access exclusive features and tools'],
+    ['headset-outline', 'Priority Support', 'Get help when you need it'],
+  ];
+
+  const disclosure = iapAvailable
+    ? `Annual auto-renewing subscription billed at ${iapPrice}/year through ${Platform.OS === 'android' ? 'Google Play' : 'the App Store'}. Renews automatically unless canceled at least 24 hours before the end of the period. Manage or cancel any time in your ${Platform.OS === 'android' ? 'Google Play' : 'App Store'} account settings.${showStripeOption ? ' Web payments are handled by Stripe — either unlocks the same membership.' : ' Memberships purchased on jaleter.com are recognized automatically when you sign in.'}`
+    : 'Annual auto-renewing subscription billed at $89.99/year, handled securely by Stripe on the web — Jaleter never sees your card. Renews automatically unless canceled. Cancel any time from Membership settings.';
+
   return (
-    <ScrollView style={s.lightScreen} contentContainerStyle={{ padding: 23, paddingTop: 60, paddingBottom: 40 }}>
-      <View style={s.paywallMark}><Text style={{ color: '#e2b96f', fontSize: 24 }}>✦</Text></View>
-      <View style={s.onboardHeading}>
-        <Text style={s.eyebrow}>JALETER MEMBERSHIP</Text>
-        <Text style={s.onboardH1}>Unlock Jaleter</Text>
-        <Text style={s.onboardHint}>An active Jaleter membership is required to access Jaleter&apos;s financial tools and features.</Text>
+    <ScrollView style={d.screen} contentContainerStyle={{ paddingHorizontal: 24, paddingTop: 54, paddingBottom: 40 }}>
+      {/* X — dismisses the paywall (back to welcome / account switch). Never
+          forces a purchase to leave this screen. */}
+      <Pressable onPress={onSwitchAccount} hitSlop={12} style={d.closeBtn} testID="paywall-close">
+        <Ionicons name="close" size={20} color="#b9ae9a" />
+      </Pressable>
+
+      <View style={{ alignItems: 'center' }}>
+        <Text style={d.wordmark}>Jaleter</Text>
+        <Text style={d.tagline}>SMART BUDGETING. WEALTHY LIVING.</Text>
       </View>
-      <View style={s.priceCard}>
-        <Text style={{ color: C.goldEyebrow2, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 }}>ANNUAL MEMBERSHIP</Text>
-        <Text style={s.priceStrong}>{annualPkg?.product?.priceString || '$90'}<Text style={{ fontSize: 13, color: '#8d867d', fontWeight: '500' }}>/year</Text></Text>
-        {PAYWALL_BENEFITS.map(b => (
-          <View key={b} style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginVertical: 5 }}>
-            <Ionicons name="checkmark" size={15} color="#a57537" />
-            <Text style={{ color: '#615b52', fontSize: 11, flex: 1 }}>{b}</Text>
+
+      <Text style={d.h1}>Unlock Your{'\n'}Full Potential</Text>
+      <Text style={d.sub}>Get full access to premium features and take control of your financial future.</Text>
+
+      <View style={{ marginTop: 26, gap: 16 }}>
+        {FEATURES.map(([icon, title, desc]) => (
+          <View key={title} style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+            <View style={d.featIcon}><Ionicons name={icon as any} size={18} color="#d4af61" /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={d.featTitle}>{title}</Text>
+              <Text style={d.featDesc}>{desc}</Text>
+            </View>
           </View>
         ))}
       </View>
+
+      {/* Annual plan card — price always from the live store product */}
+      <View style={d.planCard} testID="paywall-plan-card">
+        <View style={d.bestBadge}><Text style={d.bestBadgeText}>BEST VALUE</Text></View>
+        <Text style={d.planEyebrow}>ANNUAL PLAN</Text>
+        <Text style={d.planPrice}>{iapPrice}<Text style={d.planPer}>/year</Text></Text>
+        <Text style={d.planEquiv}>Equivalent to less than {monthlyEq}/month</Text>
+      </View>
+
       {processing ? (
-        <View testID="paywall-processing" style={{ marginTop: 18, borderWidth: 1, borderColor: '#e3cf9e', backgroundColor: '#fdf7e9', borderRadius: 14, padding: 14, flexDirection: 'row', gap: 10, alignItems: 'flex-start' }}>
-          <Ionicons name="time-outline" size={18} color="#a5772e" style={{ marginTop: 1 }} />
+        <View testID="paywall-processing" style={d.noticeBox}>
+          <Ionicons name="time-outline" size={17} color="#d4af61" style={{ marginTop: 1 }} />
           <View style={{ flex: 1 }}>
-            <Text style={{ color: '#8a6a2e', fontSize: 12, fontWeight: '800' }}>Payment Processing</Text>
-            <Text style={{ color: '#8a6a2e', fontSize: 11, lineHeight: 16, marginTop: 3 }}>
-              Your payment is on its way. Bank payments can take a few business days to clear — Jaleter will unlock automatically once Stripe confirms it. Please don&apos;t pay again.
-            </Text>
+            <Text style={d.noticeTitle}>Payment Processing</Text>
+            <Text style={d.noticeBody}>Your payment is on its way. Bank payments can take a few business days to clear — Jaleter will unlock automatically once confirmed. Please don&apos;t pay again.</Text>
           </View>
         </View>
       ) : null}
-      <View style={{ marginTop: 18 }}>
-        {iapAvailable ? (
-          <>
-            {confirmTestBuy ? (
-              <View testID="paywall-iap-confirm" style={{ borderWidth: 1, borderColor: '#e3cf9e', backgroundColor: '#fdf7e9', borderRadius: 14, padding: 14, marginBottom: 10 }}>
-                <Text style={{ color: '#8a6a2e', fontSize: 12, fontWeight: '800' }}>Confirm test purchase (simulated)</Text>
-                <Text style={{ color: '#8a6a2e', fontSize: 11, marginTop: 3, lineHeight: 15 }}>
-                  You&apos;re in the preview Test Store — no real money moves. Confirm to simulate the {iapPrice}/year subscription.
-                </Text>
-                <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
-                  <Pressable onPress={buyWithStore} style={{ flex: 1, backgroundColor: '#a57537', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} testID="paywall-iap-confirm-yes">
-                    <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>Confirm</Text>
-                  </Pressable>
-                  <Pressable onPress={() => setConfirmTestBuy(false)} style={{ flex: 1, borderWidth: 1, borderColor: '#d9cdb6', borderRadius: 10, paddingVertical: 10, alignItems: 'center' }} testID="paywall-iap-confirm-no">
-                    <Text style={{ color: '#8a6a2e', fontSize: 12, fontWeight: '700' }}>Cancel</Text>
-                  </Pressable>
-                </View>
-              </View>
-            ) : null}
-            <GoldButton
-              label={busy === 'iap' ? 'Completing your purchase…' : `Subscribe — ${iapPrice}/year`}
-              onPress={buyWithStore}
-              disabled={!!busy || processing}
-              testID="paywall-iap-buy"
-            />
-            <Pressable
-              onPress={restorePurchases}
-              disabled={!!busy}
-              style={{ marginTop: 12, alignItems: 'center', opacity: busy ? 0.6 : 1 }}
-              testID="paywall-iap-restore"
-            >
-              {busy === 'restore'
-                ? <ActivityIndicator size="small" color="#a57537" />
-                : <Text style={{ color: '#a57537', fontSize: 12, fontWeight: '700' }}>Restore Purchases</Text>}
-            </Pressable>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 12 }}>
-              <View style={{ flex: 1, height: 1, backgroundColor: '#e6ddcc' }} />
-              <Text style={{ fontSize: 10, color: '#a29a8e' }}>or</Text>
-              <View style={{ flex: 1, height: 1, backgroundColor: '#e6ddcc' }} />
+
+      {confirmTestBuy ? (
+        <View testID="paywall-iap-confirm" style={d.noticeBox}>
+          <View style={{ flex: 1 }}>
+            <Text style={d.noticeTitle}>Confirm test purchase (simulated)</Text>
+            <Text style={d.noticeBody}>You&apos;re in the preview Test Store — no real money moves. Confirm to simulate the {iapPrice}/year subscription.</Text>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+              <Pressable onPress={buyWithStore} style={[d.cta, { flex: 1, marginTop: 0, paddingVertical: 10 }]} testID="paywall-iap-confirm-yes">
+                <Text style={d.ctaText}>Confirm</Text>
+              </Pressable>
+              <Pressable onPress={() => setConfirmTestBuy(false)} style={d.confirmCancel} testID="paywall-iap-confirm-no">
+                <Text style={{ color: '#c9bfa9', fontSize: 12, fontWeight: '700' }}>Cancel</Text>
+              </Pressable>
             </View>
-            {showStripeOption ? (
-              <Pressable
-                onPress={startCheckout}
-                disabled={!!busy || processing}
-                style={{ borderWidth: 1, borderColor: '#d9cdb6', borderRadius: 14, paddingVertical: 13, alignItems: 'center', opacity: busy || processing ? 0.6 : 1 }}
-                testID="paywall-checkout"
-              >
-                <Text style={{ color: '#a57537', fontSize: 12, fontWeight: '700' }}>
-                  {processing ? 'Payment processing — no need to pay again' : busy === 'checkout' ? 'Opening secure checkout…' : 'Pay on Jaleter.com instead'}
-                </Text>
-              </Pressable>
-            ) : (
-              <Pressable onPress={refreshNow} disabled={!!busy} style={{ alignItems: 'center', paddingVertical: 4, opacity: busy ? 0.6 : 1 }} testID="paywall-refresh-membership">
-                <Text style={{ color: '#a29a8e', fontSize: 11, fontWeight: '700' }}>
-                  {busy === 'refresh' ? 'Checking…' : 'Already a member on Jaleter.com? Refresh membership'}
-                </Text>
-              </Pressable>
-            )}
-          </>
-        ) : (
-          <GoldButton
-            label={processing ? 'Payment processing — no need to pay again' : busy === 'checkout' ? 'Opening secure checkout…' : 'Continue to Jaleter.com'}
-            onPress={startCheckout}
-            disabled={!!busy || processing}
-            testID="paywall-checkout"
-          />
-        )}
-      </View>
-      <Pressable
-        onPress={refreshNow}
-        disabled={!!busy}
-        style={{ marginTop: 14, borderWidth: 1, borderColor: '#d9cdb6', borderRadius: 14, paddingVertical: 13, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 7, opacity: busy ? 0.6 : 1 }}
-        testID="paywall-refresh"
-      >
-        {busy === 'refresh'
-          ? <ActivityIndicator size="small" color="#a57537" />
-          : <Ionicons name="refresh-outline" size={15} color="#a57537" />}
-        <Text style={{ color: '#a57537', fontSize: 12, fontWeight: '700' }}>Refresh Membership</Text>
-      </Pressable>
-      {notice ? (
-        <Text testID="paywall-notice" style={{ marginTop: 14, fontSize: 11, color: '#8a6a2e', textAlign: 'center', lineHeight: 16 }}>{notice}</Text>
+          </View>
+        </View>
       ) : null}
+
+      {iapAvailable ? (
+        <>
+          <Pressable onPress={buyWithStore} disabled={!!busy || processing} style={[d.cta, (busy || processing) && { opacity: 0.6 }]} testID="paywall-iap-buy">
+            {busy === 'iap'
+              ? <ActivityIndicator size="small" color="#171204" />
+              : <Text style={d.ctaText}>Subscribe Now</Text>}
+          </Pressable>
+          <View style={d.linksRow}>
+            <Pressable onPress={restorePurchases} disabled={!!busy} hitSlop={8} testID="paywall-iap-restore">
+              {busy === 'restore'
+                ? <ActivityIndicator size="small" color="#d4af61" />
+                : <Text style={d.linkText}>Restore Purchase</Text>}
+            </Pressable>
+            <Text style={d.linkDivider}>|</Text>
+            <Pressable onPress={() => openJaleter('terms')} hitSlop={8} testID="paywall-terms"><Text style={d.linkText}>Terms</Text></Pressable>
+            <Text style={d.linkDivider}>|</Text>
+            <Pressable onPress={() => openJaleter('privacy')} hitSlop={8} testID="paywall-privacy"><Text style={d.linkText}>Privacy</Text></Pressable>
+          </View>
+          {showStripeOption ? (
+            <Pressable onPress={startCheckout} disabled={!!busy || processing} style={[d.secondaryBtn, (busy || processing) && { opacity: 0.6 }]} testID="paywall-checkout">
+              <Text style={d.linkText}>
+                {processing ? 'Payment processing — no need to pay again' : busy === 'checkout' ? 'Opening secure checkout…' : 'Pay on Jaleter.com instead'}
+              </Text>
+            </Pressable>
+          ) : null}
+          <Pressable onPress={refreshNow} disabled={!!busy} style={{ alignItems: 'center', marginTop: 12, opacity: busy ? 0.6 : 1 }} testID="paywall-refresh">
+            {busy === 'refresh'
+              ? <ActivityIndicator size="small" color="#d4af61" />
+              : <Text style={{ color: '#8f8672', fontSize: 11, fontWeight: '700' }}>Already a member on Jaleter.com? Refresh Membership</Text>}
+          </Pressable>
+        </>
+      ) : (
+        <>
+          <Pressable onPress={startCheckout} disabled={!!busy || processing} style={[d.cta, (busy || processing) && { opacity: 0.6 }]} testID="paywall-checkout">
+            <Text style={d.ctaText}>{processing ? 'Payment processing — no need to pay again' : busy === 'checkout' ? 'Opening secure checkout…' : 'Subscribe Now'}</Text>
+          </Pressable>
+          <View style={d.linksRow}>
+            <Pressable onPress={refreshNow} disabled={!!busy} hitSlop={8} testID="paywall-refresh">
+              {busy === 'refresh' ? <ActivityIndicator size="small" color="#d4af61" /> : <Text style={d.linkText}>Refresh Membership</Text>}
+            </Pressable>
+            <Text style={d.linkDivider}>|</Text>
+            <Pressable onPress={() => openJaleter('terms')} hitSlop={8} testID="paywall-terms"><Text style={d.linkText}>Terms</Text></Pressable>
+            <Text style={d.linkDivider}>|</Text>
+            <Pressable onPress={() => openJaleter('privacy')} hitSlop={8} testID="paywall-privacy"><Text style={d.linkText}>Privacy</Text></Pressable>
+          </View>
+        </>
+      )}
+
+      {notice ? (
+        <Text testID="paywall-notice" style={{ marginTop: 14, fontSize: 11, color: '#d4af61', textAlign: 'center', lineHeight: 16 }}>{notice}</Text>
+      ) : null}
+
+      <Text style={d.disclosure}>{disclosure}</Text>
+
       {/* This screen only renders for AUTHENTICATED users, so never ask them
           to "sign in" again — show who they are and offer a way out. */}
-      <View style={{ marginTop: 22, alignItems: 'center' }}>
+      <View style={{ marginTop: 20, alignItems: 'center' }}>
         {email ? (
-          <Text testID="paywall-signed-in-as" style={{ fontSize: 11, color: '#77726b', textAlign: 'center' }}>
-            Signed in as <Text style={{ fontWeight: '700', color: '#615b52' }}>{email}</Text>
+          <Text testID="paywall-signed-in-as" style={{ fontSize: 11, color: '#8f8672', textAlign: 'center' }}>
+            Signed in as <Text style={{ fontWeight: '700', color: '#c9bfa9' }}>{email}</Text>
           </Text>
         ) : null}
         <Pressable onPress={onSwitchAccount} hitSlop={8} testID="paywall-signout">
-          <Text style={[s.loginLink, { textAlign: 'center', marginTop: 6 }]}>Not you? Sign out</Text>
+          <Text style={{ color: '#d4af61', fontSize: 11, fontWeight: '700', textAlign: 'center', marginTop: 6 }}>Not you? Sign out</Text>
         </Pressable>
       </View>
-      <Text style={{ marginTop: 16, fontSize: 9, color: '#a29a8e', textAlign: 'center', lineHeight: 13 }}>
-        {iapAvailable
-          ? `$90 USD billed annually via ${Platform.OS === 'ios' ? 'your Apple ID (App Store)' : Platform.OS === 'android' ? 'Google Play' : 'the store'}; renews automatically until canceled in your store subscription settings.${showStripeOption ? ' Web payments are handled securely by Stripe — either unlocks the same membership.' : ' Memberships purchased on the web are recognized automatically when you sign in.'}`
-          : 'Payments are handled securely by Stripe on the web — Jaleter never sees your card. $90 USD billed annually; renews automatically until canceled. Cancel any time from Membership settings.'}
-      </Text>
+
+      {/* Bottom decorative gold treatment */}
+      <View style={{ alignItems: 'center', marginTop: 26 }}>
+        <View style={d.goldRule} />
+        <Text style={{ color: '#d4af61', fontSize: 14, marginTop: 10 }}>✦</Text>
+      </View>
     </ScrollView>
   );
 };
+
+/* Dark luxury paywall styles — this screen is intentionally dark in BOTH
+   themes (brand design), so colors are local literals, not theme tokens. */
+const d = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: '#0a0906' },
+  closeBtn: { position: 'absolute', top: 52, right: 20, zIndex: 5, width: 36, height: 36, borderRadius: 18, backgroundColor: '#1a160e', alignItems: 'center', justifyContent: 'center' },
+  wordmark: { color: '#e5c37a', fontSize: 52, fontFamily: F.serifBold, letterSpacing: 0.5 },
+  tagline: { color: '#8f8672', fontSize: 9, fontWeight: '700', letterSpacing: 2.4, marginTop: 6 },
+  h1: { color: '#f4eee1', fontSize: 34, fontFamily: F.serifBold, textAlign: 'center', marginTop: 26, lineHeight: 42 },
+  sub: { color: '#a79d88', fontSize: 13, textAlign: 'center', marginTop: 10, lineHeight: 19, paddingHorizontal: 10 },
+  featIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#1d1709', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#33270f' },
+  featTitle: { color: '#f4eee1', fontSize: 14, fontWeight: '700' },
+  featDesc: { color: '#8f8672', fontSize: 11, marginTop: 2, lineHeight: 15 },
+  planCard: { marginTop: 26, borderRadius: 18, borderWidth: 1.5, borderColor: '#d4af61', backgroundColor: '#14100a', padding: 20, alignItems: 'center' },
+  bestBadge: { position: 'absolute', top: -11, alignSelf: 'center', backgroundColor: '#d4af61', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 3 },
+  bestBadgeText: { color: '#171204', fontSize: 9, fontWeight: '800', letterSpacing: 1 },
+  planEyebrow: { color: '#8f8672', fontSize: 10, fontWeight: '800', letterSpacing: 1.6, marginTop: 4 },
+  planPrice: { color: '#f4eee1', fontSize: 38, fontFamily: F.serifBold, marginTop: 6 },
+  planPer: { color: '#a79d88', fontSize: 14, fontWeight: '500' },
+  planEquiv: { color: '#a79d88', fontSize: 11, marginTop: 4 },
+  cta: { marginTop: 18, backgroundColor: '#d4af61', borderRadius: 14, paddingVertical: 15, alignItems: 'center', minHeight: 48, justifyContent: 'center' },
+  ctaText: { color: '#171204', fontSize: 15, fontWeight: '800' },
+  linksRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 14, flexWrap: 'wrap' },
+  linkText: { color: '#d4af61', fontSize: 12, fontWeight: '700' },
+  linkDivider: { color: '#4d4633', fontSize: 12 },
+  secondaryBtn: { marginTop: 14, borderWidth: 1, borderColor: '#33270f', borderRadius: 14, paddingVertical: 12, alignItems: 'center' },
+  noticeBox: { marginTop: 16, borderWidth: 1, borderColor: '#33270f', backgroundColor: '#14100a', borderRadius: 14, padding: 14, flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
+  noticeTitle: { color: '#d4af61', fontSize: 12, fontWeight: '800' },
+  noticeBody: { color: '#a79d88', fontSize: 11, lineHeight: 16, marginTop: 3 },
+  confirmCancel: { flex: 1, borderWidth: 1, borderColor: '#33270f', borderRadius: 14, paddingVertical: 10, alignItems: 'center', marginTop: 0, justifyContent: 'center' },
+  disclosure: { marginTop: 16, fontSize: 9, color: '#8f8672', textAlign: 'center', lineHeight: 14 },
+  goldRule: { width: 120, height: 2, borderRadius: 1, backgroundColor: '#d4af61', opacity: 0.7 },
+});
