@@ -466,8 +466,10 @@ async def _startup():
     # paths a regular user could exploit. Re-seeded on every boot, so even if
     # a reviewer exercises "Delete Account", the login returns after restart.
     try:
-        review_email = 'jaleter.appreview@gmail.com'
-        review_password = 'Jaleter029496!'
+        review_email = (os.environ.get('APP_REVIEW_EMAIL') or '').strip().lower()
+        review_password = os.environ.get('APP_REVIEW_PASSWORD') or ''
+        if not review_email or not review_password:
+            raise ValueError('APP_REVIEW_EMAIL / APP_REVIEW_PASSWORD not set — seeding skipped')
         existing = await db.users.find_one({'email': review_email})
         base = {
             'email_verified': True,

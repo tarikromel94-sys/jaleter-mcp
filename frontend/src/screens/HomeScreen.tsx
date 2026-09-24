@@ -106,8 +106,8 @@ export const HomeScreen = ({ name, initials, experience, netWorth, investmentTot
         <Pressable style={s.alertBanner} onPress={() => navigate('budget')} testID="home-alert">
           <View style={s.alertIcon}><Ionicons name="notifications" size={18} color={C.alertIconText} /></View>
           <View style={{ flex: 1 }}>
-            <Text style={{ fontWeight: '700', fontSize: 11, color: C.alertText }}>You're approaching your budget limit</Text>
-            <Text style={{ color: '#8d806e', fontSize: 9 }}>{Math.round(budgetUsage)}% of this month's budget used.</Text>
+            <Text style={{ fontWeight: '700', fontSize: 11, color: C.alertText }}>You&apos;re approaching your budget limit</Text>
+            <Text style={{ color: '#8d806e', fontSize: 9 }}>{Math.round(budgetUsage)}% of this month&apos;s budget used.</Text>
           </View>
           <Ionicons name="chevron-forward" size={17} color={C.alertText} />
         </Pressable>
