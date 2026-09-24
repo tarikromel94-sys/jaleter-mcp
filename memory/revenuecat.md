@@ -9,8 +9,13 @@ This file is supposed to serve as a memory to you if you have to interact with u
 - offering_lookup_key: default
 - bundle_id / package_name: com.emergent.nochangesmobile.fl0fmc
 - Packages (package -> product_id, current price):
-  - $rc_annual -> prodd4613e9ecb   ($90.00 / P1Y, trial: none)
+  - $rc_annual -> prodd4613e9ecb   ($89.99 / P1Y, trial: none — updated from $90.00 June 2026)
   - ($rc_monthly was DELETED — Jaleter sells annual only)
+- entitlement `pro` attached products (from last /products response):
+  prodd4613e9ecb (test store), prodf1aa00de3b + prod8e62fa6e0b (Apple/Play mirrors)
+- NOTE: proxy does NOT support custom product identifiers — user wanted
+  `jaleter_premium_annual`; store products must instead match the exact IDs
+  shown in the RevenueCat dashboard (see /app/memory/WHAT_TARIK_NEEDS_TO_DO_NEXT.md)
 - Dashboard: https://app.revenuecat.com/projects/projc2004c36
 
 ## Check for project_state in revenuecat status api response. if the project_state is less then project_created, re-fetch RevenueCat playbook via the integration expert tool.

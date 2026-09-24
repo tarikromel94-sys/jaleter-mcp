@@ -43,7 +43,7 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
   // instead of silently falling back to Stripe.
   const isNativeStore = Platform.OS !== 'web';
   const iapAvailable = rcEnabled && (isNativeStore || !!annualPkg);
-  const iapPrice = annualPkg?.product?.priceString || '$90.00';
+  const iapPrice = annualPkg?.product?.priceString || '$89.99';
   // Store digital subscriptions MUST use the native billing systems (Apple
   // guideline 3.1.1 / Google Play Billing policy) — the Stripe web option is
   // only shown on the web build, never inside iOS or Android store builds.
@@ -137,7 +137,7 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
     } finally { setBusy(null); }
   };
 
-  // ---- Apple / Google In-App Purchase ($90/yr via RevenueCat) ------------
+  // ---- Apple / Google In-App Purchase ($89.99/yr via RevenueCat) ---------
   const finishIapUnlock = async (info: any): Promise<boolean> => {
     const active = !!info?.entitlements?.active?.[REVENUECAT_ENTITLEMENT_IDENTIFIER];
     if (!active) return false;
