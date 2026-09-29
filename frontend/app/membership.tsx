@@ -1,15 +1,15 @@
 /**
- * /membership — web-facing signup + subscribe page for jaleter.com.
+ * /membership — web-facing account page for jaleter.com.
  *
- * Flow: (1) create an account or log in → (2) pay with Stripe (web) via the
- * existing Paywall → (3) "You're all set" screen telling the member to
- * download the app and sign in with the same credentials (membership is
- * recognized automatically — the app's server-side gate checks the same
- * Stripe entitlement).
+ * Jaleter Premium is billed ONLY through Apple In-App Purchase (iPhone) and
+ * Google Play Billing (Android) — there is no web checkout. Flow:
+ *   (1) create an account or log in →
+ *   (2) not yet subscribed → "Download the app and subscribe" (store links) /
+ *       already subscribed → "You're all set" (same server-side verdict the
+ *       app uses: GET /api/user/membership).
  *
- * Native builds never use this route (store review safety: digital
- * subscriptions on iOS/Android go through the in-app RevenueCat flow) —
- * any native deep link here redirects to the app root.
+ * Native builds never use this route — any native deep link here redirects
+ * to the app root.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, Pressable, ScrollView, ActivityIndicator, Platform, StyleSheet } from 'react-native';
@@ -17,8 +17,8 @@ import { Redirect } from 'expo-router';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { AuthProvider, useAuth, apiCall } from '@/src/AuthContext';
 import { Signup, Login, ForgotPassword, ResetPassword } from '@/src/screens/AuthScreens';
-import { Paywall } from '@/src/screens/PaywallScreen';
 import { openJaleter } from '@/src/jaleterLinks';
+import { openStoreListing } from '@/src/storeLinks';
 import { F } from '@/src/jaleterTheme';
 
 export default function MembershipRoute() {
@@ -44,7 +44,7 @@ function MembershipFlow() {
   }, [auth.token]);
 
   // On sign-in / signup / session restore: ask the server whether this
-  // account already has an active membership (Stripe OR in-app purchase).
+  // account already has an active Premium subscription (Apple / Google).
   useEffect(() => {
     if (!auth.user) { setMember(null); return; }
     let cancelled = false;
@@ -76,15 +76,59 @@ function MembershipFlow() {
     );
   }
 
-  // ---- Signed in, no membership: Stripe paywall ----------------------------
+  // ---- Signed in, no membership: download the app + subscribe in-store ----
   if (!member) {
     return (
-      <Paywall
-        email={auth.user.email}
-        checkMembership={checkMembership}
-        onUnlocked={() => setMember(true)}
-        onSwitchAccount={async () => { await auth.logout(); setMode('login'); }}
-      />
+      <ScrollView style={m.splash} contentContainerStyle={m.successWrap} testID="membership-subscribe-in-app">
+        <Text style={m.wordmark}>Jaleter</Text>
+        <Text style={m.h1}>Your account is ready</Text>
+        <Text style={m.sub}>
+          Signed in as <Text style={{ color: '#e5c37a', fontWeight: '700' }}>{auth.user.email}</Text>.
+          Jaleter Premium ($89.99/year) is purchased inside the app through the App Store or Google Play.
+        </Text>
+
+        <View style={m.stepsCard}>
+          {[
+            ['phone-portrait-outline', 'Download the Jaleter app', 'Available for iPhone on the App Store and Android on Google Play.'],
+            ['log-in-outline', 'Sign in with this same email', 'Your account, budgets and settings follow you onto your phone.'],
+            ['diamond-outline', 'Tap Subscribe Now', 'Subscribe securely with Apple or Google — Premium and bank syncing unlock instantly.'],
+          ].map(([icon, title, desc], i) => (
+            <View key={title as string} style={[m.stepRow, i > 0 && { marginTop: 18 }]}>
+              <View style={m.stepIcon}><Ionicons name={icon as any} size={18} color="#d4af61" /></View>
+              <View style={{ flex: 1 }}>
+                <Text style={m.stepTitle}>{title}</Text>
+                <Text style={m.stepDesc}>{desc}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+
+        <Pressable onPress={() => openStoreListing('ios')} style={m.cta} testID="membership-store-ios">
+          <Text style={m.ctaText}>Get Jaleter for iPhone</Text>
+        </Pressable>
+        <Pressable onPress={() => openStoreListing('android')} style={m.secondaryCta} testID="membership-store-android">
+          <Text style={m.linkText}>Get Jaleter for Android</Text>
+        </Pressable>
+
+        <Pressable onPress={async () => { try { const r = await checkMembership(true); setMember(r.active); } catch {} }} hitSlop={8} style={{ marginTop: 18 }} testID="membership-refresh">
+          <Text style={{ color: '#8f8672', fontSize: 11, fontWeight: '700' }}>Already subscribed in the app? Refresh</Text>
+        </Pressable>
+
+        <View style={m.linksRow}>
+          <Pressable onPress={() => openJaleter('terms')} hitSlop={8}><Text style={m.linkText}>Terms</Text></Pressable>
+          <Text style={m.linkDivider}>|</Text>
+          <Pressable onPress={() => openJaleter('privacy')} hitSlop={8}><Text style={m.linkText}>Privacy</Text></Pressable>
+          <Text style={m.linkDivider}>|</Text>
+          <Pressable onPress={async () => { await auth.logout(); setMode('login'); }} hitSlop={8} testID="membership-signout">
+            <Text style={m.linkText}>Sign Out</Text>
+          </Pressable>
+        </View>
+
+        <View style={{ alignItems: 'center', marginTop: 30 }}>
+          <View style={m.goldRule} />
+          <Text style={{ color: '#d4af61', fontSize: 14, marginTop: 10 }}>✦</Text>
+        </View>
+      </ScrollView>
     );
   }
 
@@ -102,7 +146,7 @@ function MembershipFlow() {
       <View style={m.stepsCard}>
         {[
           ['phone-portrait-outline', 'Download the Jaleter app', 'Get Jaleter on the App Store or Google Play.'],
-          ['log-in-outline', 'Sign in with this same email', 'Your membership is recognized automatically — nothing to restore manually.'],
+          ['log-in-outline', 'Sign in with this same email', 'Your Premium subscription is recognized automatically on every device.'],
           ['sparkles-outline', 'Everything unlocks instantly', 'Budgets, insights, goal tracking, premium tools and priority support.'],
         ].map(([icon, title, desc], i) => (
           <View key={title as string} style={[m.stepRow, i > 0 && { marginTop: 18 }]}>
@@ -120,7 +164,7 @@ function MembershipFlow() {
       </Pressable>
 
       <View style={m.linksRow}>
-        <Pressable onPress={() => openJaleter('billing')} hitSlop={8}><Text style={m.linkText}>Manage Billing</Text></Pressable>
+        <Pressable onPress={() => openJaleter('faq')} hitSlop={8}><Text style={m.linkText}>Manage in App Store / Google Play</Text></Pressable>
         <Text style={m.linkDivider}>|</Text>
         <Pressable onPress={() => openJaleter('support')} hitSlop={8}><Text style={m.linkText}>Support</Text></Pressable>
         <Text style={m.linkDivider}>|</Text>
@@ -152,6 +196,7 @@ const m = StyleSheet.create({
   stepDesc: { color: '#8f8672', fontSize: 11, marginTop: 2, lineHeight: 15 },
   cta: { marginTop: 24, backgroundColor: '#d4af61', borderRadius: 14, paddingVertical: 15, alignItems: 'center', minHeight: 48, justifyContent: 'center', width: '100%' },
   ctaText: { color: '#171204', fontSize: 15, fontWeight: '800' },
+  secondaryCta: { marginTop: 12, borderWidth: 1, borderColor: '#33270f', borderRadius: 14, paddingVertical: 12, alignItems: 'center', width: '100%' },
   linksRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 16, flexWrap: 'wrap' },
   linkText: { color: '#d4af61', fontSize: 12, fontWeight: '700' },
   linkDivider: { color: '#4d4633', fontSize: 12 },

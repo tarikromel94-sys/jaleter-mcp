@@ -2,7 +2,7 @@
  * RevenueCat (Emergent-managed) — Apple/Google in-app subscriptions.
  *
  * - SDK init happens ONCE at module scope from app/_layout.tsx.
- * - `pro` entitlement (annual $90) mirrors the same premium Stripe grants.
+ * - `pro` entitlement (annual $89.99) is THE Jaleter Premium entitlement.
  * - Web preview / Expo Go run against the RevenueCat Test Store (simulated
  *   but end-to-end); store builds use the native SDK with real billing.
  * - `syncIapToBackend` posts the verified entitlement snapshot to

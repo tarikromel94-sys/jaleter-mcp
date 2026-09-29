@@ -3,29 +3,31 @@ import { View, Text, Pressable, StyleSheet } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { C, D } from '@/src/jaleterTheme';
 import { openJaleter } from '@/src/jaleterLinks';
+import { STORE_NAME, openStoreSubscriptions } from '@/src/storeLinks';
 import { useThemed } from '@/src/utils/appShared';
 
-/* ---------------- Billing Website Notice (external web billing) ---------------- */
-// Stripe checkout is hosted at jaleter.com; this component links to the
-// hosted billing/coaching/membership page.
+/* ---------------- Billing Notice ---------------- */
+// Premium is billed by the App Store / Google Play (tap → the store's
+// subscription settings). Coaching is a separate Stripe purchase on jaleter.com.
 export const BillingWebsiteNotice = ({ compact = false, target = 'billing' as 'billing' | 'coaching' | 'membership' }: { compact?: boolean; target?: 'billing' | 'coaching' | 'membership' }) => {
   const t = useThemed();
-  const label = target === 'coaching' ? 'Book & pay at jaleter.com' : target === 'membership' ? 'Manage membership at jaleter.com' : 'Billing lives at jaleter.com';
+  const isStore = target !== 'coaching';
+  const label = target === 'coaching' ? 'Book & pay at jaleter.com' : `Manage Premium in ${STORE_NAME}`;
   return (
     <Pressable
       testID={`billing-notice-${target}`}
-      onPress={() => openJaleter(target)}
+      onPress={() => (isStore ? openStoreSubscriptions() : openJaleter(target))}
       style={[billingNoticeStyles.card, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}
     >
       <View style={billingNoticeStyles.iconWrap}>
-        <Ionicons name="globe-outline" size={16} color={C.goldEyebrow} />
+        <Ionicons name={isStore ? 'card-outline' : 'globe-outline'} size={16} color={C.goldEyebrow} />
       </View>
       <View style={{ flex: 1 }}>
         <Text style={[billingNoticeStyles.title, t.textInk]}>{label}</Text>
         <Text style={[billingNoticeStyles.body, t.textMuted]}>
-          {compact
-            ? 'Tap to open on our website.'
-            : 'Billing and subscription management is handled on our secure website. Tap here to open jaleter.com in your browser.'}
+          {isStore
+            ? (compact ? `Renewals, receipts and cancellation are handled by ${STORE_NAME}.` : `Your Premium subscription is billed by ${STORE_NAME}. Tap to view, change or cancel it in your store subscription settings.`)
+            : (compact ? 'Tap to open on our website.' : 'Coaching sessions are booked and paid on our secure website.')}
         </Text>
       </View>
       <Ionicons name="open-outline" size={16} color={C.goldEyebrow} />

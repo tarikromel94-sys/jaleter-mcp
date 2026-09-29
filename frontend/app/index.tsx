@@ -263,11 +263,10 @@ function MainApp() {
   }, [auth.token]);
 
   // ---- Server-side membership gate ---------------------------------------
-  // The backend is the source of truth (`GET /api/user/membership`, driven by
-  // Stripe webhooks). Every sign-in / session-restore re-validates before the
-  // dashboard opens. `reconcile=true` additionally makes the backend query
-  // Stripe directly (webhook-independent safety net). The local cache only
-  // lets a returning ACTIVE member skip the loading gap.
+  // The backend is the source of truth (`GET /api/user/membership`, fed by
+  // the store-verified RevenueCat entitlement the app syncs via /iap/sync).
+  // Every sign-in / session-restore re-validates before the dashboard opens.
+  // The local cache only lets a returning ACTIVE member skip the loading gap.
   const checkMembership = useCallback(async (reconcile = false): Promise<{ active: boolean; processing: boolean }> => {
     if (!auth.token) return { active: false, processing: false };
     const data = await apiCall(`/api/user/membership${reconcile ? '?refresh=1' : ''}`, { method: 'GET' }, auth.token);
@@ -292,7 +291,9 @@ function MainApp() {
   // (purchase, restore, RENEWAL, login), mirror it to /api/iap/sync so the
   // server-side paywall stays in lock-step. Inactive snapshots are NEVER
   // synced — the client can extend premium but can never revoke it (expiry
-  // lapses server-side on its own). Stripe entitlement is never touched.
+  // lapses server-side on its own when the paid period ends). If the user is
+  // currently parked on the paywall (e.g. a renewal landed while the app was
+  // closed), a successful sync re-opens the dashboard.
   const iapSub = useSubscription();
   const lastIapSyncRef = React.useRef<string>('');
   useEffect(() => {
@@ -302,7 +303,9 @@ function MainApp() {
     const fingerprint = `${auth.user?.user_id || ''}|${ent.expirationDate || ''}`;
     if (fingerprint === lastIapSyncRef.current) return;
     lastIapSyncRef.current = fingerprint;
-    syncIapToBackend(auth.token, iapSub.customerInfo).catch(() => {});
+    syncIapToBackend(auth.token, iapSub.customerInfo)
+      .then((active) => { if (active) setStage((prev) => (prev === 'paywall' ? 'app' : prev)); })
+      .catch(() => {});
   }, [auth.token, auth.user?.user_id, iapSub.customerInfo]);
 
   // Route on every auth transition (login, signup, Google, session restore,
@@ -337,7 +340,8 @@ function MainApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.user?.user_id, auth.token]);
 
-  // On web, when Stripe redirects back with ?checkout=success&session_id=..., poll and show toast.
+  // On web, when a coaching Stripe checkout redirects back with
+  // ?checkout=success&session_id=..., poll and show a toast.
   const [globalToast, setGlobalToast] = useState<string | null>(null);
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined' || !auth.token) return;
@@ -356,8 +360,7 @@ function MainApp() {
         try {
           const status = await apiCall(`/api/payments/status/${sessionId}`, { method: 'GET' }, auth.token);
           if (status?.payment_status === 'paid') {
-            const label = status?.product === 'jaleter_premium' ? 'Membership activated.' : 'Session confirmed.';
-            setGlobalToast(label);
+            setGlobalToast('Session confirmed.');
             return;
           }
         } catch { /* keep polling */ }

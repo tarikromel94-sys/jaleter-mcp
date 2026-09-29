@@ -13,8 +13,8 @@ import * as WebBrowser from 'expo-web-browser';
 
 export const JALETER_ORIGIN = 'https://jaleter.com';
 
-// Membership purchases happen on the web (Stripe-hosted). The exact page is
-// environment-configurable so preview/staging builds can point elsewhere.
+// jaleter.com/membership = "create your account, then download the app and
+// subscribe through the App Store / Google Play" (no web Premium checkout).
 export const JALETER_SUBSCRIPTION_URL =
   process.env.EXPO_PUBLIC_JALETER_SUBSCRIPTION_URL || `${JALETER_ORIGIN}/membership`;
 

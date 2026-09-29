@@ -146,13 +146,10 @@ def _build_body(this_wk: dict, prev_wk: dict, alert_counts: dict) -> tuple[str, 
 
 async def _is_premium_active(user: dict) -> bool:
     """Match the server-side gate used by `require_active_membership`."""
-    try:
-        import stripe_service as _stripe  # local — avoids circular
-    except Exception:  # noqa: BLE001
-        return False
+    import entitlement_service
     if user.get("is_admin"):
         return False  # admins don't get digest — they're not paying subscribers
-    return bool(_stripe.has_active_membership(user))
+    return bool(entitlement_service.has_active_membership(user))
 
 
 async def send_weekly_digest(db, user: dict) -> dict[str, Any]:

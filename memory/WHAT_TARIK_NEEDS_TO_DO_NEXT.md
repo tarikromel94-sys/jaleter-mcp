@@ -1,6 +1,30 @@
 # WHAT TARIK NEEDS TO DO NEXT
 Jaleter Premium — $89.99/year auto-renewing subscription (single plan, both stores).
 
+## ARCHITECTURE (final, June 2026)
+- iPhone → Apple In-App Purchase → Jaleter Premium entitlement → Plaid + all premium features
+- Android → Google Play Billing → Jaleter Premium entitlement → Plaid + all premium features
+- Coaching ($75/hr) → Stripe on jaleter.com → coaching only
+- **There is NO Stripe path for Premium anymore.** Web visitors on jaleter.com/membership
+  create an account and are sent to the App Store / Google Play to subscribe in-app.
+- Existing web (Stripe) members are grandfathered until the period they already paid
+  for ends (their Stripe subscription was set to cancel-at-period-end on Sep 29 2026;
+  the only live one runs to Sep 6 2027). After that they subscribe in the app. Their
+  account + data are untouched.
+- Server-side validation: RevenueCat validates receipts with Apple/Google using the
+  credentials you upload to its dashboard (below). The app forwards the verified
+  entitlement (expiry date) to `POST /api/iap/sync`; the backend stores it on the
+  account and every premium API (incl. Plaid) checks it. Renewals extend it, cancel
+  keeps access until the paid period ends, expiry lapses automatically. No private
+  keys live in the app — only RevenueCat public SDK keys.
+
+## STRIPE DASHBOARD (one-time cleanup)
+- Developers → Webhooks: delete the endpoint `.../api/payments/webhook` (route removed;
+  it only served Premium subscriptions). Coaching uses Stripe Checkout polling, no webhook.
+- Payment Links: remove any Premium/membership Payment Link from jaleter.com — link to
+  jaleter.com/membership (this app's `/membership` route) or the store badges instead.
+- Do NOT delete the "Jaleter Annual Membership" product until Sep 2027 (grandfathered member).
+
 ⚠️ **PRODUCT ID — READ FIRST**
 You asked for the store product ID `jaleter_premium_annual`. Jaleter uses the
 **Emergent-managed RevenueCat** integration, which auto-generated its own product
@@ -82,6 +106,22 @@ Your two options:
    iOS + Android builds** from the deployment panel.
 3. FAQ section of the payments panel has the full RevenueCat go-live steps.
 4. Do NOT edit EXPO_PUBLIC_REVENUECAT_* keys in frontend/.env — they are real.
+5. Optional env for the web page + production-web paywall store buttons (set in the
+   deploy config once the listings are live): `EXPO_PUBLIC_APP_STORE_URL`,
+   `EXPO_PUBLIC_PLAY_STORE_URL` (default to https://jaleter.com/app).
+
+## CREDENTIALS / KEYS THE AGENT CANNOT CREATE (you must provide/upload)
+| Store | What | Where it goes |
+|---|---|---|
+| Apple | In-App Purchase Key (.p8) + Key ID + Issuer ID | RevenueCat dashboard → Apps → iOS app |
+| Apple | App Store Connect API Key (.p8) | RevenueCat dashboard → Apps → iOS app |
+| Apple | Auto-renewable subscription (product ID from RC dashboard, $89.99, 1 yr, subscription group) | App Store Connect → Monetization |
+| Apple | Paid Applications Agreement + banking + tax | App Store Connect → Business |
+| Google | Service-account JSON with Play Developer API + Financial data access | RevenueCat dashboard → Apps → Android app |
+| Google | Subscription (product ID from RC dashboard) + yearly base plan $89.99, ACTIVATED | Play Console → Monetize |
+| Google | Payments profile | Play Console → Setup |
+Nothing else is needed on the backend: no Apple shared secret / Google keys are stored
+in Jaleter's servers — RevenueCat holds them.
 
 ## READY TO SUBMIT (final checklist)
 - [ ] Apple: Paid Apps agreement active (banking + tax complete)

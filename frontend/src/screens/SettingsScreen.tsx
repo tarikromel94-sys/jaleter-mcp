@@ -309,7 +309,7 @@ export const SettingsScreen = ({ experience, setExperience, appearance, setAppea
       </View>
       <View style={[s.settingsSection, t.cardBg]}>
         <Text style={[s.settingsH3, t.textInk]}>Billing</Text>
-        <Text style={[s.settingsSub, t.textMuted]}>Payments and subscriptions are managed on our website.</Text>
+        <Text style={[s.settingsSub, t.textMuted]}>Premium is billed by the App Store / Google Play. Coaching is paid on jaleter.com.</Text>
         <BillingWebsiteNotice compact />
       </View>
       <AdminReleasePanel />
@@ -504,7 +504,7 @@ const LegalSheet = ({ visible, close, type }: any) => (
     ) : (
       <View>
         <Text style={s.privacyPara}>Jaleter provides budgeting and planning tools for educational purposes. It does not provide investment, tax, or legal advice.</Text>
-        <Text style={s.privacyPara}>Premium membership is $90 per year. Coaching is a separate $75 per session service. Renewal and cancellation details are shown before checkout.</Text>
+        <Text style={s.privacyPara}>Premium membership is $89.99 per year, billed through the App Store (iPhone) or Google Play (Android). Coaching is a separate $75 per session service paid on jaleter.com. Renewal and cancellation details are shown before purchase.</Text>
         <Text style={s.privacyPara}>Projections are estimates and are not guarantees of future performance.</Text>
       </View>
     )}

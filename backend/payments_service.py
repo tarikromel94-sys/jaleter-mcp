@@ -1,10 +1,9 @@
 """
-Stripe Checkout + Coaching booking service.
+Stripe Checkout — COACHING sessions only.
 
-Uses emergentintegrations' StripeCheckout helper (routes through the Emergent
-test proxy when the api key is `sk_test_emergent`). We use one-time `payment`
-mode for both products; the annual Premium membership is a fixed one-time
-$75 charge that grants a 365-day entitlement stored in MongoDB.
+Uses emergentintegrations' StripeCheckout helper in one-time `payment` mode.
+Jaleter Premium is NOT sold through Stripe (Apple IAP / Google Play Billing
+only — see entitlement_service.py); this module never touches entitlement.
 """
 from __future__ import annotations
 
@@ -22,20 +21,12 @@ from emergentintegrations.payments.stripe.checkout import (
 # Server-side product catalog. NEVER trust amounts sent from the client.
 PRODUCTS = {
     'coaching_session': {
-        'name': 'Coaching Session (30 min)',
-        'amount': 50.0,
+        'name': 'Private Financial Clarity Session (1 hour)',
+        'amount': 75.0,
         'currency': 'usd',
         'kind': 'coaching',
     },
-    'jaleter_premium': {
-        'name': 'Jaleter Annual Membership',
-        'amount': 90.0,
-        'currency': 'usd',
-        'kind': 'membership',
-    },
 }
-
-PremiumEntitlementDays = 365
 
 
 def get_stripe_client(webhook_url: Optional[str] = None) -> StripeCheckout:
@@ -181,31 +172,9 @@ async def fetch_and_sync_status(db, session_id: str) -> dict:
 
 
 async def _apply_paid_side_effects(db, txn: dict) -> None:
-    """Grant entitlements the first time we see the transaction as paid."""
+    """Confirm the coaching booking the first time we see the transaction as paid."""
     kind = txn.get('kind')
-    user_id = txn['user_id']
     now = datetime.now(timezone.utc)
-
-    if kind == 'membership':
-        # Extend or start a 365-day premium membership
-        user = await db.users.find_one({'user_id': user_id}, {'_id': 0})
-        current_expiry = None
-        if user and user.get('premium_expires_at'):
-            exp = user['premium_expires_at']
-            if isinstance(exp, datetime):
-                if exp.tzinfo is None:
-                    exp = exp.replace(tzinfo=timezone.utc)
-                current_expiry = exp
-        start_from = current_expiry if (current_expiry and current_expiry > now) else now
-        new_expiry = start_from + timedelta(days=PremiumEntitlementDays)
-        await db.users.update_one(
-            {'user_id': user_id},
-            {'$set': {
-                'premium_expires_at': new_expiry,
-                'premium_last_purchase_at': now,
-            }},
-        )
-
     if kind == 'coaching' and txn.get('booking_id'):
         await db.coaching_bookings.update_one(
             {'booking_id': txn['booking_id']},
@@ -259,17 +228,3 @@ async def list_user_bookings(db, user_id: str) -> list[dict]:
             row['paid_at'] = row['paid_at'].isoformat()
         out.append(row)
     return out
-
-
-async def get_membership_status(db, user: dict) -> dict:
-    exp = user.get('premium_expires_at')
-    if isinstance(exp, datetime):
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
-        active = exp > datetime.now(timezone.utc)
-        return {
-            'active': active,
-            'expires_at': exp.isoformat(),
-            'plan': 'jaleter_premium_annual' if active else None,
-        }
-    return {'active': False, 'expires_at': None, 'plan': None}

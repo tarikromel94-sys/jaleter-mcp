@@ -17,7 +17,7 @@ SplashScreen.preventAutoHideAsync();
 
 // RevenueCat MUST be configured at module scope — once per launch, before any
 // component mounts. A config error must never crash the app (paywall then
-// falls back to the Stripe web flow).
+// surfaces the real store error on Subscribe instead of crashing).
 try {
   initializeRevenueCat();
 } catch (err) {

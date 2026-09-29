@@ -15,18 +15,16 @@ export function formatBookingDate(iso: string): string {
   } catch { return iso; }
 }
 
-type CheckoutResult = { ok: boolean; paid?: boolean; canceled?: boolean; alreadyActive?: boolean; processing?: boolean; error?: string; sessionId?: string };
+type CheckoutResult = { ok: boolean; paid?: boolean; canceled?: boolean; error?: string; sessionId?: string };
 
-// Reusable Stripe Checkout runner. Opens hosted Checkout, waits for redirect,
-// then polls /api/payments/status until payment_status becomes 'paid'.
+// Stripe Checkout runner for COACHING sessions only (Premium is an Apple /
+// Google in-app subscription — see lib/revenuecat + PaywallScreen). Opens
+// hosted Checkout, waits for redirect, then polls /api/payments/status.
 export function usePayment() {
   const { token } = useAuth();
-  const start = useCallback(async (product: 'coaching_session' | 'jaleter_premium', extras?: { scheduled_at?: string }): Promise<CheckoutResult> => {
+  const start = useCallback(async (product: 'coaching_session', extras?: { scheduled_at?: string }): Promise<CheckoutResult> => {
     if (!token) return { ok: false, error: 'You must be signed in to purchase.' };
-    // Exact OS ('ios' | 'android' | 'web') — the backend stores this on the
-    // Stripe session + transaction row so Android-originated sales can be
-    // reported under Google's U.S. External Content Links program (Oct 2026).
-    const platform = Platform.OS;
+    const platform = Platform.OS === 'web' ? 'web' : 'mobile';
     let body: any = { product, platform };
     if (extras?.scheduled_at) body.scheduled_at = extras.scheduled_at;
     let created: any;
@@ -35,11 +33,6 @@ export function usePayment() {
     } catch (e: any) {
       return { ok: false, error: e?.message || 'Could not start checkout.' };
     }
-    // Duplicate-payment guard responses (no Checkout session created):
-    // membership already active on Stripe → unlock; bank payment still
-    // clearing → tell the user, never let them pay twice.
-    if (created?.already_active) return { ok: true, paid: true, alreadyActive: true };
-    if (created?.processing) return { ok: true, processing: true };
     const { url, session_id } = created;
     if (!url) return { ok: false, error: 'Payment provider did not return a URL.' };
 

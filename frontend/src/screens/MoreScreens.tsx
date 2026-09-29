@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, Pressable, ScrollView, Platform, ActivityIndicator, Linking } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
+import { View, Text, Pressable, ScrollView } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { useAuth, apiCall } from '@/src/AuthContext';
 import { C, D } from '@/src/jaleterTheme';
 import { openJaleter } from '@/src/jaleterLinks';
 import { PoweredByJaleter } from '@/src/PoweredByJaleter';
 import { s, useThemed, PageHeader, Toast as SharedToast, Sparkle } from '@/src/utils/appShared';
-import { usePayment, formatBookingDate } from '@/src/hooks/usePayment';
+import { formatBookingDate } from '@/src/hooks/usePayment';
+import { STORE_NAME, openStoreSubscriptions } from '@/src/storeLinks';
 
 export const CoachingScreen = ({ back }: any) => {
   const t = useThemed();
@@ -93,25 +93,18 @@ export const CoachingScreen = ({ back }: any) => {
 export const MembershipScreen = ({ back }: any) => {
   const t = useThemed();
   const { token } = useAuth();
-  const pay = usePayment();
   const [membership, setMembership] = useState<{
     active: boolean;
     status: string | null;
-    source?: 'stripe' | 'iap' | 'admin' | null;
+    source?: 'iap' | 'legacy_stripe' | 'admin' | null;
+    billing_platform?: string | null;
     plan: string | null;
     price: number | null;
     currency: string | null;
-    current_period_start: string | null;
     current_period_end: string | null;
     cancel_at_period_end: boolean;
     premium_since: string | null;
   } | null>(null);
-  // "Confirming…" state — set true after a subscribe attempt returns, cleared
-  // once the backend reports `active: true` (or after we give up polling).
-  const [confirming, setConfirming] = useState(false);
-  const [confirmMsg, setConfirmMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState<'subscribe' | 'portal' | 'cancel' | 'resume' | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!token) return null;
@@ -123,137 +116,40 @@ export const MembershipScreen = ({ back }: any) => {
   }, [token]);
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Polls /api/user/membership for up to ~60 seconds after Stripe redirect
-  // until the webhook flips the user to active. Never activates locally;
-  // this is a READ loop.
-  const waitForActivation = useCallback(async () => {
-    setConfirming(true);
-    setConfirmMsg('Payment received. Confirming membership…');
-    const started = Date.now();
-    while (Date.now() - started < 60_000) {
-      const m = await refresh();
-      if (m?.active) {
-        setConfirming(false);
-        setConfirmMsg(null);
-        setNotice('Membership activated. Thanks for supporting Jaleter!');
-        return;
-      }
-      await new Promise((r) => setTimeout(r, 2500));
-    }
-    setConfirming(false);
-    setConfirmMsg(null);
-    setNotice("We haven't heard back from Stripe yet. Pull to refresh in a moment — your access will unlock as soon as we receive Stripe's confirmation.");
-  }, [refresh]);
-
-  const startSubscribe = async () => {
-    if (!token) return;
-    setBusy('subscribe');
-    setNotice(null);
-    try {
-      const res = await pay.start('jaleter_premium');
-      // Regardless of the outcome (success, canceled, dismissed) we ask the
-      // backend for the authoritative status. The webhook — not the redirect
-      // — decides entitlement.
-      if (res.ok && res.sessionId) {
-        await waitForActivation();
-      } else if (res.error) {
-        setNotice(res.error);
-      }
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const openPortal = async () => {
-    if (!token) return;
-    setBusy('portal');
-    try {
-      const res = await apiCall('/api/payments/billing-portal', { method: 'POST', body: JSON.stringify({}) }, token);
-      if (res?.url) {
-        if (Platform.OS === 'web') { if (typeof window !== 'undefined') window.location.href = res.url; }
-        else { await WebBrowser.openBrowserAsync(res.url); }
-      }
-    } catch (e: any) {
-      setNotice(e?.message || 'Could not open the billing portal.');
-    } finally { setBusy(null); refresh(); }
-  };
-
-  const cancelAtPeriodEnd = async () => {
-    if (!token) return;
-    setBusy('cancel');
-    try {
-      await apiCall('/api/payments/cancel-at-period-end', { method: 'POST', body: JSON.stringify({}) }, token);
-      setNotice("Cancellation scheduled. You'll keep access until the end of the current billing period.");
-    } catch (e: any) { setNotice(e?.message || 'Could not schedule cancellation.'); }
-    finally { setBusy(null); refresh(); }
-  };
-
-  const resume = async () => {
-    if (!token) return;
-    setBusy('resume');
-    try {
-      await apiCall('/api/payments/resume', { method: 'POST', body: JSON.stringify({}) }, token);
-      setNotice('Your subscription will renew as normal.');
-    } catch (e: any) { setNotice(e?.message || 'Could not resume subscription.'); }
-    finally { setBusy(null); refresh(); }
-  };
-
-  const renewsOn = membership?.current_period_end
+  const endsOn = membership?.current_period_end
     ? new Date(membership.current_period_end).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
     : null;
+  // Which store bills this member: the platform recorded at purchase time,
+  // falling back to the device we're on.
+  const billedVia = membership?.billing_platform === 'android' ? 'Google Play'
+    : membership?.billing_platform === 'ios' ? 'App Store' : STORE_NAME;
+  const isLegacy = membership?.source === 'legacy_stripe';
 
   return (
     <ScrollView style={[s.page, t.pageBg]} contentContainerStyle={{ paddingBottom: 130 }}>
       <PageHeader title="Membership" subtitle="One simple annual plan." back={back} />
 
-      {/* Confirming banner — visible while polling the backend after Stripe redirect. */}
-      {confirming && (
-        <View style={{
-          padding: 12, borderRadius: 12, marginBottom: 10,
-          backgroundColor: t.dark ? '#26221c' : '#fbf6ec',
-          borderWidth: 1, borderColor: '#e6dcc5',
-          flexDirection: 'row', gap: 10, alignItems: 'center',
-        }}>
-          <ActivityIndicator color="#9a6d32" />
-          <Text style={[{ flex: 1, fontSize: 12 }, t.textInk]}>{confirmMsg}</Text>
-        </View>
-      )}
-      {notice && !confirming && (
-        <View style={{
-          padding: 12, borderRadius: 12, marginBottom: 10,
-          backgroundColor: t.dark ? '#1f2620' : '#f4f9ee',
-          borderWidth: 1, borderColor: '#c9d9c1',
-        }}>
-          <Text style={[{ fontSize: 12 }, t.textInk]}>{notice}</Text>
-        </View>
-      )}
-
       <View style={[s.priceCard, t.dark && { backgroundColor: D.surface, borderColor: D.border }]}>
         <Text style={{ color: C.goldEyebrow2, fontSize: 9, fontWeight: '800', letterSpacing: 1.2 }}>JALETER PREMIUM</Text>
         <Text style={{ fontSize: 18, fontWeight: '700', color: t.dark ? D.text : C.ink, marginTop: 4 }}>Annual Membership</Text>
         <Text style={[{ color: t.dark ? D.textMuted : '#8d867d', fontSize: 11, marginTop: 2 }]}>Everything you need to plan, track, and grow your money.</Text>
-        <Text style={[s.priceStrong, t.textInk, { marginTop: 6 }]}>$90<Text style={{ fontSize: 13, color: t.dark ? D.textMuted : '#8d867d', fontWeight: '500' }}> / year</Text></Text>
-        <Text style={{ fontSize: 10, color: t.dark ? D.textMuted : '#8d867d', marginTop: 2 }}>$7.50 / month equivalent · auto-renews annually</Text>
+        <Text style={[s.priceStrong, t.textInk, { marginTop: 6 }]}>$89.99<Text style={{ fontSize: 13, color: t.dark ? D.textMuted : '#8d867d', fontWeight: '500' }}> / year</Text></Text>
+        <Text style={{ fontSize: 10, color: t.dark ? D.textMuted : '#8d867d', marginTop: 2 }}>Less than $7.50 / month · auto-renews annually via {STORE_NAME}</Text>
 
-        {/* Membership state pill: ACTIVE / PAST DUE / CANCELING / INACTIVE. */}
+        {/* Membership state pill */}
         {membership && (
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }} testID="membership-state">
             {membership.active ? (
               <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: '#4c8b5622' }}>
                 <Text style={{ color: '#4c8b56', fontSize: 10, fontWeight: '800' }}>
-                  {membership.cancel_at_period_end ? `ACTIVE · ends ${renewsOn || ''}` : `ACTIVE · renews ${renewsOn || ''}`}
+                  {membership.source === 'admin' ? 'ACTIVE'
+                    : isLegacy ? `ACTIVE · paid through ${endsOn || ''}`
+                    : `ACTIVE · renews ${endsOn || ''}`}
                 </Text>
               </View>
             ) : (
               <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: '#8b643722' }}>
-                <Text style={{ color: '#8b6437', fontSize: 10, fontWeight: '800' }}>
-                  {membership.status === 'past_due' ? 'PAYMENT ISSUE' : (membership.status || 'INACTIVE').toUpperCase()}
-                </Text>
-              </View>
-            )}
-            {membership.status === 'past_due' && (
-              <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: '#b0453d22' }}>
-                <Text style={{ color: '#b0453d', fontSize: 10, fontWeight: '800' }}>UPDATE PAYMENT METHOD</Text>
+                <Text style={{ color: '#8b6437', fontSize: 10, fontWeight: '800' }}>INACTIVE</Text>
               </View>
             )}
           </View>
@@ -261,7 +157,7 @@ export const MembershipScreen = ({ back }: any) => {
 
         <View style={{ marginTop: 12, gap: 6 }}>
           {[
-            'Secure bank & account syncing',
+            'Secure bank & account syncing (Plaid)',
             'Budgeting + transaction tracking',
             'Reports & spending insights',
             'Net Worth + Set Aside goals',
@@ -278,79 +174,40 @@ export const MembershipScreen = ({ back }: any) => {
         </View>
       </View>
 
-      {/* Action buttons — different set depending on membership state and
-          BILLING SOURCE. Stripe members get the Stripe portal/cancel controls;
-          Apple/Google subscribers manage in their store settings. On iOS the
-          Stripe subscribe path is hidden entirely (Apple guideline 3.1.1 —
-          purchases must go through StoreKit; the Paywall handles that flow). */}
+      {/* Grandfathered web members: their already-paid period is honored, but
+          it will not renew — after it ends they subscribe in the app. */}
+      {isLegacy && (
+        <View style={{ marginTop: 14, padding: 12, borderRadius: 12, backgroundColor: t.dark ? '#26221c' : '#fbf6ec', borderWidth: 1, borderColor: '#e6dcc5' }} testID="membership-legacy-notice">
+          <Text style={[{ fontSize: 12, fontWeight: '700' }, t.textInk]}>Your web membership is paid through {endsOn}.</Text>
+          <Text style={[{ fontSize: 11, marginTop: 4, lineHeight: 15 }, t.textMuted]}>
+            Jaleter Premium is now billed through the {STORE_NAME}. You keep full access until then with no further charges. When that date arrives, tap Subscribe in the app to continue — your data and account stay exactly as they are.
+          </Text>
+        </View>
+      )}
+
+      {/* Billing management lives in the store that sold the subscription. */}
       <View style={{ marginTop: 14, gap: 10 }}>
-        {!membership?.active && Platform.OS !== 'ios' && (
-          <Pressable
-            onPress={startSubscribe}
-            disabled={busy === 'subscribe' || confirming}
-            style={{
-              backgroundColor: '#9a6d32', paddingVertical: 14, borderRadius: 12, alignItems: 'center',
-              opacity: (busy === 'subscribe' || confirming) ? 0.6 : 1,
-            }}
-            testID="membership-subscribe"
-          >
-            {busy === 'subscribe'
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={{ color: '#fff', fontWeight: '800', fontSize: 14 }}>Start membership — $90 / year</Text>}
-          </Pressable>
-        )}
         {membership?.active && membership.source === 'iap' && (
           <Pressable
-            onPress={() => Linking.openURL(Platform.OS === 'android'
-              ? 'https://play.google.com/store/account/subscriptions'
-              : 'https://apps.apple.com/account/subscriptions').catch(() => {})}
+            onPress={openStoreSubscriptions}
             style={{ borderWidth: 1, borderColor: '#c9b98f', paddingVertical: 12, borderRadius: 12, alignItems: 'center' }}
             testID="membership-manage-store"
           >
-            <Text style={{ color: '#8b6437', fontWeight: '800', fontSize: 13 }}>
-              Manage in {Platform.OS === 'android' ? 'Google Play' : 'App Store'} settings
+            <Text style={{ color: '#8b6437', fontWeight: '800', fontSize: 13 }}>Manage in {billedVia} settings</Text>
+          </Pressable>
+        )}
+        {membership && !membership.active && (
+          <View style={{ padding: 12, borderRadius: 12, backgroundColor: t.dark ? '#26221c' : '#fbf6ec', borderWidth: 1, borderColor: '#e6dcc5' }} testID="membership-inactive-notice">
+            <Text style={[{ fontSize: 11, lineHeight: 15 }, t.textMuted]}>
+              Subscribe to Jaleter Premium from the {STORE_NAME} inside the app to unlock every feature. Already subscribed? Use Restore Purchase on the subscribe screen.
             </Text>
-          </Pressable>
-        )}
-        {membership?.active && membership.source !== 'iap' && !membership.cancel_at_period_end && (
-          <>
-            <Pressable
-              onPress={openPortal}
-              disabled={busy === 'portal'}
-              style={{ borderWidth: 1, borderColor: '#c9b98f', paddingVertical: 12, borderRadius: 12, alignItems: 'center' }}
-              testID="membership-manage"
-            >
-              {busy === 'portal' ? <ActivityIndicator color="#8b6437" /> : <Text style={{ color: '#8b6437', fontWeight: '800', fontSize: 13 }}>Manage subscription</Text>}
-            </Pressable>
-            <Pressable
-              onPress={cancelAtPeriodEnd}
-              disabled={busy === 'cancel'}
-              style={{ paddingVertical: 12, borderRadius: 12, alignItems: 'center' }}
-              testID="membership-cancel"
-            >
-              {busy === 'cancel'
-                ? <ActivityIndicator color="#b0453d" />
-                : <Text style={{ color: '#b0453d', fontWeight: '600', fontSize: 12 }}>Cancel at period end</Text>}
-            </Pressable>
-          </>
-        )}
-        {membership?.active && membership.source !== 'iap' && membership.cancel_at_period_end && (
-          <Pressable
-            onPress={resume}
-            disabled={busy === 'resume'}
-            style={{ backgroundColor: '#4c8b56', paddingVertical: 14, borderRadius: 12, alignItems: 'center' }}
-            testID="membership-resume"
-          >
-            {busy === 'resume'
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Resume subscription</Text>}
-          </Pressable>
+          </View>
         )}
       </View>
       <Text style={{ fontSize: 10, color: t.dark ? D.textMuted : '#8d867d', textAlign: 'center', marginTop: 12, lineHeight: 14 }}>
-        {membership?.source === 'iap'
-          ? `Membership is $90.00 USD per year, billed through your ${Platform.OS === 'android' ? 'Google Play' : 'Apple ID'} subscription. It renews automatically each year unless you cancel at least 24 hours before the renewal date in your ${Platform.OS === 'android' ? 'Google Play' : 'App Store'} subscription settings.`
-          : 'Membership is $90.00 USD per year, billed by Stripe. Your subscription renews automatically each year at $90.00 USD unless you cancel at least 24 hours before the renewal date. You can cancel, update your card, or download invoices any time from Manage subscription or at jaleter.com/billing.'}
+        {isLegacy
+          ? 'Your remaining paid period was purchased on jaleter.com and is honored in full. No further web charges will occur.'
+          : `Jaleter Premium is $89.99 USD per year, billed through your ${billedVia} subscription. It renews automatically each year unless you cancel at least 24 hours before the renewal date in your ${billedVia} subscription settings. Canceling keeps access until the end of the paid period.`}
       </Text>
     </ScrollView>
   );
@@ -369,7 +226,7 @@ export const MoreScreen = ({ navigate, linkedCount, onBack }: any) => {
         {[
           ['coach','Jaleter Coach','AI insights on your money','sparkles-outline'],
           ['coaching','Book Coaching','Schedule + pay at jaleter.com','chatbubble-outline'],
-          ['membership','Membership','Manage at jaleter.com','sparkles-outline'],
+          ['membership','Membership',`Billed via ${STORE_NAME}`,'sparkles-outline'],
           ['settings','Settings','Profile, alerts, appearance','settings-outline'],
         ].map(([id, name, sub, icon]) => (
           <Pressable key={id} style={[s.moreGridBtn, t.cardBg]} onPress={() => navigate(id)} testID={`more-${id}`}>
