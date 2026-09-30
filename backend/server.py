@@ -289,6 +289,57 @@ async def require_active_membership(current_user: dict = Depends(get_current_use
 
 
 # ------- Startup: indexes -------
+# ---- App Review account (Apple + Google reviewers) -----------------------
+# Dedicated reviewer login with PERMANENT premium so store review never has
+# to buy a subscription. `premium_permanent` is evaluated by the same
+# server-side entitlement path as everyone else (entitlement_service) — no
+# special code paths a regular user could exploit.
+# SELF-HEALING: seeded on every boot AND re-asserted on every login attempt
+# with the configured credentials, so a reviewer (or anyone) deleting the
+# account, changing its password or resetting it can never break the login
+# Google/Apple were given. Delete / password-reset are additionally refused
+# for this account (see the routes below).
+def _review_credentials() -> tuple[str, str]:
+    return ((os.environ.get('APP_REVIEW_EMAIL') or '').strip().lower(),
+            os.environ.get('APP_REVIEW_PASSWORD') or '')
+
+
+async def ensure_review_account() -> None:
+    try:
+        review_email, review_password = _review_credentials()
+        if not review_email or not review_password:
+            raise ValueError('APP_REVIEW_EMAIL / APP_REVIEW_PASSWORD not set — seeding skipped')
+        existing = await db.users.find_one({'email': review_email}, {'_id': 0, 'password_hash': 1})
+        base = {
+            'email_verified': True,
+            'provider': 'password',
+            'premium_permanent': True,
+            'is_review_account': True,
+        }
+        if existing:
+            # Only rewrite the hash when it no longer matches (cheap + idempotent).
+            if not existing.get('password_hash') or not verify_password(review_password, existing['password_hash']):
+                base['password_hash'] = hash_password(review_password)
+            await db.users.update_one({'email': review_email}, {'$set': base})
+        else:
+            await db.users.insert_one({
+                'user_id': new_user_id(),
+                'email': review_email,
+                'name': 'Jaleter Review',
+                'created_at': datetime.now(timezone.utc),
+                'password_hash': hash_password(review_password),
+                **base,
+            })
+        logger.info('App Review premium account ready: %s', review_email)
+    except Exception as e:  # noqa: BLE001
+        logger.warning('App Review account seeding failed: %s', e)
+
+
+def _is_review_login(email: str, password: str) -> bool:
+    review_email, review_password = _review_credentials()
+    return bool(review_email) and email.strip().lower() == review_email and password == review_password
+
+
 @app.on_event('startup')
 async def _startup():
     await db.users.create_index('email', unique=True)
@@ -427,38 +478,8 @@ async def _startup():
     #  exclusively through Apple IAP / Google Play Billing. Stripe remains for
     #  one-off coaching sessions only; see payments_service.py.)
 
-    # ---- Apple App Review account (idempotent) ---------------------------
-    # Dedicated reviewer login with PERMANENT premium so App Review never has
-    # to buy a subscription. `premium_permanent` is evaluated by the same
-    # server-side entitlement path as everyone else (entitlement_service) —
-    # no special code paths a regular user could exploit. Re-seeded on every
-    # boot, so even if a reviewer exercises "Delete Account", the login returns.
-    try:
-        review_email = (os.environ.get('APP_REVIEW_EMAIL') or '').strip().lower()
-        review_password = os.environ.get('APP_REVIEW_PASSWORD') or ''
-        if not review_email or not review_password:
-            raise ValueError('APP_REVIEW_EMAIL / APP_REVIEW_PASSWORD not set — seeding skipped')
-        existing = await db.users.find_one({'email': review_email})
-        base = {
-            'email_verified': True,
-            'provider': 'password',
-            'password_hash': hash_password(review_password),
-            'premium_permanent': True,
-            'is_review_account': True,
-        }
-        if existing:
-            await db.users.update_one({'email': review_email}, {'$set': base})
-        else:
-            await db.users.insert_one({
-                'user_id': new_user_id(),
-                'email': review_email,
-                'name': 'Apple Review',
-                'created_at': datetime.now(timezone.utc),
-                **base,
-            })
-        logger.info('App Review premium account ready: %s', review_email)
-    except Exception as e:  # noqa: BLE001
-        logger.warning('App Review account seeding failed: %s', e)
+    # ---- App Review account (Apple + Google) ------------------------------
+    await ensure_review_account()
 
 
 @app.on_event('shutdown')
@@ -578,7 +599,11 @@ async def resend_verification(request: Request, current_user: dict = Depends(get
 @api_router.post('/auth/login', response_model=AuthResponse)
 @limiter.limit('5/minute')
 async def login(payload: LoginRequest, request: Request):
-    user = await db.users.find_one({'email': payload.email.lower()}, {'_id': 0})
+    # Store-review credentials always work: re-seed on demand if the account
+    # was deleted or its password changed since the last boot.
+    if _is_review_login(payload.email, payload.password):
+        await ensure_review_account()
+    user = await db.users.find_one({'email': payload.email.strip().lower()}, {'_id': 0})
     if not user or not user.get('password_hash'):
         raise HTTPException(status_code=401, detail='Invalid email or password')
     if not verify_password(payload.password, user['password_hash']):
@@ -608,6 +633,9 @@ async def delete_account(request: Request, current_user: dict = Depends(get_curr
       9. Delete sessions, password_resets, email_verifications
      10. Finally delete the user row itself
     """
+    if current_user.get('is_review_account'):
+        raise HTTPException(status_code=403, detail='The store review account cannot be deleted.')
+
     user_id = current_user['user_id']
     # 1. Password re-verification for password-provider accounts.
     provider = (current_user.get('provider') or 'password').lower()
@@ -1080,8 +1108,9 @@ async def forgot_password(payload: ForgotPasswordRequest, request: Request):
     """
     email = payload.email.lower()
     user = await db.users.find_one({'email': email, 'provider': 'password'}, {'_id': 0})
-    if not user:
-        # Same response shape regardless — do not leak existence.
+    if not user or user.get('is_review_account'):
+        # Same response shape regardless — do not leak existence. The store
+        # review account can never have its password reset (it is fixed by env).
         return {'ok': True, 'delivered': False}
 
     token = secrets.token_urlsafe(32)
