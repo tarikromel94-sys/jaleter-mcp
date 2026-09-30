@@ -91,6 +91,23 @@ export async function bindRevenueCatIdentity(uid: string | null): Promise<void> 
   identityListeners.forEach((fn) => { try { fn(); } catch {} });
 }
 
+/** Is the SDK's CURRENT customer anonymous?
+ *  IMPORTANT: never judge this from `customerInfo.originalAppUserId` — that
+ *  field is the FIRST id the customer was created with and stays
+ *  `$RCAnonymousID:…` forever after a native `logIn()` aliases the anonymous
+ *  customer to the Jaleter user id. On real iPhones that false positive
+ *  blocked every purchase with "account link failed (anonymous customer)". */
+export async function rcIsAnonymous(): Promise<{ anonymous: boolean; appUserId: string }> {
+  let appUserId = '';
+  try { appUserId = String(await Purchases.getAppUserID()); } catch {}
+  try {
+    const anon = await Purchases.isAnonymous();
+    return { anonymous: !!anon, appUserId };
+  } catch {
+    return { anonymous: !appUserId || appUserId.startsWith('$RCAnonymousID:'), appUserId };
+  }
+}
+
 /** Self-healing pre-purchase check. Re-runs configure + identity binding on
  *  demand (the launch-time attempt can fail silently on device) and returns
  *  either a linked customer or the REAL underlying error so the paywall can
@@ -107,12 +124,11 @@ export async function ensureRcReady(uid: string | null | undefined): Promise<{ o
     }
     if (!configured) initializeRevenueCat();
     await bindRevenueCatIdentity(String(uid));
-    const info = await Purchases.getCustomerInfo();
-    const id = info.originalAppUserId || '';
-    if (id.startsWith('$RCAnonymousID:')) {
-      return { ok: false, appUserId: id, error: 'account link failed (anonymous customer)' };
+    const { anonymous, appUserId } = await rcIsAnonymous();
+    if (anonymous) {
+      return { ok: false, appUserId, error: 'account link failed (anonymous customer)' };
     }
-    return { ok: true, appUserId: id };
+    return { ok: true, appUserId };
   } catch (e: any) {
     return { ok: false, error: String(e?.message || e || 'unknown error') };
   }
@@ -156,8 +172,8 @@ function useSubscriptionContext() {
   const purchaseMutation = useMutation({
     mutationFn: async (packageToPurchase: PurchasesPackage) => {
       // Choke point: never let an anonymous purchase through.
-      const id = (await Purchases.getCustomerInfo()).originalAppUserId;
-      if (id.startsWith('$RCAnonymousID:')) throw new Error('identity_not_ready');
+      const { anonymous } = await rcIsAnonymous();
+      if (anonymous) throw new Error('identity_not_ready');
       const { customerInfo } = await Purchases.purchasePackage(packageToPurchase);
       return customerInfo;
     },
@@ -170,8 +186,14 @@ function useSubscriptionContext() {
   const isSubscribed =
     customerInfoQuery.data?.entitlements.active?.[REVENUECAT_ENTITLEMENT_IDENTIFIER] !== undefined;
 
-  const originalAppUserId = customerInfoQuery.data?.originalAppUserId;
-  const identityReady = !!originalAppUserId && !originalAppUserId.startsWith('$RCAnonymousID:');
+  // Current (not original) app user id — see rcIsAnonymous().
+  const appUserIdQuery = useQuery({
+    queryKey: ['revenuecat', 'app-user-id'],
+    queryFn: async () => (await rcIsAnonymous()),
+    enabled: rcEnabled,
+    staleTime: 60 * 1000,
+  });
+  const identityReady = !!appUserIdQuery.data && !appUserIdQuery.data.anonymous;
 
   return {
     customerInfo: customerInfoQuery.data,

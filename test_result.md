@@ -1681,3 +1681,6 @@ Add Apple Sign-In to Login + Signup screens.
 - Testing agent iteration_88: 16/16 backend pytest (tests/test_iteration88_iap_only.py) + all frontend flows PASS (paywall, test-store purchase → unlock, membership screen, settings billing, restore, /membership web page, tabs regression). Obsolete Stripe-Premium test files removed (test_stripe_subscription, test_iteration80_duplicate_guard, test_iteration11_payments).
 - USER ACTIONS: Stripe Dashboard → delete /api/payments/webhook endpoint + remove Premium payment links from jaleter.com; ASC + Play Console products/credentials per /app/memory/WHAT_TARIK_NEEDS_TO_DO_NEXT.md; redeploy + rebuild.
 - Review-account self-heal: login re-seeds if row deleted or hash changed; delete 403; forgot-password no-op. Verified locally (sabotage tests) + prod login 200.
+
+## Iteration 89 (TestFlight Subscribe fix — anonymous-customer false positive)
+- Root cause: originalAppUserId stays $RCAnonymousID after native logIn(); identity checks blocked every real-device purchase. Fixed with rcIsAnonymous() (getAppUserID/isAnonymous). Testing agent: subscribe + restore + console clean. User must redeploy + rebuild.
