@@ -123,10 +123,31 @@ export async function ensureRcReady(uid: string | null | undefined): Promise<{ o
       configured = false;
     }
     if (!configured) initializeRevenueCat();
-    await bindRevenueCatIdentity(String(uid));
-    const { anonymous, appUserId } = await rcIsAnonymous();
+    let bindError = '';
+    try {
+      await bindRevenueCatIdentity(String(uid));
+    } catch (e: any) {
+      bindError = String(e?.message || e || 'logIn failed');
+    }
+    let { anonymous, appUserId } = await rcIsAnonymous();
     if (anonymous) {
-      return { ok: false, appUserId, error: 'account link failed (anonymous customer)' };
+      // Last resort on native: re-configure the SDK with an explicit app user
+      // id (RevenueCat allows re-configure; it logs a warning). This covers
+      // devices where logIn() resolves but the identity never sticks.
+      try {
+        Purchases.configure({ apiKey: getRevenueCatApiKey(), appUserID: String(uid) });
+        identityListeners.forEach((fn) => { try { fn(); } catch {} });
+        ({ anonymous, appUserId } = await rcIsAnonymous());
+      } catch (e: any) {
+        bindError = bindError || String(e?.message || e || 'configure failed');
+      }
+    }
+    if (anonymous) {
+      return {
+        ok: false,
+        appUserId,
+        error: `account link failed — RevenueCat user "${appUserId || 'none'}" is anonymous, expected "${uid}"${bindError ? ` · ${bindError}` : ''}`,
+      };
     }
     return { ok: true, appUserId };
   } catch (e: any) {
