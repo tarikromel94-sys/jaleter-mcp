@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 90 — Paywall diagnostics + error-surfacing verification on web preview 390x844 (RevenueCat Test Store). All 4 requested scenarios PASS. (1) DIAGNOSTICS: Fresh signup USER1 (test_i90a_1790804522818@example.com) → hard paywall. Tapping paywall-plan-card 3 times revealed paywall-diagnostics with EXACTLY the expected 7 lines: 'RC user: user_c15bc2d4344e (linked)' / 'Jaleter user: user_c15bc2d4344e' / 'store: web TEST STORE · identityReady=true' / 'canMakePayments: true' / 'offering: default · packages: $rc_annual' / 'package: $rc_annual · product: pro.annual · $79.99' / 'entitlement active: false'. 3 more taps → paywall-diagnostics element removed from DOM (hidden). All content-checks (linked, not-ANONYMOUS, identityReady=true, TEST STORE, $rc_annual pkg, entitlement=false, user_ prefix matches on both RC and Jaleter user) pass. (2) BUY→CANCEL→BUY→CONFIRM: paywall-iap-buy → paywall-iap-confirm appears with paywall-notice EMPTY (no error text) → paywall-iap-confirm-no closes the confirm box, no crash, paywall-plan-card still present. paywall-iap-buy again → paywall-iap-confirm-yes → RC Test Store 'Test valid purchase' dialog → dashboard unlocks (paywall-plan-card removed, 'Good evening' home indicator visible). (3) RESTORE (fresh USER2 test_i90b_1790804558876@example.com): tapping paywall-iap-restore surfaces paywall-notice = 'No previous App Store purchases were found for this account.' — verbatim expected copy including the App Store wording. (4) CONSOLE CLEAN: 48 console lines captured, 0 page errors, 0 lines matching /canMakePayments|rcIsAnonymous|describeRcError/ combined with error/TypeError/'is not a function' patterns. The new hidden diagnostics (paywall-plan-card 3-tap toggle) and never-fail-silently notices (canMakePayments block, describeRcError-formatted purchase failures, cancellation acknowledgement) are wired correctly.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter90/00_user1_after_signup.jpeg",
+    "/app/test_reports/screenshots/iter90/01_diag_shown.jpeg",
+    "/app/test_reports/screenshots/iter90/02_confirm_visible.jpeg",
+    "/app/test_reports/screenshots/iter90/03_after_purchase.jpeg",
+    "/app/test_reports/screenshots/iter90/04_user2_paywall.jpeg",
+    "/app/test_reports/screenshots/iter90/05_after_restore.jpeg"
+  ],
+  "action_items": [
+    "None required — the new paywall diagnostics + error-surfacing changes are verified end-to-end on the web preview surrogate. TestFlight regression fix ready for App Store resubmission.",
+    "Non-blocking (unchanged from iter_88/89): RC Test Store shows the $79.99 placeholder price on web preview instead of the App Store Connect $89.99. Documented in the review request as expected."
+  ],
+  "critical_code_review_comments": [
+    "PaywallScreen.tsx:34-51 — showDiagnostics correctly gates on diagTaps.current >= 3 AND resets counter; the toggle behavior (`if (diag) { setDiag(''); return; }`) means the SECOND 3-tap cycle hides it, matching the requested flow. Verified in test.",
+    "PaywallScreen.tsx:166-174 — Purchases.canMakePayments() is called inside a try/catch (silent on error). Because the diag showed canMakePayments=true, the block path did not fire; if it ever throws we degrade gracefully rather than block a legitimate purchase — good.",
+    "PaywallScreen.tsx:179-190 — describeRcError() composes code + message + underlyingErrorMessage and de-dupes with Array.from(new Set(...)) — every purchase outcome (success/cancel/failure) surfaces a visible paywall-notice, so the TestFlight 'nothing happens' report is impossible with this code path.",
+    "PaywallScreen.tsx:211-219 — describeRcError only pulls e?.userInfo?.readableErrorCode / e?.code / e?.message / underlyingErrorMessage. Safe against undefined e (early return '')."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only)", "frontend": "100% (4/4 scenarios pass)"},
+  "seed_data_creation": "Two throwaway users registered via UI: test_i90a_1790804522818@example.com and test_i90b_1790804558876@example.com. Housekeeping: db.users.deleteMany({email: /^test_i90/}).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Signup coordinates on 390x844 web preview: Welcome 'Get Started' (195,735), Onboarding 'Continue' (195,677), 3 <input> elements set via native HTMLInputElement value-setter + 'input' event, T&C (32,600), 'Create account' (195,659). Diagnostics testID is 'paywall-diagnostics'; it only exists in the DOM when the 3-tap toggle is on. Restore notice uses hardcoded 'App Store' string via STORE_NAME on web (iOS default), not the running Platform.OS.",
+  "rca_of_issue": "Original TestFlight bug: on device, tapping 'Subscribe Now' did nothing (no spinner, no sheet, no visible notice). The paywall now (a) surfaces canMakePayments() failures with an explicit Screen-Time-restrictions notice, (b) surfaces every StoreKit/RevenueCat error via describeRcError() including cancellations ('Purchase canceled — no charge was made'), (c) exposes a hidden 3-tap diagnostics panel that prints RC appUserId, identity state, canMakePayments result, offering identifier, package identifier and price, and entitlement state — enough for a TestFlight tester to report exactly what the device sees. Web preview cannot reproduce the original device-only silent failure, but all four instrumentation surfaces (diagnostics toggle, empty notice at confirm, restore-no-purchases notice, absence of canMakePayments/rcIsAnonymous/describeRcError console errors) are verified working."
+}

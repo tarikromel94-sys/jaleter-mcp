@@ -1684,3 +1684,6 @@ Add Apple Sign-In to Login + Signup screens.
 
 ## Iteration 89 (TestFlight Subscribe fix — anonymous-customer false positive)
 - Root cause: originalAppUserId stays $RCAnonymousID after native logIn(); identity checks blocked every real-device purchase. Fixed with rcIsAnonymous() (getAppUserID/isAnonymous). Testing agent: subscribe + restore + console clean. User must redeploy + rebuild.
+
+## Iteration 90 (Paywall never-silent + hidden diagnostics)
+- User: TestFlight Subscribe does "nothing" (no spinner/sheet/text) on new build. Paywall now surfaces EVERY outcome incl. cancel (code · message · underlying), checks Purchases.canMakePayments(), and tapping the price card 3× shows RC diagnostics (app user id/identity, store mode, canMakePayments, offering/package/product, entitlement). Testing agent iter 90: all pass. Needs redeploy + new build; user must report the notice / diagnostics text from device.

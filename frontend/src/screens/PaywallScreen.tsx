@@ -4,7 +4,8 @@ import Ionicons from '@react-native-vector-icons/ionicons';
 import { openJaleter } from '@/src/jaleterLinks';
 import { openStoreListing, STORE_NAME } from '@/src/storeLinks';
 import { useAuth } from '@/src/AuthContext';
-import { useSubscription, rcEnabled, rcUsingTestStore, syncIapToBackend, ensureRcReady, REVENUECAT_ENTITLEMENT_IDENTIFIER } from '@/src/lib/revenuecat';
+import Purchases from 'react-native-purchases';
+import { useSubscription, rcEnabled, rcUsingTestStore, syncIapToBackend, ensureRcReady, rcIsAnonymous, REVENUECAT_ENTITLEMENT_IDENTIFIER } from '@/src/lib/revenuecat';
 import { F } from '@/src/jaleterTheme';
 
 /* ---------------- Membership Required (hard paywall) ---------------- */
@@ -23,7 +24,31 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
   const [busy, setBusy] = useState<null | 'refresh' | 'iap' | 'restore'>(null);
   const [notice, setNotice] = useState('');
   const [confirmTestBuy, setConfirmTestBuy] = useState(false);
+  const [diag, setDiag] = useState<string>('');
+  const diagTaps = useRef(0);
   const busyRef = useRef(false);
+
+  // Hidden diagnostics: tap the price card 3× to print the live RevenueCat
+  // state (app user id, identity, offering, package, store) — lets a tester
+  // report exactly what the device sees without a debugger.
+  const showDiagnostics = async () => {
+    diagTaps.current += 1;
+    if (diagTaps.current < 3) return;
+    diagTaps.current = 0;
+    if (diag) { setDiag(''); return; }
+    const lines: string[] = [];
+    try {
+      const { anonymous, appUserId } = await rcIsAnonymous();
+      lines.push(`RC user: ${appUserId || '(none)'} ${anonymous ? '(ANONYMOUS)' : '(linked)'}`);
+    } catch (e: any) { lines.push(`RC user: error ${String(e?.message || e)}`); }
+    lines.push(`Jaleter user: ${user?.user_id || '(none)'}`);
+    lines.push(`store: ${Platform.OS} ${rcUsingTestStore ? 'TEST STORE' : 'LIVE'} · identityReady=${String(iap.identityReady)}`);
+    try { lines.push(`canMakePayments: ${String(await Purchases.canMakePayments())}`); } catch (e: any) { lines.push(`canMakePayments: error ${String(e?.message || e)}`); }
+    lines.push(`offering: ${iap.offerings?.current?.identifier || '(none)'} · packages: ${(iap.offerings?.current?.availablePackages || []).map((p: any) => p.identifier).join(',') || '(none)'}`);
+    lines.push(`package: ${annualPkg?.identifier || '(none)'} · product: ${annualPkg?.product?.identifier || '(none)'} · ${annualPkg?.product?.priceString || '(no price)'}`);
+    lines.push(`entitlement active: ${String(!!iap.customerInfo?.entitlements?.active?.[REVENUECAT_ENTITLEMENT_IDENTIFIER])}`);
+    setDiag(lines.join('\n'));
+  };
   useEffect(() => { busyRef.current = !!busy; }, [busy]);
 
   // Annual package from the current offering (never hardcode product ids or
@@ -137,16 +162,30 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
     // Test Store (preview/dev): require a deliberate second tap.
     if (rcUsingTestStore && !confirmTestBuy) { setBusy(null); setConfirmTestBuy(true); return; }
     setConfirmTestBuy(false);
+    // Device-level block (Screen Time / parental restrictions / MDM) — StoreKit
+    // rejects instantly and silently otherwise.
+    try {
+      const allowed = await Purchases.canMakePayments();
+      if (!allowed) {
+        setBusy(null);
+        setNotice(`This device isn't allowed to make in-app purchases. Check Settings → Screen Time → Content & Privacy Restrictions → iTunes & App Store Purchases → In-app Purchases, then try again.`);
+        return;
+      }
+    } catch {}
     try {
       const info = await iap.purchase(pkg);
       const ok = await finishIapUnlock(info);
       if (!ok) setNotice("The purchase completed but the subscription isn't active yet. Tap Restore Purchase in a moment.");
     } catch (e: any) {
-      const msg = String(e?.message || e || '');
-      if (!e?.userCancelled && !/cancel/i.test(msg)) {
-        setNotice(msg === 'identity_not_ready'
-          ? 'Preparing your account for purchase — try again in a moment.'
-          : `Purchase failed: ${msg}`);
+      // NEVER fail silently — every outcome gets a visible line, including a
+      // cancel (so "nothing happened" can't be mistaken for a dead button).
+      const msg = describeRcError(e);
+      if (e?.userCancelled) {
+        setNotice(`Purchase canceled — no charge was made. ${msg ? `(${msg})` : ''}`.trim());
+      } else if (String(e?.message || e) === 'identity_not_ready') {
+        setNotice('Preparing your account for purchase — try again in a moment.');
+      } else {
+        setNotice(`Purchase failed: ${msg || 'unknown error'}`);
       }
     } finally { setBusy(null); }
   };
@@ -164,9 +203,20 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
       const ok = await finishIapUnlock(info);
       if (!ok) setNotice(`No previous ${STORE_NAME} purchases were found for this account.`);
     } catch (e: any) {
-      setNotice(`Restore failed: ${String(e?.message || e || '')}`);
+      setNotice(`Restore failed: ${describeRcError(e) || 'unknown error'}`);
     } finally { setBusy(null); }
   };
+
+  // Human-readable RevenueCat / StoreKit error (code + message + underlying).
+  function describeRcError(e: any): string {
+    if (!e) return '';
+    const parts = [
+      e?.userInfo?.readableErrorCode || (typeof e?.code !== 'undefined' ? `code ${e.code}` : ''),
+      e?.message,
+      e?.userInfo?.underlyingErrorMessage || e?.underlyingErrorMessage,
+    ].filter(Boolean).map(String);
+    return Array.from(new Set(parts)).join(' · ');
+  }
 
   const FEATURES: [string, string, string][] = [
     ['analytics-outline', 'Advanced Insights', 'Smarter analytics and personalized recommendations'],
@@ -208,12 +258,12 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
       </View>
 
       {/* Annual plan card — price always from the live store product */}
-      <View style={d.planCard} testID="paywall-plan-card">
+      <Pressable onPress={showDiagnostics} style={d.planCard} testID="paywall-plan-card">
         <View style={d.bestBadge}><Text style={d.bestBadgeText}>BEST VALUE</Text></View>
         <Text style={d.planEyebrow}>ANNUAL PLAN</Text>
         <Text style={d.planPrice}>{iapPrice}<Text style={d.planPer}>/year</Text></Text>
         <Text style={d.planEquiv}>Equivalent to less than {monthlyEq}/month</Text>
-      </View>
+      </Pressable>
 
       {confirmTestBuy ? (
         <View testID="paywall-iap-confirm" style={d.noticeBox}>
@@ -283,6 +333,10 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
           </View>
         </>
       )}
+
+      {diag ? (
+        <Text testID="paywall-diagnostics" selectable style={{ marginTop: 12, fontSize: 10, color: '#8f8672', textAlign: 'left', lineHeight: 14, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}>{diag}</Text>
+      ) : null}
 
       {notice ? (
         <Text testID="paywall-notice" style={{ marginTop: 14, fontSize: 11, color: '#d4af61', textAlign: 'center', lineHeight: 16 }}>{notice}</Text>
