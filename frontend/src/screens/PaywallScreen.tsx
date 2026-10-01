@@ -5,13 +5,13 @@ import { openJaleter } from '@/src/jaleterLinks';
 import { openStoreListing, STORE_NAME } from '@/src/storeLinks';
 import { useAuth } from '@/src/AuthContext';
 import Purchases from 'react-native-purchases';
-import { useSubscription, rcEnabled, rcUsingTestStore, syncIapToBackend, ensureRcReady, rcIsAnonymous, REVENUECAT_ENTITLEMENT_IDENTIFIER } from '@/src/lib/revenuecat';
+import { useSubscription, rcEnabled, rcUsingTestStore, syncIapToBackend, ensureRcReady, rcIsAnonymous, rcActiveKeyMasked, getLastBindResult, REVENUECAT_ENTITLEMENT_IDENTIFIER } from '@/src/lib/revenuecat';
 import { F } from '@/src/jaleterTheme';
 import Constants from 'expo-constants';
 
 // Bump whenever the paywall/purchase code changes so a tester can confirm the
 // installed build actually contains the fix (shown in the footer).
-const PAYWALL_CODE_STAMP = 'PW-2026.09.30-c';
+const PAYWALL_CODE_STAMP = 'PW-2026.10.01-d';
 
 /* ---------------- Membership Required (hard paywall) ---------------- */
 // Access model: Jaleter is free to download, but every financial feature
@@ -48,6 +48,8 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
     } catch (e: any) { lines.push(`RC user: error ${String(e?.message || e)}`); }
     lines.push(`Jaleter user: ${user?.user_id || '(none)'}`);
     lines.push(`store: ${Platform.OS} ${rcUsingTestStore ? 'TEST STORE' : 'LIVE'} · identityReady=${String(iap.identityReady)}`);
+    lines.push(`RC key: ${rcActiveKeyMasked()} (project: Jaleter Budgeting App)`);
+    lines.push(`last bind: ${getLastBindResult()}`);
     try { lines.push(`canMakePayments: ${String(await Purchases.canMakePayments())}`); } catch (e: any) { lines.push(`canMakePayments: error ${String(e?.message || e)}`); }
     lines.push(`offering: ${iap.offerings?.current?.identifier || '(none)'} · packages: ${(iap.offerings?.current?.availablePackages || []).map((p: any) => p.identifier).join(',') || '(none)'}`);
     lines.push(`package: ${annualPkg?.identifier || '(none)'} · product: ${annualPkg?.product?.identifier || '(none)'} · ${annualPkg?.product?.priceString || '(no price)'}`);
@@ -349,7 +351,7 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
 
       <Text style={d.disclosure}>{disclosure}</Text>
       <Text testID="paywall-build-stamp" style={{ marginTop: 8, fontSize: 9, color: '#5c5548', textAlign: 'center' }}>
-        v{Constants.expoConfig?.version || '?'} · {String((Constants.expoConfig?.ios as any)?.buildNumber || (Constants.expoConfig?.android as any)?.versionCode || Constants.nativeBuildVersion || '—')} · {PAYWALL_CODE_STAMP}
+        v{Constants.expoConfig?.version || '?'} · build {String(Constants.nativeBuildVersion || (Constants.expoConfig?.ios as any)?.buildNumber || (Constants.expoConfig?.android as any)?.versionCode || '—')} · {PAYWALL_CODE_STAMP} · key {rcActiveKeyMasked()}
       </Text>
 
       {/* This screen only renders for AUTHENTICATED users, so never ask them

@@ -1,0 +1,29 @@
+{
+  "summary": "Frontend regression for RevenueCat key hardening + paywall diagnostics (app.json v1.0.1, PW-2026.10.01-d). All 4 user-story items pass against the public web preview (390x844). ONE ENV CAVEAT: Metro had a stale cache from before the app.json version bump, so the paywall footer initially rendered 'v1.0.0'. After `rm -rf /app/frontend/.metro-cache /app/frontend/.expo` + `supervisorctl restart expo`, the live stamp correctly reads 'v1.0.1 · build — · PW-2026.10.01-d · key test_PtKHf…'. Diagnostics (triple-tap on paywall-plan-card) print 'RC key: test_PtKHf… (project: Jaleter Budgeting App)', 'last bind: configure(appUserID=user_…) ok', and 'RC user: user_… (linked)' exactly as specified. Full IAP flow (paywall-iap-buy → paywall-iap-confirm → paywall-iap-confirm-yes → RC Test Store 'Test valid purchase') unlocks the dashboard end-to-end. No new console errors from rcActiveKeyMasked / getLastBindResult; only expected 402s from premium-gated endpoints before unlock.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter91_paywall_v2.jpeg",
+    "/app/test_reports/screenshots/iter91_diag_v2.jpeg",
+    "/app/test_reports/screenshots/iter91_final.jpeg",
+    "/app/test_reports/screenshots/iter91_stamp_fresh.jpeg"
+  ],
+  "action_items": [
+    "ENV HOUSEKEEPING (not a code bug): after bumping app.json version, Metro's cached web bundle must be invalidated for Constants.expoConfig.version to update. The paywall footer rendered 'v1.0.0' until I cleared /app/frontend/.metro-cache and /app/frontend/.expo and restarted expo via supervisor. Suggest doing this (or running `expo start --clear`) as part of any version bump going forward."
+  ],
+  "critical_code_review_comments": [
+    "Pre-existing (not from this iteration): require-cycle warning src/lib/revenuecat.tsx ↔ src/AuthContext.tsx is logged on every boot. Harmless today but worth untangling to avoid future 'uninitialized value' bugs — apiCall is imported from AuthContext inside revenuecat.tsx while AuthContext also imports from revenuecat.tsx."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100%"},
+  "seed_data_creation": "Registered one throwaway test user via UI (iter91x<unix_ts>@example.com / TestPass123!) to exercise the hard-paywall. Nothing to clean — fresh anonymous accounts only.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "To bypass the WebView 'Get Started' iframe on web, drive navigation with `page.evaluate(\"window.postMessage('navigate:onboarding', '*')\")`. For the Test Store confirm flow on web preview: paywall-iap-buy → paywall-iap-confirm (first tap only sets confirmTestBuy) → paywall-iap-confirm-yes → RC Test Store overlay with text 'Test valid purchase' (click that to simulate a successful purchase). Dashboard unlock takes ~5-8s because /api/iap/sync + checkMembership round-trip. The 3× plan-card toggle re-fires showDiagnostics; a 4th tap would clear it.",
+  "rca_of_issue": "The reported 'v1.0.1' stamp was the only test item that initially failed. Root cause: Metro bundler had cached the web JS bundle built against the pre-bump app.json (version 1.0.0). Constants.expoConfig is baked into the bundle at build time, so `supervisorctl restart expo` alone did not refresh it — Metro served the same cached chunks on restart. Mitigation: wipe /app/frontend/.metro-cache and /app/frontend/.expo before restarting expo (equivalent of `expo start --clear`). After that, the footer immediately rendered 'v1.0.1 · build — · PW-2026.10.01-d · key test_PtKHf…' as spec'd."
+}

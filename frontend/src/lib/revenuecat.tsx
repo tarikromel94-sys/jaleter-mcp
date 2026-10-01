@@ -26,15 +26,37 @@ export const rcEnabled = Platform.OS !== 'web' || __DEV__; // production web has
 /** True when the SDK is running against the RevenueCat Test Store (simulated). */
 export const rcUsingTestStore = Platform.OS === 'web' || __DEV__;
 
+/** Key selection — RevenueCat project "Jaleter Budgeting App" ONLY.
+ *  • Release / TestFlight / App Store / Play builds: iOS → `appl_…`,
+ *    Android → `goog_…`. The Test Store key is NEVER allowed here.
+ *  • Web preview + Expo Go (__DEV__): Test Store key (`test_…`). */
 function getRevenueCatApiKey() {
   if (!REVENUECAT_TEST_API_KEY || !REVENUECAT_IOS_API_KEY || !REVENUECAT_ANDROID_API_KEY) {
     throw new Error('RevenueCat public API keys not found in env');
   }
   if (Platform.OS === 'web' || __DEV__) return REVENUECAT_TEST_API_KEY;
-  if (Platform.OS === 'ios') return REVENUECAT_IOS_API_KEY;
-  if (Platform.OS === 'android') return REVENUECAT_ANDROID_API_KEY;
-  return REVENUECAT_TEST_API_KEY;
+  const key = Platform.OS === 'ios' ? REVENUECAT_IOS_API_KEY : REVENUECAT_ANDROID_API_KEY;
+  const expected = Platform.OS === 'ios' ? 'appl_' : 'goog_';
+  if (!key.startsWith(expected)) {
+    throw new Error(`RevenueCat key for ${Platform.OS} must start with "${expected}" in release builds (got "${key.slice(0, 5)}…")`);
+  }
+  return key;
 }
+
+/** Masked active key for diagnostics, e.g. "appl_NWgjk…" (prefix + 5 chars). */
+export function rcActiveKeyMasked(): string {
+  try {
+    const k = getRevenueCatApiKey();
+    const us = k.indexOf('_');
+    return `${k.slice(0, us + 1)}${k.slice(us + 1, us + 6)}…`;
+  } catch (e: any) {
+    return `ERROR: ${String(e?.message || e)}`;
+  }
+}
+
+/** Last identity-binding outcome, surfaced in paywall diagnostics. */
+let lastBindResult = 'not attempted';
+export function getLastBindResult(): string { return lastBindResult; }
 
 export function initializeRevenueCat() {
   if (!rcEnabled) return;
@@ -80,13 +102,22 @@ export function onRcIdentityChanged(fn: () => void): () => void {
 
 export async function bindRevenueCatIdentity(uid: string | null): Promise<void> {
   if (!rcEnabled) return;
-  if (rcUsingTestStore) {
-    // purchases-js browser mode: reconfigure with the stable app user id.
-    Purchases.configure({ apiKey: getRevenueCatApiKey(), appUserID: uid ? String(uid) : undefined });
-  } else if (uid) {
-    await Purchases.logIn(String(uid));
-  } else {
-    await Purchases.logOut();
+  try {
+    if (rcUsingTestStore) {
+      // purchases-js browser mode: reconfigure with the stable app user id.
+      Purchases.configure({ apiKey: getRevenueCatApiKey(), appUserID: uid ? String(uid) : undefined });
+      lastBindResult = `configure(appUserID=${uid || 'anonymous'}) ok`;
+    } else if (uid) {
+      const res: any = await Purchases.logIn(String(uid));
+      const got = res?.customerInfo?.originalAppUserId || '';
+      lastBindResult = `logIn(${uid}) ok · created=${String(res?.created)} · original=${got || '?'}`;
+    } else {
+      await Purchases.logOut();
+      lastBindResult = 'logOut ok';
+    }
+  } catch (e: any) {
+    lastBindResult = `${uid ? 'logIn' : 'logOut'} FAILED: ${String(e?.message || e)}`;
+    throw e;
   }
   identityListeners.forEach((fn) => { try { fn(); } catch {} });
 }
