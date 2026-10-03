@@ -16,9 +16,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiCall } from '@/src/AuthContext';
 
 const REVENUECAT_TEST_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_TEST_API_KEY;
-const REVENUECAT_IOS_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY;
-const REVENUECAT_ANDROID_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY;
-
+const REVENUECAT_IOS_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY || 'appl_NWgjkOMfQcXaPDLJxjSNhmBaaDK';
+const REVENUECAT_ANDROID_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY || 'goog_JJZijBzcPEDAuBIHieCbAnXwUez';
 export const REVENUECAT_ENTITLEMENT_IDENTIFIER = 'pro';
 
 export const rcEnabled = Platform.OS !== 'web' || __DEV__; // production web has no store
@@ -31,7 +30,7 @@ export const rcUsingTestStore = Platform.OS === 'web' || __DEV__;
  *    Android → `goog_…`. The Test Store key is NEVER allowed here.
  *  • Web preview + Expo Go (__DEV__): Test Store key (`test_…`). */
 function getRevenueCatApiKey() {
-  if (!REVENUECAT_TEST_API_KEY || !REVENUECAT_IOS_API_KEY || !REVENUECAT_ANDROID_API_KEY) {
+    if (!REVENUECAT_IOS_API_KEY || !REVENUECAT_ANDROID_API_KEY) {
     throw new Error('RevenueCat public API keys not found in env');
   }
   if (Platform.OS === 'web' || __DEV__) return REVENUECAT_TEST_API_KEY;
