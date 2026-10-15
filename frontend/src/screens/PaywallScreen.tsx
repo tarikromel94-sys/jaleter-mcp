@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, Pressable, ScrollView, ActivityIndicator, AppState, Platform, StyleSheet } from 'react-native';
+import { View, Text, Pressable, ScrollView, ActivityIndicator, AppState, Platform, StyleSheet, Image } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { openJaleter } from '@/src/jaleterLinks';
 import { openStoreListing, STORE_NAME } from '@/src/storeLinks';
@@ -245,7 +245,7 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
       </Pressable>
 
       <View style={{ alignItems: 'center' }}>
-        <Text style={d.wordmark}>Jaleter</Text>
+        <Image source={require('../../assets/images/wordmark.png')} style={{ width: 190, height: 68 }} resizeMode="contain" accessibilityLabel="Jaleter" testID="paywall-wordmark" />
         <Text style={d.tagline}>SMART BUDGETING. WEALTHY LIVING.</Text>
       </View>
 

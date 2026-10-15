@@ -12,7 +12,7 @@
  * to the app root.
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, Pressable, ScrollView, ActivityIndicator, Platform, StyleSheet } from 'react-native';
+import { View, Text, Pressable, ScrollView, ActivityIndicator, Platform, StyleSheet, Image } from 'react-native';
 import { Redirect } from 'expo-router';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { AuthProvider, useAuth, apiCall } from '@/src/AuthContext';
@@ -80,7 +80,7 @@ function MembershipFlow() {
   if (!member) {
     return (
       <ScrollView style={m.splash} contentContainerStyle={m.successWrap} testID="membership-subscribe-in-app">
-        <Text style={m.wordmark}>Jaleter</Text>
+        <Image source={require('../assets/images/wordmark.png')} style={{ width: 190, height: 68, alignSelf: 'center' }} resizeMode="contain" accessibilityLabel="Jaleter" />
         <Text style={m.h1}>Your account is ready</Text>
         <Text style={m.sub}>
           Signed in as <Text style={{ color: '#e5c37a', fontWeight: '700' }}>{auth.user.email}</Text>.
@@ -135,7 +135,7 @@ function MembershipFlow() {
   // ---- Active member: success + next steps ---------------------------------
   return (
     <ScrollView style={m.splash} contentContainerStyle={m.successWrap} testID="membership-success">
-      <Text style={m.wordmark}>Jaleter</Text>
+      <Image source={require('../assets/images/wordmark.png')} style={{ width: 190, height: 68, alignSelf: 'center' }} resizeMode="contain" accessibilityLabel="Jaleter" />
       <View style={m.checkCircle}><Ionicons name="checkmark" size={34} color="#171204" /></View>
       <Text style={m.h1}>You&apos;re all set</Text>
       <Text style={m.sub}>
