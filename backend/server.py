@@ -366,6 +366,7 @@ async def _startup():
     await db.users.create_index('stripe_subscription_id', unique=True, sparse=True)
     await db.users.create_index('subscription_status')
     await db.users.create_index('iap_premium_expires_at', sparse=True)
+    await db.merchant_rules.create_index([('user_id', 1), ('merchant_key', 1)], unique=True)
     # Plaid
     await db.plaid_items.create_index('item_id', unique=True)
     await db.plaid_items.create_index([('user_id', 1)])
@@ -1407,6 +1408,85 @@ async def classify_transaction(
             }},
         )
     return {'ok': True, 'external_id': external_id, 'system_category': effective}
+
+
+# ------- Smart Transaction Categorization (rules + merchant memory) -------
+# Uses Plaid merchant_name + personal_finance_category already stored on each
+# bank_transactions row (no paid AI). See categorization_service.py.
+class SuggestBody(BaseModel):
+    external_ids: list[str] = Field(default_factory=list, max_length=500)
+    categories: list[dict] = Field(default_factory=list)      # [{id,name,subcategories:[{id,name}]}]
+    income_sources: list[dict] = Field(default_factory=list)  # [{id,name}]
+
+
+@api_router.post('/categorization/suggest')
+@limiter.limit('30/minute')
+async def categorization_suggest(body: SuggestBody, request: Request, current_user: dict = Depends(require_active_membership)):
+    import categorization_service as cs
+    uid = current_user['user_id']
+    if not body.external_ids:
+        return {'suggestions': [], 'new_category_proposals': []}
+    cursor = db.bank_transactions.find(
+        {'user_id': uid, 'external_id': {'$in': body.external_ids[:500]}},
+        {'_id': 0, 'external_id': 1, 'description': 1, 'merchant': 1, 'amount': 1, 'category': 1,
+         'system_category': 1, 'is_transfer': 1, 'raw.personal_finance_category': 1},
+    )
+    txns = [t async for t in cursor]
+    rules = {r['merchant_key']: r async for r in db.merchant_rules.find({'user_id': uid}, {'_id': 0})}
+    return cs.suggest(txns, body.categories, body.income_sources, rules)
+
+
+class LearnItem(BaseModel):
+    merchant_key: str = Field(min_length=1, max_length=60)
+    group_id: str
+    detail_id: Optional[str] = None
+    tx_type: str = 'expense'
+    category_name: str = ''
+    always: bool = False
+
+
+class LearnBody(BaseModel):
+    items: list[LearnItem] = Field(default_factory=list, max_length=500)
+
+
+@api_router.post('/categorization/learn')
+@limiter.limit('30/minute')
+async def categorization_learn(body: LearnBody, request: Request, current_user: dict = Depends(require_active_membership)):
+    """Remember approved categorizations per merchant. `always=True` creates
+    an explicit rule; otherwise it is merchant memory (uses counter)."""
+    uid = current_user['user_id']
+    now = datetime.now(timezone.utc)
+    for it in body.items:
+        if it.tx_type not in ('income', 'expense'):
+            continue
+        await db.merchant_rules.update_one(
+            {'user_id': uid, 'merchant_key': it.merchant_key},
+            {'$set': {
+                'group_id': it.group_id, 'detail_id': it.detail_id, 'tx_type': it.tx_type,
+                'category_name': it.category_name[:80], 'last_used_at': now,
+                **({'always': True} if it.always else {}),
+            },
+             '$inc': {'uses': 1},
+             '$setOnInsert': {'created_at': now, **({} if it.always else {'always': False})}},
+            upsert=True,
+        )
+    return {'ok': True, 'learned': len(body.items)}
+
+
+@api_router.get('/categorization/rules')
+async def categorization_rules(current_user: dict = Depends(require_active_membership)):
+    rows = [r async for r in db.merchant_rules.find({'user_id': current_user['user_id']}, {'_id': 0, 'user_id': 0}).sort('last_used_at', -1)]
+    for r in rows:
+        for k in ('last_used_at', 'created_at'):
+            if isinstance(r.get(k), datetime):
+                r[k] = r[k].isoformat()
+    return {'rules': rows}
+
+
+@api_router.delete('/categorization/rules/{merchant_key}')
+async def categorization_rule_delete(merchant_key: str, current_user: dict = Depends(require_active_membership)):
+    res = await db.merchant_rules.delete_one({'user_id': current_user['user_id'], 'merchant_key': merchant_key})
+    return {'ok': True, 'deleted': res.deleted_count}
 
 
 @api_router.post('/accounts/transactions/match-transfers')

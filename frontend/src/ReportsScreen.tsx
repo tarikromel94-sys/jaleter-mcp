@@ -86,7 +86,7 @@ function arcPath(cx: number, cy: number, r: number, startDeg: number, endDeg: nu
   return `M ${cx} ${cy} L ${start.x} ${start.y} A ${r} ${r} 0 ${large} 0 ${end.x} ${end.y} Z`;
 }
 
-function Pie({ data, size = 180 }: { data: { label: string; value: number; color: string }[]; size?: number }) {
+function Pie({ data, size = 150 }: { data: { label: string; value: number; color: string }[]; size?: number }) {
   const total = data.reduce((a, b) => a + b.value, 0);
   const cx = size / 2, cy = size / 2, r = size / 2 - 6;
   if (total <= 0) {
@@ -132,10 +132,14 @@ function Legend({ data }: { data: { label: string; value: number; color: string 
     <View style={{ gap: 4, marginTop: 8 }}>
       {data.map((d, i) => (
         <View key={i} style={styles.legendRow}>
-          <View style={[styles.legendDot, { backgroundColor: d.color }]} />
-          <Text style={styles.legendLabel} numberOfLines={1}>{d.label}</Text>
-          <Text style={styles.legendValue}>{MONEY(d.value)}</Text>
-          <Text style={styles.legendPct}>{Math.round((d.value / total) * 100)}%</Text>
+          <View style={[styles.legendDot, { backgroundColor: d.color, marginTop: 4 }]} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.legendLabel} numberOfLines={2}>{d.label}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
+              <Text style={styles.legendValue}>{MONEY(d.value)}</Text>
+              <Text style={styles.legendPct}>{Math.round((d.value / total) * 100)}%</Text>
+            </View>
+          </View>
         </View>
       ))}
     </View>
@@ -181,13 +185,13 @@ function MonthlyChart({ data, height = 130 }: { data: { key: string; income: num
           <G key={d.key}>
             <Rect x={x - barW - 1} y={pad.t + inner.h - incH} width={barW} height={incH} fill="#4c8b56" rx={2} />
             <Rect x={x + 1} y={pad.t + inner.h - expH} width={barW} height={expH} fill="#b0453d" rx={2} />
-            <SvgText x={x} y={height - 8} textAnchor="middle" fontSize={8} fill="#8a7f70">{monthLabel(d.key).slice(0, 3)}</SvgText>
+            <SvgText x={x} y={height - 8} textAnchor="middle" fontSize={10} fill="#6f6555">{monthLabel(d.key).slice(0, 3)}</SvgText>
           </G>
         );
       })}
       {/* y axis label */}
-      <SvgText x={4} y={pad.t + 8} fontSize={8} fill="#8a7f70">{shortMoney(max)}</SvgText>
-      <SvgText x={4} y={pad.t + inner.h + 2} fontSize={8} fill="#8a7f70">$0</SvgText>
+      <SvgText x={4} y={pad.t + 8} fontSize={10} fill="#6f6555">{shortMoney(max)}</SvgText>
+      <SvgText x={4} y={pad.t + inner.h + 2} fontSize={10} fill="#6f6555">$0</SvgText>
     </Svg>
   );
 }
@@ -670,12 +674,12 @@ const styles = StyleSheet.create({
   pillText: { fontSize: 10, fontWeight: '700', color: '#615b52' },
   pillTextActive: { color: '#fff' },
 
-  summaryRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
+  summaryRow: { flexDirection: 'row', gap: 6, marginBottom: 14 },
   summaryTile: {
     flex: 1, padding: 10, borderRadius: 12,
     backgroundColor: '#fff', borderWidth: 1, borderColor: '#efe6d3',
   },
-  summaryLabel: { fontSize: 8, letterSpacing: 1.2, color: '#8a7f70', fontWeight: '700' },
+  summaryLabel: { fontSize: 10, letterSpacing: 0.8, color: '#6f6555', fontWeight: '700' },
   summaryValue: { fontSize: 14, fontWeight: '800', marginTop: 4 },
 
   section: {
@@ -684,15 +688,15 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { fontSize: 11, fontWeight: '800', letterSpacing: 0.5, color: '#8a7f70', marginBottom: 8, textTransform: 'uppercase' },
 
-  legendRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  legendRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 4 },
   legendRowInline: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendLabel: { flex: 1, fontSize: 10, color: C.ink },
-  legendValue: { fontSize: 10, fontWeight: '700', color: C.ink },
-  legendPct: { fontSize: 9, color: '#8a7f70', width: 32, textAlign: 'right' },
+  legendLabel: { flex: 1, fontSize: 12, color: C.ink },
+  legendValue: { fontSize: 12, fontWeight: '700', color: C.ink },
+  legendPct: { fontSize: 11, color: '#6f6555', fontWeight: '600' },
 
-  barLabel: { flex: 1, fontSize: 10, color: C.ink, fontWeight: '600' },
-  barValue: { fontSize: 10, color: '#8a7f70', fontWeight: '700' },
+  barLabel: { flex: 1, fontSize: 12, color: C.ink, fontWeight: '600' },
+  barValue: { fontSize: 12, color: '#5f574b', fontWeight: '700' },
   barBg: { height: 6, borderRadius: 3, backgroundColor: '#f2ead6', marginTop: 3, overflow: 'hidden' },
   barFill: { height: 6, borderRadius: 3, backgroundColor: '#b28a4c' },
 
@@ -702,7 +706,7 @@ const styles = StyleSheet.create({
   },
   merchantIcon: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#f2e6c9', alignItems: 'center', justifyContent: 'center' },
   merchantName: { fontSize: 11, fontWeight: '700', color: C.ink },
-  merchantMeta: { fontSize: 9, color: '#8a7f70', marginTop: 2 },
+  merchantMeta: { fontSize: 10, color: '#6f6555', marginTop: 2 },
   merchantValue: { fontSize: 11, fontWeight: '800', color: '#b0453d' },
 
   empty: { fontSize: 10, color: '#8a7f70', textAlign: 'center', paddingVertical: 6 },

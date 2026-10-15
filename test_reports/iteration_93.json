@@ -1,0 +1,66 @@
+{
+  "summary": "Smart Transaction Categorization — Backend 12/12 pytest PASS. Frontend review-sheet flow works end-to-end in a single session: banner, chips, exclusions (transfer/CC pay have NO chips), picker change, 'Always' toggle, bulk Approve. BUT one CRITICAL correctness bug: the Plaid-category 'Pets' never reaches the user as a new-category proposal because categorization_service.match_subcategory does a loose substring match and the synonym 'cat' (for pets) matches the sub-name 'Education' as 'edu[cat]ion' — so PetSmart is wrongly auto-suggested into Grow→Education with 'Very likely' and the 'Pets' proposal + proposal-add-Pets testID + enjoy-group pill never render. This breaks spec step 5 (Pets proposal) and step 9 (proposal-add-Pets add+assign). The pytest-level test (test_02) only passed because the test harness sent a minimal category list that didn't contain 'Education'. All other spec items verified: banner 'N suggested…', chips for 6 real merchants, no chips for demo_transfer_1 / demo_ccpay_1, mixed-use Amazon shows 'Mixed-use merchant — Always not recommended' and is NOT pre-checked, Shell change→Utilities shows 'Changed' badge, chipotle 'always' toggle works, Approve selected (6) label correct, toast fires, chips removed, banner 7→1, backend rules row for 'chipotle mexican grill' has always:true and 'kroger' has uses:2. Auth gates all correct: 401 without token, 402 for non-premium (register-fresh user tested).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/categorization/suggest (categorization_service.match_subcategory)",
+        "issue": "Substring over-match: `w in name or name in w` on short synonyms causes false positives. Synonym 'cat' from DETAILED['GENERAL_MERCHANDISE_PET_SUPPLIES']=('Pets',('pet','dog','cat')) matches sub-name 'Education' (substring 'cat' is inside 'edu[cat]ion'), so PetSmart silently categorizes into Grow→Education instead of surfacing as a 'Pets' new-category proposal. Fix at /app/backend/categorization_service.py:238 — require word-boundary / token match, or a minimum synonym length ≥ 4, or exact-token split on name/synonym before the `in` check.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/categorization/learn (memory path)",
+        "issue": "Spec step 2 asserts memory suggestion returns confidence 0.9 for Amazon, but Amazon is a MIXED-USE merchant and the service correctly clamps memory confidence to min(0.9, 0.6)=0.6 (categorization_service.py:305). Spec and implementation disagree on this edge case; implementation is defensible. Either (a) update spec, or (b) exempt pure 'history' hits from the mixed-use clamp when the user previously categorized it the same way."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "SuggestionReviewSheet (NEW CATEGORY IDEAS section)",
+        "issue": "proposal-add-Pets testID + proposal-group-Pets-enjoy pills never render because the backend never returns a 'Pets' proposal (see backend critical bug). Insurance proposal renders correctly with proposal-add-Insurance + proposal-group-Insurance-steward.",
+        "testID": "proposal-add-Pets, proposal-group-Pets-enjoy",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Approve → cross-device persistence",
+        "issue": "approveSuggestions in TransactionsScreen only updates the client AsyncStorage overlay + merchant_rules on backend; it never writes user-chosen group_id/detail_id onto bank_transactions. If the user logs in from another device/browser the categorizations are lost until the rule-based re-suggest kicks in. Not strictly a bug per the stated 'client-side overlay' design, but worth confirming with product.",
+        "affected_testIDs": ["suggest-approve"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Budget",
+        "issues": ["Column headings 'ACTUAL / BUDGET / LEFT' are present and visibly larger than row date text at 390px — readability tweak confirmed. (Not tested at 360px — bottom tab was briefly blocked by review-sheet in one session; retest at 360px recommended but no clipping seen at 390px.)"]
+      }
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration93_smart_categorization.py",
+    "/app/test_reports/pytest/iteration93_smartcat.xml",
+    "/app/test_reports/screenshots/iter93/"
+  ],
+  "action_items": [
+    "FIX backend categorization_service.match_subcategory substring overmatch (short synonyms like 'cat' leaking into unrelated subcategories). Suggested fix: tokenize both sides on whitespace/punct and require full-token equality, or add `len(w) >= 4 or exact match` guard. After fix, PetSmart should disappear from suggestions and 'Pets' should re-appear in new_category_proposals with suggested_group_id='enjoy' — unblocking spec step 9 (proposal-add-Pets).",
+    "DECIDE: should the 'mixed-use' confidence clamp apply to the memory path when the user explicitly saved that merchant (uses≥1 but always=false)? Spec expected 0.9 for Amazon memory hit; code returns 0.6.",
+    "OPTIONAL: persist approved group_id/detail_id onto bank_transactions.user_category for cross-device survival (today only merchant_rules survive)."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/categorization_service.py:238 — `if name == w: ... elif w in name or name in w:` is the substring overmatch root cause. Collapse all synonyms to tokens; compare tokens, not substrings. This single line miscategorises any sub-name containing 'cat', 'gas', 'bp ', etc.",
+    "/app/backend/categorization_service.py:305 — the mixed-use clamp drops memory-source confidence from 0.9 → 0.6 for mixed-use merchants (Amazon, Walmart, Target, Costco, …). Intentional per docstring but conflicts with the review-request spec. Document the choice in one place.",
+    "/app/frontend/src/screens/TransactionsScreen.tsx:80 — approveSuggestions calls /api/categorization/learn but never POSTs user_category per-tx. If main agent wants multi-device parity, add an endpoint to upsert bank_transactions.user_category and call it alongside learn."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration93_smart_categorization.py (new, 12 tests)"
+  ],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "~85% — Pets proposal flow broken, everything else verified"},
+  "seed_data_creation": "Re-ran /app/backend/scripts/seed_categorization_demo.py smartcat.qa@jaleter.example.com Passw0rd!xyz twice during the run (pristine 10 Plaid-style rows + wiped merchant_rules). Also registered one throwaway non-premium user TEST_np_<uuid>@example.com (TestPass123!) for the 402 gate test. No cleanup needed.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "To test the UI in one session (chips disappear + banner drops only persist in-session because the overlay is AsyncStorage/localStorage client-side): do NOT reload between approve and the chip/banner/budget checks. Use `[data-testid=\"nav-transactions\"]` and `[data-testid=\"nav-budget\"]` (nav-home / nav-reports / nav-networth / nav-legacy also exist) — do not use `text=Budget` (matches a 'Budget' tile inside Home card). Welcome iframe can be bypassed by: POST /api/auth/login → localStorage.setItem('jaleter_auth_token', JSON.stringify(token)) → reload. If a review-sheet is open it blocks bottom tabs — close it (header × button) before navigating. The smartcat.qa seed script resets merchant_rules AND bank_transactions for the user — safe to run between tests. Backend tests live at /app/backend/tests/test_iteration93_smart_categorization.py and run in ~3s.",
+  "rca_of_issue": "ROOT CAUSE of the 'Pets proposal never appears' bug — categorization_service.match_subcategory iterates every user subcategory and every synonym and declares a match when `w in name or name in w` (line 238). For the Pets category the synonym tuple is ('pet','dog','cat'). The user's default budget has `Grow > Education`; normalising 'Education' gives 'education'. 'cat' is a substring of 'education', so the matcher returns ('grow','edu','Education') with rank 10+5=15. The service treats this as a successful match → appends a suggestion → NEVER adds to proposals. Reproduction: `python3 -c \"import categorization_service as cs; print(cs.match_subcategory(('pet','dog','cat'),'Pets',[{'id':'grow','subcategories':[{'id':'edu','name':'Education'}]}]))\"` → `('grow','edu','Education')`. MITIGATION: require token equality (`set(name.split()).intersection(set(w.split()))`), bump synonym min-length ≥ 4, or match on `\\b{w}\\b` regex. Same class of bug could fire for 'gas' (TRANSPORTATION_GAS) → 'Gas & Electric' sub, or 'rent' → 'Current', etc."
+}

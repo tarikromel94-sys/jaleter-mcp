@@ -196,7 +196,7 @@ export const SettingsScreen = ({ experience, setExperience, appearance, setAppea
                 };
                 return (
                   <View key={sub.id} style={s.alertRow}>
-                    <Text style={[{ flex: 1, fontSize: 10, fontWeight: '600' }, t.textInk]}>{sub.name}</Text>
+                    <Text style={[{ flex: 1, fontSize: 12, fontWeight: '600', paddingRight: 8 }, t.textInk]} numberOfLines={2}>{sub.name}</Text>
                     {(['p50','p80','exceeded'] as const).map((k) => {
                       const label = k === 'p50' ? '50%' : k === 'p80' ? '80%' : '100%+';
                       return (

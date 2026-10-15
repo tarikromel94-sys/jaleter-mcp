@@ -1,0 +1,40 @@
+{
+  "summary": "Smart Transaction Categorization RETEST — FIX VERIFIED. The word-boundary/stem matcher in _name_matches (categorization_service.py:226) resolves the iter-93 substring overmatch: 'cat' no longer matches 'Education'. End-to-end FE flow passes at 390px: (1) banner 'tx-suggest-banner' = '6 suggested categories to review', (2) review sheet renders BOTH proposal-add-Pets AND proposal-add-Insurance with the correct preselected group pills (proposal-group-Pets-enjoy and proposal-group-Insurance-steward both have the selected background rgba(196,148,80,0.09) + border #c49450 while the other 3 pills per proposal are transparent/unselected), (3) demo_petsmart_1 is NOT in SUGGEST_ROWS (only kroger_refund, kroger_1, chipotle_1, amazon_1, payroll_1, shell_1 → 6 rows) and on the Activity list the PETSMART row shows '-$41.00' with no 'Suggested:' chip, (4) tapping proposal-add-Pets shows toast 'Added \"Pets\" and categorized 1.' and the proposal-add-Pets testID disappears while proposal-add-Insurance stays — Insurance is NOT auto-created, (5) default Approve button label = 'Approve selected (5)' because Amazon (mixed-use) is unchecked by default, (6) after Approve the banner drops to '1 suggested category to review' (only Amazon mixed-use remains), (7) Budget shows Income actual=$2,450, Expenses actual=$178 (= 89.27 Food & Dining + 48.20 Transportation + 41.00 Pets, matches spec), Remaining=$2,272; W-2 Income actual=$2,450 confirmed in the Earn group. Transfer rows (ONLINE TRANSFER TO SAVINGS, CHASE CREDIT CRD AUTOPAY) carry the native 'Transfer' tag but have NO 'Suggested:' chip. Readability screenshots captured at 390 & 360 for Budget/Wealth/Reports — no clipping that blocks usage; two minor truncations noted (see design_issues).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Reports (SPENDING BY CATEGORY / INCOME VS EXPENSE legend)", "issues": ["Pie-chart legend labels truncate to 'Inc...' and 'Expe...' at 390px because the fixed-width legend row is too narrow for 'Income' / 'Expenses'. Readability-only, no clipping of amounts. Reference: Reports screen pie legend row."]},
+      {"screen": "Budget @ 360px (narrow phones)", "issues": ["In the Earn group the 'Contract Income' row title truncates to 'Contract In' because the ACTUAL/BUDGET/LEFT columns are fixed-width. Not blocking but visibly clipped. Reference: BudgetScreen row left cell at 360w."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/screenshots/iter94_budget_390_top.png",
+    "/app/test_reports/screenshots/iter94_budget_390_steward.png",
+    "/app/test_reports/screenshots/iter94_budget_390_enjoy.png",
+    "/app/test_reports/screenshots/iter94_budget_360_top.png",
+    "/app/test_reports/screenshots/iter94_budget_360_steward.png",
+    "/app/test_reports/screenshots/iter94_wealth_390.png",
+    "/app/test_reports/screenshots/iter94_wealth_360.png",
+    "/app/test_reports/screenshots/iter94_reports_390.png",
+    "/app/test_reports/screenshots/iter94_reports_360.png"
+  ],
+  "action_items": [
+    "OPTIONAL polish: widen Reports pie-chart legend row (or let the label wrap) so 'Income' / 'Expenses' do not truncate at 390px.",
+    "OPTIONAL polish: at 360px let the Budget subcategory name column flex instead of fixed-width so 'Contract Income' does not truncate to 'Contract In'.",
+    "No functional regressions — iter-93 critical categorization bug is fixed. No main-agent action required for the categorizer."
+  ],
+  "critical_code_review_comments": [
+    "Fix at /app/backend/categorization_service.py:226 (_name_matches) is tight: it stems only prefixes, requires >=4 char full-word match for stems, and allows a 3+ char singular→plural flex (Pet↔pets). This correctly rejects 'cat'∈'education'. Keep as the single source of word-matching truth; do not reintroduce raw substring `in`.",
+    "Approve path still never writes per-tx user_category to bank_transactions (TransactionsScreen.approveSuggestions only calls /api/categorization/learn + updates AsyncStorage overlay). Known from iter-93, out of scope for this retest."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (fix verified via UI end-to-end; backend already 12/12 pass per iter-93)", "frontend": "100% on the 4 retest items — all spec assertions met"},
+  "seed_data_creation": "Re-ran /app/backend/scripts/seed_categorization_demo.py smartcat.qa@jaleter.example.com 'Passw0rd!xyz' between runs to wipe merchant_rules + reset 10 Plaid-style demo rows. No throwaway users created.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "To reproduce the UI flow cleanly: (a) re-seed via `cd /app/backend && python3 scripts/seed_categorization_demo.py smartcat.qa@jaleter.example.com 'Passw0rd!xyz'` BEFORE each run — this clears merchant_rules so Pets/Insurance appear as new-category proposals rather than 'Very likely' memory hits. (b) Clear AsyncStorage key 'jaleter-state-v2' via localStorage.removeItem before reload so overlay/categorization state starts clean. (c) Welcome iframe bypass: POST /api/auth/login → localStorage.setItem('jaleter_auth_token', JSON.stringify(token)) in the top page → reload — @react-native-async-storage/async-storage web shim reads localStorage directly. (d) Review sheet close testID is 'modal-close' (from utils/appShared Sheet). (e) Suggested rows are 'suggest-row-<external_id>', proposal buttons are 'proposal-add-<KeyNoWhitespace>', group pills are 'proposal-group-<Key>-<group_id>'. (f) Default Approve label is 'Approve selected (5)' because Amazon (mixed-use) is unchecked.",
+  "rca_of_issue": "Iter-93 root cause (`w in name or name in w` substring overmatch) is fixed in categorization_service.py:_name_matches (lines 226-246). The new matcher does: exact → phrase-with-spaces → full token in name → stem-prefix of a token (only when |w|>=4) → singular-stem of a one-word name. Verified in UI: PetSmart now appears as the Pets new-category proposal with suggested_group_id='enjoy' (not as a Grow→Education suggestion), and the Pets flow reaches the user as a 'Add Pets & assign 1' CTA, which when tapped creates the Pets subcategory under Enjoy and categorizes PetSmart's $41 into it."
+}

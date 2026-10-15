@@ -1001,7 +1001,7 @@ export const BudgetScreen = ({ categories, setCategories, categoriesByYear, setC
                       <View style={s.purposeIcon}><Text style={s.purposeIconText}>{c.name[0]}</Text></View>
                       <View style={{ flex: 1 }}>
                         <Text style={[{ fontSize: 12, fontWeight: '700', color: C.ink }, t.textInk]}>{c.name}</Text>
-                        <Text style={[{ fontSize: 9, color: C.muted2 }, t.textMuted]} numberOfLines={1}>{c.tagline}</Text>
+                        <Text style={[{ fontSize: 10, color: '#5f574b', fontWeight: '500' }, t.dark && { color: D.textSubtle }]} numberOfLines={1}>{c.tagline}</Text>
                       </View>
                       <View style={{ alignItems: 'flex-end' }}>
                         <Text style={[{ fontSize: 11, fontWeight: '700', color: C.ink }, t.textInk]}>{MONEY(actual)} <Text style={{ color: '#c1b9ac', fontWeight: '400' }}>/ {MONEY(total)}</Text></Text>
@@ -1064,8 +1064,8 @@ export const BudgetScreen = ({ categories, setCategories, categoriesByYear, setC
                                 style={[s.subCol, a > 0 && { backgroundColor: '#c4945010', borderRadius: 4 }]}
                                 testID={`budget-actual-${sub.id}`}
                               >
-                                <Text style={{ fontSize: 11, color: a > 0 ? '#9a6d32' : (t.dark ? D.text : C.ink), fontWeight: a > 0 ? '700' : '400' }} numberOfLines={1}>{MONEY(a)}</Text>
-                                {a > 0 && <Text style={{ fontSize: 7, color: '#c1a06a', letterSpacing: 0.4 }}>view</Text>}
+                                <Text style={{ fontSize: 13, color: a > 0 ? '#9a6d32' : (t.dark ? D.text : C.ink), fontWeight: a > 0 ? '700' : '400' }} numberOfLines={1}>{MONEY(a)}</Text>
+                                {a > 0 && <Text style={{ fontSize: 8, color: '#c1a06a', letterSpacing: 0.4 }}>view</Text>}
                               </Pressable>
                               <Text style={[s.subCol, { color: b > 0 ? (t.dark ? D.textInk : C.ink) : '#c9a56c' }]}>{b > 0 ? MONEY(b) : '—'}</Text>
                               <Text style={[s.subCol, { color: leftColor, fontWeight: '800' }]}>{b > 0 ? MONEY(remaining) : '—'}</Text>

@@ -600,11 +600,11 @@ export const NetWorthScreen = ({ assets, setAssets, liabilities, setLiabilities,
         <Pressable onPress={() => setRestrictedOpen(true)} style={{ flex: 1 }} testID="nw-restricted">
           <Text style={[s.cpSmall, t.textMuted]}>SET ASIDE</Text>
           <Text style={[s.cpStrong, t.textInk]}>{MONEY(totalRestricted)}</Text>
-          <Text style={{ color: '#c9a56c', fontSize: 8, marginTop: 2 }}>{activeBuckets.length > 0 ? `${activeBuckets.length} bucket${activeBuckets.length > 1 ? 's' : ''} · tap to manage` : 'tap to add'}</Text>
+          <Text style={{ color: '#b08a4c', fontSize: 9, marginTop: 2 }}>{activeBuckets.length > 0 ? `${activeBuckets.length} bucket${activeBuckets.length > 1 ? 's' : ''} · tap to manage` : 'tap to add'}</Text>
         </Pressable>
         <Text style={{ color: '#b99a6c' }}>=</Text>
         <View style={[{ flex: 1.2 }, s.cpAvailable]}>
-          <Text style={[s.cpSmall, { color: '#c8b494' }]}>AVAILABLE</Text>
+          <Text style={[s.cpSmall, { color: '#e3cfa5' }]}>AVAILABLE</Text>
           <Text style={[s.cpStrong, { color: available < 0 ? '#f2b1a8' : '#f3dfbd' }]}>{MONEY(available)}</Text>
           {available < 0 && (
             <Text style={{ color: '#f2b1a8', fontSize: 8, marginTop: 2, fontWeight: '700' }}>Over-allocated</Text>

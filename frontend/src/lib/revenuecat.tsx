@@ -8,7 +8,7 @@
  * - `syncIapToBackend` posts the verified entitlement snapshot to
  *   /api/iap/sync so the server-side paywall recognizes IAP buyers.
  */
-import React, { createContext, useContext, useEffect } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import Purchases, { LOG_LEVEL } from 'react-native-purchases';
 import type { CustomerInfo, PurchasesPackage } from 'react-native-purchases';
@@ -29,11 +29,14 @@ export const rcUsingTestStore = Platform.OS === 'web' || __DEV__;
  *  • Release / TestFlight / App Store / Play builds: iOS → `appl_…`,
  *    Android → `goog_…`. The Test Store key is NEVER allowed here.
  *  • Web preview + Expo Go (__DEV__): Test Store key (`test_…`). */
-function getRevenueCatApiKey() {
-    if (!REVENUECAT_IOS_API_KEY || !REVENUECAT_ANDROID_API_KEY) {
+function getRevenueCatApiKey(): string {
+  if (!REVENUECAT_IOS_API_KEY || !REVENUECAT_ANDROID_API_KEY) {
     throw new Error('RevenueCat public API keys not found in env');
   }
-  if (Platform.OS === 'web' || __DEV__) return REVENUECAT_TEST_API_KEY;
+  if (Platform.OS === 'web' || __DEV__) {
+    if (!REVENUECAT_TEST_API_KEY) throw new Error('RevenueCat Test Store key not found in env');
+    return REVENUECAT_TEST_API_KEY;
+  }
   const key = Platform.OS === 'ios' ? REVENUECAT_IOS_API_KEY : REVENUECAT_ANDROID_API_KEY;
   const expected = Platform.OS === 'ios' ? 'appl_' : 'goog_';
   if (!key.startsWith(expected)) {
@@ -57,10 +60,16 @@ export function rcActiveKeyMasked(): string {
 let lastBindResult = 'not attempted';
 export function getLastBindResult(): string { return lastBindResult; }
 
+/** Launch-time setup: log level only. The SDK is configured LAZILY with the
+ *  signed-in Jaleter user id (see bindRevenueCatIdentity) so an authenticated
+ *  user is never represented by an anonymous RevenueCat customer. */
 export function initializeRevenueCat() {
   if (!rcEnabled) return;
   Purchases.setLogLevel(__DEV__ ? LOG_LEVEL.DEBUG : LOG_LEVEL.WARN);
-  Purchases.configure({ apiKey: getRevenueCatApiKey() });
+}
+
+async function rcIsConfigured(): Promise<boolean> {
+  try { return !!(await Promise.resolve((Purchases as any).isConfigured())); } catch { return false; }
 }
 
 /** Push an ACTIVE entitlement snapshot to the backend so the server-side
@@ -89,97 +98,102 @@ export async function syncIapToBackend(token: string, info: CustomerInfo | null 
 }
 
 // ---- Identity binding ----------------------------------------------------
-// Native store builds: Purchases.logIn/logOut. Browser mode (web preview and
-// Expo Go run purchases-js) has a no-op logIn — identity must be set by
-// re-configuring the SDK with appUserID. After a bind, registered listeners
-// (SubscriptionProvider) invalidate the cached customer-info/offerings.
+// REQUIRED FLOW: authenticated Jaleter user (email / Apple / Google) →
+// internal `user_id` → RevenueCat app user id === that `user_id` → StoreKit /
+// Play purchase → entitlement attached to that Jaleter account.
+//
+// The SDK is configured WITH the Jaleter user id the first time an
+// authenticated user is known (`configure({ appUserID })`), so no anonymous
+// customer is ever created for a signed-in user. Account switches use
+// `logIn(newId)`; sign-out uses `logOut()` (only when the current customer
+// is identified — logOut on an anonymous customer throws).
+// Every bind is VERIFIED by exact equality: `getAppUserID() === user_id`.
 let identityListeners: (() => void)[] = [];
 export function onRcIdentityChanged(fn: () => void): () => void {
   identityListeners.push(fn);
   return () => { identityListeners = identityListeners.filter((f) => f !== fn); };
 }
+function notifyIdentity() { identityListeners.forEach((fn) => { try { fn(); } catch {} }); }
+
+/** Bound Jaleter user id (null = signed out / not yet bound). */
+let boundUid: string | null = null;
+export function getBoundUid(): string | null { return boundUid; }
 
 export async function bindRevenueCatIdentity(uid: string | null): Promise<void> {
   if (!rcEnabled) return;
+  const target = uid ? String(uid) : null;
   try {
-    if (rcUsingTestStore) {
-      // purchases-js browser mode: reconfigure with the stable app user id.
-      Purchases.configure({ apiKey: getRevenueCatApiKey(), appUserID: uid ? String(uid) : undefined });
-      lastBindResult = `configure(appUserID=${uid || 'anonymous'}) ok`;
-    } else if (uid) {
-      const res: any = await Purchases.logIn(String(uid));
-      const got = res?.customerInfo?.originalAppUserId || '';
-      lastBindResult = `logIn(${uid}) ok · created=${String(res?.created)} · original=${got || '?'}`;
+    if (target) {
+      const configured = await rcIsConfigured();
+      if (rcUsingTestStore || !configured) {
+        // First identified configure (native) / browser-mode reconfigure.
+        Purchases.configure({ apiKey: getRevenueCatApiKey(), appUserID: target });
+        lastBindResult = `configure(appUserID=${target}) ok`;
+      } else {
+        const current = String(await Purchases.getAppUserID());
+        if (current !== target) {
+          const res: any = await Purchases.logIn(target);
+          lastBindResult = `logIn(${target}) ok · created=${String(res?.created)} · was=${current}`;
+        } else {
+          lastBindResult = `already bound (${target})`;
+        }
+      }
+      // VERIFY — exact equality, never an "anonymous" heuristic.
+      const now = String(await Purchases.getAppUserID());
+      if (now !== target) {
+        lastBindResult = `VERIFY FAILED · sdk=${now} · expected=${target}`;
+        throw new Error(`RevenueCat identity mismatch: SDK user "${now}" ≠ Jaleter user "${target}"`);
+      }
+      boundUid = target;
     } else {
-      await Purchases.logOut();
-      lastBindResult = 'logOut ok';
+      boundUid = null;
+      if (await rcIsConfigured()) {
+        let anonymous = true;
+        try { anonymous = !!(await Purchases.isAnonymous()); } catch {}
+        if (!anonymous) {
+          await Purchases.logOut();
+          lastBindResult = 'logOut ok';
+        } else {
+          lastBindResult = 'logOut skipped (already anonymous)';
+        }
+      } else {
+        lastBindResult = 'signed out · SDK not configured';
+      }
     }
   } catch (e: any) {
-    lastBindResult = `${uid ? 'logIn' : 'logOut'} FAILED: ${String(e?.message || e)}`;
+    if (!lastBindResult.startsWith('VERIFY FAILED')) {
+      lastBindResult = `${target ? 'bind' : 'logOut'} FAILED: ${String(e?.message || e)}`;
+    }
     throw e;
+  } finally {
+    notifyIdentity();
   }
-  identityListeners.forEach((fn) => { try { fn(); } catch {} });
 }
 
-/** Is the SDK's CURRENT customer anonymous?
- *  IMPORTANT: never judge this from `customerInfo.originalAppUserId` — that
- *  field is the FIRST id the customer was created with and stays
- *  `$RCAnonymousID:…` forever after a native `logIn()` aliases the anonymous
- *  customer to the Jaleter user id. On real iPhones that false positive
- *  blocked every purchase with "account link failed (anonymous customer)". */
-export async function rcIsAnonymous(): Promise<{ anonymous: boolean; appUserId: string }> {
+/** Current SDK identity vs. the expected Jaleter user id. */
+export async function rcIdentity(expectedUid?: string | null): Promise<{ appUserId: string; anonymous: boolean; linked: boolean }> {
   let appUserId = '';
-  try { appUserId = String(await Purchases.getAppUserID()); } catch {}
-  try {
-    const anon = await Purchases.isAnonymous();
-    return { anonymous: !!anon, appUserId };
-  } catch {
-    return { anonymous: !appUserId || appUserId.startsWith('$RCAnonymousID:'), appUserId };
+  let anonymous = true;
+  if (await rcIsConfigured()) {
+    try { appUserId = String(await Purchases.getAppUserID()); } catch {}
+    try { anonymous = !!(await Purchases.isAnonymous()); } catch { anonymous = !appUserId || appUserId.startsWith('$RCAnonymousID:'); }
   }
+  const linked = !!expectedUid && appUserId === String(expectedUid) && !anonymous;
+  return { appUserId, anonymous, linked };
 }
 
-/** Self-healing pre-purchase check. Re-runs configure + identity binding on
- *  demand (the launch-time attempt can fail silently on device) and returns
- *  either a linked customer or the REAL underlying error so the paywall can
- *  show something actionable instead of stalling on "preparing". */
+/** Pre-purchase guarantee: the SDK customer IS this Jaleter user. Re-binds on
+ *  demand and returns the real underlying error (with both ids) on failure. */
 export async function ensureRcReady(uid: string | null | undefined): Promise<{ ok: boolean; appUserId?: string; error?: string }> {
   if (!rcEnabled) return { ok: false, error: 'in-app purchases are not available on this platform' };
   if (!uid) return { ok: false, error: 'no signed-in account' };
   try {
-    let configured = true;
-    try {
-      configured = await Promise.resolve((Purchases as any).isConfigured());
-    } catch {
-      configured = false;
+    await bindRevenueCatIdentity(String(uid));
+    const id = await rcIdentity(uid);
+    if (!id.linked) {
+      return { ok: false, appUserId: id.appUserId, error: `account link failed — RevenueCat user "${id.appUserId || 'none'}" ≠ Jaleter user "${uid}"` };
     }
-    if (!configured) initializeRevenueCat();
-    let bindError = '';
-    try {
-      await bindRevenueCatIdentity(String(uid));
-    } catch (e: any) {
-      bindError = String(e?.message || e || 'logIn failed');
-    }
-    let { anonymous, appUserId } = await rcIsAnonymous();
-    if (anonymous) {
-      // Last resort on native: re-configure the SDK with an explicit app user
-      // id (RevenueCat allows re-configure; it logs a warning). This covers
-      // devices where logIn() resolves but the identity never sticks.
-      try {
-        Purchases.configure({ apiKey: getRevenueCatApiKey(), appUserID: String(uid) });
-        identityListeners.forEach((fn) => { try { fn(); } catch {} });
-        ({ anonymous, appUserId } = await rcIsAnonymous());
-      } catch (e: any) {
-        bindError = bindError || String(e?.message || e || 'configure failed');
-      }
-    }
-    if (anonymous) {
-      return {
-        ok: false,
-        appUserId,
-        error: `account link failed — RevenueCat user "${appUserId || 'none'}" is anonymous, expected "${uid}"${bindError ? ` · ${bindError}` : ''}`,
-      };
-    }
-    return { ok: true, appUserId };
+    return { ok: true, appUserId: id.appUserId };
   } catch (e: any) {
     return { ok: false, error: String(e?.message || e || 'unknown error') };
   }
@@ -187,18 +201,20 @@ export async function ensureRcReady(uid: string | null | undefined): Promise<{ o
 
 function useSubscriptionContext() {
   const queryClient = useQueryClient();
+  // Queries only run once the SDK is configured for a signed-in user.
+  const [bound, setBound] = useState<string | null>(boundUid);
 
   const customerInfoQuery = useQuery({
-    queryKey: ['revenuecat', 'customer-info'],
+    queryKey: ['revenuecat', 'customer-info', bound],
     queryFn: () => Purchases.getCustomerInfo(),
-    enabled: rcEnabled,
+    enabled: rcEnabled && !!bound,
     staleTime: 60 * 1000,
   });
 
   const offeringsQuery = useQuery({
-    queryKey: ['revenuecat', 'offerings'],
+    queryKey: ['revenuecat', 'offerings', bound],
     queryFn: () => Purchases.getOfferings(),
-    enabled: rcEnabled,
+    enabled: rcEnabled && !!bound,
     staleTime: 300 * 1000,
   });
 
@@ -207,25 +223,34 @@ function useSubscriptionContext() {
   useEffect(() => {
     if (!rcEnabled) return;
     const listener = (info: CustomerInfo) =>
-      queryClient.setQueryData(['revenuecat', 'customer-info'], info);
-    Purchases.addCustomerInfoUpdateListener(listener);
-    // Identity re-binds (incl. browser-mode reconfigure) invalidate the cache
-    // so customer-info/offerings reload under the new app user id.
+      queryClient.setQueryData(['revenuecat', 'customer-info', boundUid], info);
+    // Listener registration requires a configured SDK; (re)attach after binds.
+    let attached = false;
+    const attach = async () => {
+      if (attached || !(await rcIsConfigured())) return;
+      Purchases.addCustomerInfoUpdateListener(listener);
+      attached = true;
+    };
+    attach();
+    // Identity binds (configure / logIn / logOut) → reload everything under
+    // the new app user id.
     const offIdentity = onRcIdentityChanged(() => {
+      setBound(boundUid);
+      attach();
       queryClient.invalidateQueries({ queryKey: ['revenuecat'] });
     });
     return () => {
-      Purchases.removeCustomerInfoUpdateListener(listener);
+      if (attached) Purchases.removeCustomerInfoUpdateListener(listener);
       offIdentity();
     };
   }, [queryClient]);
 
   const purchaseMutation = useMutation({
-    mutationFn: async (packageToPurchase: PurchasesPackage) => {
-      // Choke point: never let an anonymous purchase through.
-      const { anonymous } = await rcIsAnonymous();
-      if (anonymous) throw new Error('identity_not_ready');
-      const { customerInfo } = await Purchases.purchasePackage(packageToPurchase);
+    mutationFn: async ({ pkg, uid }: { pkg: PurchasesPackage; uid: string }) => {
+      // Choke point: the SDK customer MUST be this Jaleter user (exact match).
+      const id = await rcIdentity(uid);
+      if (!id.linked) throw new Error('identity_not_ready');
+      const { customerInfo } = await Purchases.purchasePackage(pkg);
       return customerInfo;
     },
   });
@@ -237,20 +262,22 @@ function useSubscriptionContext() {
   const isSubscribed =
     customerInfoQuery.data?.entitlements.active?.[REVENUECAT_ENTITLEMENT_IDENTIFIER] !== undefined;
 
-  // Current (not original) app user id — see rcIsAnonymous().
+  // Live SDK identity (current app user id) under the bound Jaleter user.
   const appUserIdQuery = useQuery({
-    queryKey: ['revenuecat', 'app-user-id'],
-    queryFn: async () => (await rcIsAnonymous()),
-    enabled: rcEnabled,
+    queryKey: ['revenuecat', 'identity', bound],
+    queryFn: () => rcIdentity(bound),
+    enabled: rcEnabled && !!bound,
     staleTime: 60 * 1000,
   });
-  const identityReady = !!appUserIdQuery.data && !appUserIdQuery.data.anonymous;
+  const identityReady = !!appUserIdQuery.data?.linked;
 
   return {
     customerInfo: customerInfoQuery.data,
     offerings: offeringsQuery.data,
     isSubscribed,
     identityReady,
+    appUserId: appUserIdQuery.data?.appUserId || '',
+    boundUid: bound,
     isLoading: customerInfoQuery.isLoading || offeringsQuery.isLoading,
     purchase: purchaseMutation.mutateAsync,
     restore: restoreMutation.mutateAsync,

@@ -5,13 +5,13 @@ import { openJaleter } from '@/src/jaleterLinks';
 import { openStoreListing, STORE_NAME } from '@/src/storeLinks';
 import { useAuth } from '@/src/AuthContext';
 import Purchases from 'react-native-purchases';
-import { useSubscription, rcEnabled, rcUsingTestStore, syncIapToBackend, ensureRcReady, rcIsAnonymous, rcActiveKeyMasked, getLastBindResult, REVENUECAT_ENTITLEMENT_IDENTIFIER } from '@/src/lib/revenuecat';
+import { useSubscription, rcEnabled, rcUsingTestStore, syncIapToBackend, ensureRcReady, rcIdentity, rcActiveKeyMasked, getLastBindResult, REVENUECAT_ENTITLEMENT_IDENTIFIER } from '@/src/lib/revenuecat';
 import { F } from '@/src/jaleterTheme';
 import Constants from 'expo-constants';
 
 // Bump whenever the paywall/purchase code changes so a tester can confirm the
 // installed build actually contains the fix (shown in the footer).
-const PAYWALL_CODE_STAMP = 'PW-2026.10.01-d';
+const PAYWALL_CODE_STAMP = 'PW-2026.10.02-e';
 
 /* ---------------- Membership Required (hard paywall) ---------------- */
 // Access model: Jaleter is free to download, but every financial feature
@@ -43,10 +43,10 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
     if (diag) { setDiag(''); return; }
     const lines: string[] = [];
     try {
-      const { anonymous, appUserId } = await rcIsAnonymous();
-      lines.push(`RC user: ${appUserId || '(none)'} ${anonymous ? '(ANONYMOUS)' : '(linked)'}`);
+      const id = await rcIdentity(user?.user_id);
+      lines.push(`RC user: ${id.appUserId || '(none)'} ${id.linked ? '(LINKED ✓ equals Jaleter id)' : id.anonymous ? '(ANONYMOUS ✗)' : '(MISMATCH ✗)'}`);
     } catch (e: any) { lines.push(`RC user: error ${String(e?.message || e)}`); }
-    lines.push(`Jaleter user: ${user?.user_id || '(none)'}`);
+    lines.push(`Jaleter user: ${user?.user_id || '(none)'} · provider: ${(user as any)?.provider || '?'}`);
     lines.push(`store: ${Platform.OS} ${rcUsingTestStore ? 'TEST STORE' : 'LIVE'} · identityReady=${String(iap.identityReady)}`);
     lines.push(`RC key: ${rcActiveKeyMasked()} (project: Jaleter Budgeting App)`);
     lines.push(`last bind: ${getLastBindResult()}`);
@@ -139,13 +139,13 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
     // Identity: self-heal instead of stalling. The launch-time binding can
     // fail silently on device — re-run configure + logIn here and surface the
     // real error if it still can't link the customer to this account.
-    if (!iap.identityReady) {
-      const ready = await ensureRcReady(user?.user_id);
-      if (!ready.ok) {
-        setBusy(null);
-        setNotice(`Purchases can't start yet: ${ready.error}. Check your internet connection and try again.`);
-        return;
-      }
+    // Always (re)assert identity right before the sale — cheap, and it is the
+    // one guarantee that matters: SDK customer === this Jaleter user.
+    const ready = await ensureRcReady(user?.user_id);
+    if (!ready.ok) {
+      setBusy(null);
+      setNotice(`Purchases can't start yet: ${ready.error}. Check your internet connection and try again.`);
+      return;
     }
     // Offering may not have loaded yet (or store product misconfigured) —
     // refetch on demand and surface the real error rather than hiding IAP.
@@ -180,7 +180,7 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
       }
     } catch {}
     try {
-      const info = await iap.purchase(pkg);
+      const info = await iap.purchase({ pkg, uid: String(user!.user_id) });
       const ok = await finishIapUnlock(info);
       if (!ok) setNotice("The purchase completed but the subscription isn't active yet. Tap Restore Purchase in a moment.");
     } catch (e: any) {

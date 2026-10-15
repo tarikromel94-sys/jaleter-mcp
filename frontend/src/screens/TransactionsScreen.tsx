@@ -4,6 +4,7 @@ import Ionicons from '@react-native-vector-icons/ionicons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuth, apiCall } from '@/src/AuthContext';
 import StatementImportSheet from '@/src/StatementImportSheet';
+import { SuggestionReviewSheet, type Suggestion, type Proposal, type Approval } from '@/src/components/SuggestionReviewSheet';
 import { C, D } from '@/src/jaleterTheme';
 import { MONEY, EXACT } from '@/src/quoteLibrary';
 import { s, useThemed, CircleBtn, PeriodPills, PageHeader, Sheet, Toast as SharedToast, GoldButton } from '@/src/utils/appShared';
@@ -13,9 +14,86 @@ import {
 } from '@/src/utils/budgetModel';
 
 /* ---------------- Transactions ---------------- */
-export const TransactionsScreen = ({ transactions, setTransactions, categories, incomeSources, openLinkSheet, alerts, onRefresh }: any) => {
+export const TransactionsScreen = ({ transactions, setTransactions, categories, incomeSources, openLinkSheet, alerts, onRefresh, addSubcategory }: any) => {
   const t = useThemed();
   const { token } = useAuth();
+
+  // ---- Smart categorization (suggestions for uncategorized linked rows) ----
+  // Uncategorized = linked/imported row (has external_id) with no category
+  // assigned yet and not a transfer / card payment / loan payment.
+  const uncategorized: Tx[] = React.useMemo(
+    () => transactions.filter((tx: Tx) => tx.external_id && !tx.groupId && !(tx.splits && tx.splits.length) && !isSystemTransaction(tx)),
+    [transactions],
+  );
+  const uncategorizedKey = uncategorized.map((x) => x.external_id).sort().join('|');
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const catShape = React.useMemo(() => (categories || []).map((g: any) => ({ id: g.id, name: g.name, subcategories: (g.subcategories || []).map((sb: any) => ({ id: sb.id, name: sb.name })) })), [categories]);
+  const incShape = React.useMemo(() => (incomeSources || []).map((x: any) => ({ id: x.id, name: x.name })), [incomeSources]);
+  useEffect(() => {
+    let alive = true;
+    if (!token || uncategorized.length === 0) { setSuggestions([]); setProposals([]); return; }
+    setSuggestLoading(true);
+    apiCall('/api/categorization/suggest', { method: 'POST', body: JSON.stringify({ external_ids: uncategorized.map((x) => x.external_id), categories: catShape, income_sources: incShape }) }, token)
+      .then((data: any) => { if (alive) { setSuggestions(Array.isArray(data?.suggestions) ? data.suggestions : []); setProposals(Array.isArray(data?.new_category_proposals) ? data.new_category_proposals : []); } })
+      .catch(() => { if (alive) { setSuggestions([]); setProposals([]); } })
+      .finally(() => { if (alive) setSuggestLoading(false); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, uncategorizedKey, catShape, incShape]);
+  const suggestionByExt = React.useMemo(() => {
+    const m: Record<string, Suggestion> = {};
+    for (const sg of suggestions) m[sg.external_id] = sg;
+    return m;
+  }, [suggestions]);
+  const txByExt = React.useMemo(() => {
+    const m: Record<string, Tx> = {};
+    for (const tx of uncategorized) if (tx.external_id) m[tx.external_id] = tx;
+    return m;
+  }, [uncategorized]);
+
+  // Approve = exactly what a manual assignment does: write an overlay row
+  // with the chosen group/detail. Budget actuals & remaining update because
+  // they are derived from these rows. Then remember the merchant choice.
+  const approveSuggestions = (items: Approval[]) => {
+    if (items.length === 0) return;
+    const byExt: Record<string, Approval> = {};
+    for (const it of items) byExt[it.external_id] = it;
+    setTransactions((xs: Tx[]) => {
+      const existing = new Set(xs.map((x) => x.id));
+      const added: Tx[] = [];
+      const updated = xs.map((x) => {
+        const it = x.external_id ? byExt[x.external_id] : undefined;
+        if (!it) return x;
+        return { ...x, type: it.type, groupId: it.group_id, detailId: it.detail_id || undefined };
+      });
+      for (const it of items) {
+        const src = txByExt[it.external_id];
+        if (!src || existing.has(src.id)) continue;
+        added.push({ ...src, type: it.type, groupId: it.group_id, detailId: it.detail_id || undefined, origin: src.origin || 'Linked', period: src.period || currentMonth() });
+      }
+      return [...added, ...updated];
+    });
+    if (token) {
+      apiCall('/api/categorization/learn', { method: 'POST', body: JSON.stringify({ items: items.map((it) => ({ merchant_key: it.merchant_key, group_id: it.group_id, detail_id: it.detail_id || null, tx_type: it.type, category_name: it.category_name, always: it.always })) }) }, token).catch(() => {});
+    }
+    setToast(`${items.length} transaction${items.length > 1 ? 's' : ''} categorized. Budget updated.`);
+    if (items.length >= suggestions.length) setReviewOpen(false);
+  };
+  const addCategoryAndAssign = (p: Proposal, groupId: string) => {
+    if (!addSubcategory) return;
+    const sid = addSubcategory(groupId, p.name);
+    if (!sid) return;
+    const items: Approval[] = p.external_ids.filter((e) => txByExt[e]).map((e) => {
+      const sg = suggestionByExt[e];
+      const tx = txByExt[e];
+      return { external_id: e, type: 'expense', group_id: groupId, detail_id: sid, category_name: p.name, merchant_key: sg?.merchant_key || String(tx?.merchant || tx?.name || '').toLowerCase().slice(0, 60), always: false };
+    });
+    approveSuggestions(items);
+    setToast(`Added "${p.name}" and categorized ${items.length}.`);
+  };
   const [filter, setFilter] = useState('All');
   const [accountFilter, setAccountFilter] = useState<string>('All');
   const [dateRange, setDateRange] = useState<string>('All');
@@ -199,6 +277,18 @@ export const TransactionsScreen = ({ transactions, setTransactions, categories, 
         </View>
         <Ionicons name={banner.kind === 'empty' ? 'chevron-forward' : (syncing ? 'sync-outline' : 'refresh-outline')} size={16} color={banner.iconColor} />
       </Pressable>
+      {(suggestions.length > 0 || proposals.length > 0) && (
+        <Pressable onPress={() => setReviewOpen(true)} style={[s.syncBanner, { backgroundColor: t.dark ? '#2a2415' : '#fbf3e2', borderColor: '#e2c98f' }]} testID="tx-suggest-banner">
+          <View style={[s.syncIcon, { backgroundColor: t.dark ? '#00000033' : '#ffffffbb' }]}><Ionicons name="sparkles-outline" size={18} color="#b58a3a" /></View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 11, fontWeight: '700', color: t.dark ? D.text : '#3a3428' }}>
+              {suggestions.length > 0 ? `${suggestions.length} suggested categor${suggestions.length > 1 ? 'ies' : 'y'} to review` : `${proposals.length} new category idea${proposals.length > 1 ? 's' : ''}`}
+            </Text>
+            <Text style={{ fontSize: 9, color: t.dark ? D.textMuted : '#7a6f5c' }}>Based on your merchants and bank categories · approve in one tap</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color="#b58a3a" />
+        </Pressable>
+      )}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <View style={{ flex: 1 }}>
           <PeriodPills values={['All','Income','Expenses']} value={filter} onChange={setFilter} testID="tx-filter" />
@@ -342,6 +432,12 @@ export const TransactionsScreen = ({ transactions, setTransactions, categories, 
                 <Text style={[{ fontSize: 8, color: C.muted2 }, t.textMuted]}>
                   {tx.date?.slice(0, 10)} · {tx.origin}{isTransferRow ? ' · Transfer' : ''}{tx.splits && tx.splits.length > 0 ? ` · Split (${tx.splits.length})` : ''}
                 </Text>
+                {tx.external_id && suggestionByExt[tx.external_id] ? (
+                  <Pressable onPress={() => setReviewOpen(true)} hitSlop={6} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3, alignSelf: 'flex-start', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 9, backgroundColor: '#c4945018', borderWidth: 1, borderColor: '#c4945055' }} testID={`tx-suggest-chip-${tx.external_id}`}>
+                    <Ionicons name="sparkles-outline" size={10} color="#9a6d32" />
+                    <Text style={{ fontSize: 9, fontWeight: '700', color: '#9a6d32' }}>Suggested: {suggestionByExt[tx.external_id].category_name} · Review</Text>
+                  </Pressable>
+                ) : null}
               </View>
               <Text style={[{ fontSize: 11, fontWeight: '700', color: amountColor }]}>{prefix}{EXACT(tx.amount)}</Text>
               <Ionicons name="chevron-forward" size={14} color={t.dark ? D.textMuted : '#b1aaa0'} />
@@ -353,6 +449,18 @@ export const TransactionsScreen = ({ transactions, setTransactions, categories, 
         {editing && <TxForm item={editing} categories={categories} incomeSources={incomeSources} save={save} remove={editing.id ? remove : null} />}
       </Sheet>
       {toast ? <SharedToast message={toast} onHide={() => setToast('')} /> : null}
+      <SuggestionReviewSheet
+        visible={reviewOpen}
+        close={() => setReviewOpen(false)}
+        loading={suggestLoading}
+        suggestions={suggestions}
+        proposals={proposals}
+        txById={txByExt}
+        categories={categories || []}
+        incomeSources={incomeSources || []}
+        onApprove={approveSuggestions}
+        onAddCategoryAndAssign={addCategoryAndAssign}
+      />
       <StatementImportSheet
         visible={importSheetOpen}
         token={token}

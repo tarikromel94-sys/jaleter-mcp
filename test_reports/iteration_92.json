@@ -1,0 +1,32 @@
+{
+  "summary": "PASS 15/15 frontend + 5/5 backend. The P0 TestFlight 'account link failed (anonymous customer)' fix is validated end-to-end on the web preview (390x844) against the RevenueCat Test Store with 3 fresh accounts (A, B, D) and a re-login as A. Diagnostics on all three paywalls read exactly as spec'd: 'RC user: user_XXXX (LINKED ✓ equals Jaleter id)', 'Jaleter user: user_XXXX · provider: password', 'identityReady=true', 'last bind: configure(appUserID=user_XXXX) ok'. Footer stamp reads 'v1.0.1 · build — · PW-2026.10.02-e · key test_PtKHf…'. (1) Account A triple-tap diagnostics match. (2) A buyWithStore → paywall-iap-confirm → confirm-yes → RC Test Store 'Test valid purchase' → dashboard; GET /api/user/membership → active:true, source:'iap'. (3) Signed out & signed up B in the SAME browser session (no reload between accounts): B's diagnostics show B's id, 'last bind: configure(appUserID=<B>) ok' — zero leakage from A; B's membership is active:false; Restore on B returned 'No previous App Store purchases were found for this account.' (4) Re-login as A → straight to dashboard (no paywall). (5) Fresh Account D: tapped paywall-iap-buy immediately after paywall render → NO 'Purchases can't start yet', NO 'identity_not_ready'; confirm → unlocks on first try. (6) No uncaught Purchases.* errors; the only RC console output is benign warnings 'PurchasesCommon.configure() called more than once' from the browser-mode re-configure path (expected per code comments) and 'Branding info is not available for RC Test Store API keys'. No logOut-on-anonymous error anywhere.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration92_paywall_identity.py",
+    "/app/test_reports/pytest/iteration92_paywall.xml",
+    "/app/test_reports/screenshots/iter92_A.jpeg",
+    "/app/test_reports/screenshots/iter92_A_post_purchase.jpeg",
+    "/app/test_reports/screenshots/iter92_B.jpeg",
+    "/app/test_reports/screenshots/iter92_A_relogin.jpeg",
+    "/app/test_reports/screenshots/iter92_D.jpeg"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Pre-existing & non-blocking: require-cycle 'src/lib/revenuecat.tsx <-> src/AuthContext.tsx' still logs on every boot (apiCall is imported from AuthContext inside revenuecat.tsx while AuthContext imports from revenuecat.tsx). Harmless today; worth untangling to prevent future 'uninitialized value' bugs.",
+    "Minor: /app/frontend/src/lib/revenuecat.tsx line 128 — 'if (rcUsingTestStore || !configured) Purchases.configure(...)'. On web this is called on EVERY identity bind so logs show 'PurchasesCommon.configure() called more than once' warnings. Behavior is correct (reconfigure is how web switches identity because logIn is a no-op there, per code comment), but consider suppressing the warning or guarding with a current==target short-circuit before the configure to reduce log noise.",
+    "Minor: lastBindResult is a module-level singleton; two providers initialized in parallel (unlikely but possible) would race. Not a bug today — flagged for future."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (5/5)", "frontend": "100% (15/15)"},
+  "seed_data_creation": "Registered 3 throwaway users via /api/auth/register for the UI flow (iter92a_<ts>, iter92b_<ts>, iter92d_<ts> @example.com, pw TestPass123!) and 2 more inside the pytest module. All anonymous — no cleanup needed. A and D are now ACTIVE Premium (iap, Test Store) on the preview backend; harmless.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "To seed an authenticated session on web without going through the Welcome iframe: POST /api/auth/register, then localStorage.setItem('jaleter_auth_token', JSON.stringify(token)) (the storage util JSON-wraps secure values on web), then page.reload(). RC Test Store on web: after paywall-iap-confirm-yes, RC injects an overlay with a 'Test valid purchase' button — click that to simulate the StoreKit sheet. Membership unlock takes ~5-9s because /api/iap/sync and checkMembership both have to round-trip. 3x tap on paywall-plan-card toggles the diagnostics; a 4th tap clears it.",
+  "rca_of_issue": "N/A — the P0 fix (RevenueCat configured lazily with appUserID = Jaleter user_id, verified by exact getAppUserID() === user_id equality, with configure-on-rebind in browser mode because logIn is a no-op on purchases-js) is working correctly across all 6 user-story scenarios. The TestFlight 'account link failed (anonymous customer)' error cannot be reproduced in the preview — every bind reports 'configure(appUserID=user_…) ok' with 'identityReady=true', and the pre-purchase ensureRcReady choke point in iap.purchase mutation re-asserts equality before every sale."
+}

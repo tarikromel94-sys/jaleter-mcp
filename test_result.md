@@ -1687,3 +1687,9 @@ Add Apple Sign-In to Login + Signup screens.
 
 ## Iteration 90 (Paywall never-silent + hidden diagnostics)
 - User: TestFlight Subscribe does "nothing" (no spinner/sheet/text) on new build. Paywall now surfaces EVERY outcome incl. cancel (code · message · underlying), checks Purchases.canMakePayments(), and tapping the price card 3× shows RC diagnostics (app user id/identity, store mode, canMakePayments, offering/package/product, entitlement). Testing agent iter 90: all pass. Needs redeploy + new build; user must report the notice / diagnostics text from device.
+
+## Iteration 92 (Global RC identity fix — configure with Jaleter user_id, exact-equality verification)
+- Root cause chain: (1) SDK configured anonymously at launch then aliased via logIn → originalAppUserId stays $RCAnonymousID → old identity check false-positive blocked purchases; (2) identity was a heuristic, not a verified equality. Now: lazy configure(appUserID=user_id), logIn on switch, verify getAppUserID()===user_id, purchase refuses otherwise. 20/20 pass (backend 5, frontend 15). No further builds requested until user confirms.
+
+## Iterations 93-94 (Smart Categorization + readability)
+- Backend 12/12 (tests/test_iteration93_smart_categorization.py). Frontend: banner/chips/review sheet/change/always/bulk approve/proposals/budget actuals all PASS after fixing substring overmatch ('cat'∈'Education') with word-boundary+stem matching. Reports legend restructured to two-line rows (no truncation at 360px).
