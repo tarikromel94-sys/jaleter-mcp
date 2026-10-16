@@ -245,7 +245,7 @@ export const Paywall = ({ email, checkMembership, onUnlocked, onSwitchAccount }:
       </Pressable>
 
       <View style={{ alignItems: 'center' }}>
-        <Image source={require('../../assets/images/wordmark.png')} style={{ width: 190, height: 68 }} resizeMode="contain" accessibilityLabel="Jaleter" testID="paywall-wordmark" />
+        <Image source={require('../../assets/images/wordmark.png')} style={{ width: 96, height: 96, borderRadius: 20 }} resizeMode="contain" accessibilityLabel="Jaleter" testID="paywall-wordmark" />
         <Text style={d.tagline}>SMART BUDGETING. WEALTHY LIVING.</Text>
       </View>
 
